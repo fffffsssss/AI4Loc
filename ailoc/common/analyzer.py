@@ -4,9 +4,10 @@ from torch.cuda.amp import autocast
 import numpy as np
 import copy
 import os
-import gc
 import time
 import tifffile
+import natsort
+import pathlib
 
 import ailoc.common
 # from ailoc.common import local_tifffile
@@ -164,35 +165,48 @@ class SmlmTiffDataset(torch.utils.data.Dataset):
     def __init__(self, tiff_path, start_frame_num, time_block_gb, sub_fov_size, over_cut, fov_xy_start,
                  end_frame_num=None):
 
-        self.tiff_path = tiff_path
+        self.tiff_path = pathlib.Path(tiff_path)
         self.start_frame_num = start_frame_num
         self.time_block_gb = time_block_gb
         self.sub_fov_size = sub_fov_size
         self.over_cut = over_cut
         self.fov_xy_start = fov_xy_start
 
-        # tiff_handle = local_tifffile.TiffFile(self.tiff_path, is_ome=True)
-        tiff_handle = tifffile.TiffFile(self.tiff_path)
+        # create the file name list and corresponding frame range, used for seamlessly slicing
+        start_num = 0
+        self.file_name_list = []
+        self.file_range_list = []
+        if self.tiff_path.is_dir():
+            files_list = natsort.natsorted(self.tiff_path.glob('*.tif*'))
+            files_list = [str(file_tmp) for file_tmp in files_list]
+            for file_tmp in files_list:
+                tiff_handle_tmp = tifffile.TiffFile(file_tmp, is_ome=False, is_lsm=False, is_ndpi=False)
+                length_tmp = len(tiff_handle_tmp.pages)
+                tiff_handle_tmp.close()
+                self.file_name_list.append(file_tmp)
+                self.file_range_list.append([start_num, start_num + length_tmp - 1, length_tmp])
+                start_num += length_tmp
+        else:
+            tiff_handle_tmp = tifffile.TiffFile(self.tiff_path)
+            length_tmp = len(tiff_handle_tmp.pages)
+            tiff_handle_tmp.close()
+            self.file_name_list.append(str(self.tiff_path))
+            self.file_range_list.append([0, length_tmp - 1, length_tmp])
 
+        print(f"frame ranges || filename: ")
+        for i in range(len(self.file_range_list)):
+            print(f"[{self.file_range_list[i][0]}-{self.file_range_list[i][1]}] || {self.file_name_list[i]}")
+
+        # make the plan to read image stack sequentially
+        # tiff_handle = local_tifffile.TiffFile(self.tiff_path, is_ome=True)
+        tiff_handle = tifffile.TiffFile(self.file_name_list[0])
         self.tiff_shape = tiff_handle.series[0].shape
         self.fov_xy = [fov_xy_start[0], fov_xy_start[0] + self.tiff_shape[-1] - 1,
                        fov_xy_start[1], fov_xy_start[1] + self.tiff_shape[-2] - 1]
         single_frame_nbyte = tiff_handle.series[0].size * tiff_handle.series[0].dtype.itemsize / self.tiff_shape[0]
         self.time_block_n_img = int(np.ceil(self.time_block_gb*(1024**3) / single_frame_nbyte))
-
-        # create the file name list and corresponding frame range, used for seamlessly slicing
-        start_num = 0
-        self.file_name_list = []
-        self.file_range_list = []
-        for k in tiff_handle._files:
-            self.file_name_list.append(tiff_handle._files[k].filehandle.path)
-            length_tmp = len(tiff_handle._files[k].pages)
-            self.file_range_list.append([start_num, start_num + length_tmp - 1, length_tmp])
-            start_num += length_tmp
-
         tiff_handle.close()
 
-        # make the plan to read image stack sequentially
         sum_file_length = np.array(self.file_range_list)[:, 1].sum() - np.array(self.file_range_list)[:, 0].sum() + len(self.file_range_list)
         self.end_frame_num = sum_file_length if end_frame_num is None or end_frame_num > sum_file_length else end_frame_num
         if sum_file_length != self.tiff_shape[0]:
@@ -215,9 +229,9 @@ class SmlmTiffDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         data_block = self._imread_tiff(idx)
-        sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list = split_fov(data=data_block, fov_xy=self.fov_xy,
-                                                                                 sub_fov_size=self.sub_fov_size,
-                                                                                 over_cut=self.over_cut)
+        # sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list = split_fov(data=data_block, fov_xy=self.fov_xy,
+        #                                                                          sub_fov_size=self.sub_fov_size,
+        #                                                                          over_cut=self.over_cut)
 
         return data_block
 
@@ -254,7 +268,6 @@ class SmlmTiffDataset(torch.utils.data.Dataset):
 
 
 def collect_func(batch_list):
-    # return batch_list[0][0], batch_list[0][1], batch_list[0][2]
     return batch_list[0]
 
 
@@ -292,7 +305,7 @@ class SmlmDataAnalyzer:
         """
 
         self.loc_model = loc_model
-        self.tiff_path = tiff_path
+        self.tiff_path = pathlib.Path(tiff_path)
         self.output_path = output_path
         self.time_block_gb = time_block_gb
         self.batch_size = batch_size
@@ -338,7 +351,12 @@ class SmlmDataAnalyzer:
                                                   num_workers=self.num_workers, collate_fn=collect_func)
 
         time_start = -np.inf
-        for block_num, (sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list) in enumerate(tiff_loader):
+        # for block_num, (sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list) in enumerate(tiff_loader):
+        for block_num, data_block in enumerate(tiff_loader):
+            sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list = split_fov(data=data_block,
+                                                                                     fov_xy=tiff_dataset.fov_xy,
+                                                                                     sub_fov_size=self.sub_fov_size,
+                                                                                     over_cut=self.over_cut)
 
             time_cost_block = time.time()-time_start
             time_start = time.time()
@@ -366,9 +384,6 @@ class SmlmDataAnalyzer:
                                                                          batch_size=self.batch_size)
                 sub_fov_molecule_list.append(molecule_list_tmp)
 
-                # del molecule_list_tmp, inference_dict_tmp
-                # gc.collect()
-
             print('')
 
             # merge the localizations in each sub-FOV to whole FOV, filter repeated localizations in over cut region
@@ -379,10 +394,6 @@ class SmlmDataAnalyzer:
             molecule_list_block[:, 0] += tiff_dataset.frame_slice[block_num].start
             ailoc.common.write_csv_array(input_array=molecule_list_block, filename=self.output_path,
                                          write_mode='append localizations')
-
-            del molecule_list_block, sub_fov_molecule_list, \
-                sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list
-            gc.collect()
 
         # histogram equalization for grid artifacts removal, maybe delete in the future
         time_start = time.time()
@@ -407,6 +418,7 @@ class SmlmDataAnalyzer:
         return tiff_dataset.tiff_shape, fov_xy_nm, preds_rescale_array
 
     def check_single_frame_output(self, frame_num):
+        # todo: modify according to file list
         """
         check the network outputs of a single frame
 
@@ -414,8 +426,14 @@ class SmlmDataAnalyzer:
             frame_num (int): the frame to be checked, start from 1
         """
 
+        if self.tiff_path.is_dir():
+            files_list = natsort.natsorted(self.tiff_path.glob('*.tif*'))
+            files_list = [str(file_tmp) for file_tmp in files_list]
+        else:
+            files_list = [str(self.tiff_path)]
+
         # tiff_handle = local_tifffile.TiffFile(self.tiff_path, is_ome=True)
-        tiff_handle = tifffile.TiffFile(self.tiff_path)
+        tiff_handle = tifffile.TiffFile(files_list[0])
 
         tiff_shape = tiff_handle.series[0].shape
         end_frame_num = tiff_shape[0]
