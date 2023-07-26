@@ -193,10 +193,6 @@ class SmlmTiffDataset(torch.utils.data.Dataset):
             self.file_name_list.append(str(self.tiff_path))
             self.file_range_list.append([0, length_tmp - 1, length_tmp])
 
-        print(f"frame ranges || filename: ")
-        for i in range(len(self.file_range_list)):
-            print(f"[{self.file_range_list[i][0]}-{self.file_range_list[i][1]}] || {self.file_name_list[i]}")
-
         # make the plan to read image stack sequentially
         # tiff_handle = local_tifffile.TiffFile(self.tiff_path, is_ome=True)
         tiff_handle = tifffile.TiffFile(self.file_name_list[0])
@@ -207,12 +203,16 @@ class SmlmTiffDataset(torch.utils.data.Dataset):
         self.time_block_n_img = int(np.ceil(self.time_block_gb*(1024**3) / single_frame_nbyte))
         tiff_handle.close()
 
-        sum_file_length = np.array(self.file_range_list)[:, 1].sum() - np.array(self.file_range_list)[:, 0].sum() + len(self.file_range_list)
-        self.end_frame_num = sum_file_length if end_frame_num is None or end_frame_num > sum_file_length else end_frame_num
-        if sum_file_length != self.tiff_shape[0]:
+        print(f"frame ranges || filename: ")
+        for i in range(len(self.file_range_list)):
+            print(f"[{self.file_range_list[i][0]}-{self.file_range_list[i][1]}] || {self.file_name_list[i]}")
+
+        self.sum_file_length = np.array(self.file_range_list)[:, 1].sum() - np.array(self.file_range_list)[:, 0].sum() + len(self.file_range_list)
+        self.end_frame_num = self.sum_file_length if end_frame_num is None or end_frame_num > self.sum_file_length else end_frame_num
+        if self.sum_file_length != self.tiff_shape[0]:
             print(f"\033[0;31m",
                   f'Warning: meta data shows that the tiff stack has {self.tiff_shape[0]} frames, '
-                  f'the sum of all file pages is {sum_file_length}'"\033[0m")
+                  f'the sum of all file pages is {self.sum_file_length}'"\033[0m")
 
         frame_slice = []
         i = 0
@@ -229,11 +229,33 @@ class SmlmTiffDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         data_block = self._imread_tiff(idx)
-        # sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list = split_fov(data=data_block, fov_xy=self.fov_xy,
-        #                                                                          sub_fov_size=self.sub_fov_size,
-        #                                                                          over_cut=self.over_cut)
 
         return data_block
+
+    def get_specific_frame(self, frame_num_list):
+        """
+        Get specific frames from the dataset, the frames can be from different tiff files.
+        Args:
+            frame_num_list (list of int): the frame numbers to be read, start from 0
+        """
+
+        files_to_read = []
+        slice_for_files = []
+        for frame_num in frame_num_list:
+            for file_name, file_range in zip(self.file_name_list, self.file_range_list):
+                if file_range[0] <= frame_num <= file_range[1]:
+                    files_to_read.append(file_name)
+                    slice_for_files.append(slice(frame_num - file_range[0], frame_num - file_range[0] + 1))
+
+        frames = []
+        for file_name, slice_for_file in zip(files_to_read, slice_for_files):
+            data_tmp = tifffile.imread(file_name, key=slice_for_file)
+            data_tmp = data_tmp[None] if data_tmp.ndim == 2 else data_tmp
+            frames.append(data_tmp)
+
+        frames = np.concatenate(frames, axis=0)
+
+        return frames
 
     def _imread_tiff(self, idx):
         curr_frame_slice = self.frame_slice[idx]
@@ -316,16 +338,6 @@ class SmlmDataAnalyzer:
         self.num_workers = num_workers
         self.pixel_size_xy = loc_model.data_simulator.psf_model.pixel_size_xy
 
-    def divide_and_conquer(self):
-        """
-        Analyze a large tiff file through loading images into the RAM by time block, each time block will be
-        divided into sub-FOVs and analyzed separately.
-
-        Returns:
-            (tuple, list, np.ndarray): return the data shape and the physical FOV in nm that contains
-                all localizations, and the localization results.
-        """
-
         print('the file to save the predictions is: ', self.output_path)
         if os.path.exists(self.output_path):
             try:
@@ -342,29 +354,39 @@ class SmlmDataAnalyzer:
             ailoc.common.write_csv_array(input_array=preds_empty, filename=self.output_path,
                                          write_mode='write localizations')
 
-        tiff_dataset = SmlmTiffDataset(tiff_path=self.tiff_path, start_frame_num=last_frame_num,
-                                       time_block_gb=self.time_block_gb,
-                                       sub_fov_size=self.sub_fov_size, over_cut=self.over_cut,
-                                       fov_xy_start=self.fov_xy_start)
+        self.tiff_dataset = SmlmTiffDataset(tiff_path=self.tiff_path, start_frame_num=last_frame_num,
+                                            time_block_gb=self.time_block_gb,
+                                            sub_fov_size=self.sub_fov_size, over_cut=self.over_cut,
+                                            fov_xy_start=self.fov_xy_start)
 
-        tiff_loader = torch.utils.data.DataLoader(tiff_dataset, batch_size=1, shuffle=False,
+    def divide_and_conquer(self):
+        """
+        Analyze a large tiff file through loading images into the RAM by time block, each time block will be
+        divided into sub-FOVs and analyzed separately.
+
+        Returns:
+            (tuple, list, np.ndarray): return the data shape and the physical FOV in nm that contains
+                all localizations, and the localization results.
+        """
+
+        tiff_loader = torch.utils.data.DataLoader(self.tiff_dataset, batch_size=1, shuffle=False,
                                                   num_workers=self.num_workers, collate_fn=collect_func)
 
         time_start = -np.inf
         # for block_num, (sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list) in enumerate(tiff_loader):
         for block_num, data_block in enumerate(tiff_loader):
             sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list = split_fov(data=data_block,
-                                                                                     fov_xy=tiff_dataset.fov_xy,
+                                                                                     fov_xy=self.tiff_dataset.fov_xy,
                                                                                      sub_fov_size=self.sub_fov_size,
                                                                                      over_cut=self.over_cut)
 
             time_cost_block = time.time()-time_start
             time_start = time.time()
 
-            print(f'Analyzing block: {block_num+1}/{len(tiff_dataset)}, '
+            print(f'Analyzing block: {block_num+1}/{len(self.tiff_dataset)}, '
                   f'contain frames: {len(sub_fov_data_list[0])}, '
-                  f'already analyzed: {tiff_dataset.frame_slice[block_num].start}/{tiff_dataset.end_frame_num}, '
-                  f'ETA: {time_cost_block*(len(tiff_dataset)-block_num)/60:.2f} min')
+                  f'already analyzed: {self.tiff_dataset.frame_slice[block_num].start}/{self.tiff_dataset.end_frame_num}, '
+                  f'ETA: {time_cost_block*(len(self.tiff_dataset)-block_num)/60:.2f} min')
 
             sub_fov_molecule_list = []
             for i_fov in range(len(sub_fov_xy_list)):
@@ -391,7 +413,7 @@ class SmlmDataAnalyzer:
                                                        original_sub_fov_xy_list, self.pixel_size_xy)
 
             molecule_list_block = np.array(molecule_list_block)
-            molecule_list_block[:, 0] += tiff_dataset.frame_slice[block_num].start
+            molecule_list_block[:, 0] += self.tiff_dataset.frame_slice[block_num].start
             ailoc.common.write_csv_array(input_array=molecule_list_block, filename=self.output_path,
                                          write_mode='append localizations')
 
@@ -411,14 +433,13 @@ class SmlmDataAnalyzer:
 
         # all saved localizations are in the following physical FOV, the unit is nm
         fov_xy_nm = [self.fov_xy_start[0]*self.pixel_size_xy[0],
-                     (self.fov_xy_start[0]+tiff_dataset.tiff_shape[-1])*self.pixel_size_xy[0],
+                     (self.fov_xy_start[0]+self.tiff_dataset.tiff_shape[-1])*self.pixel_size_xy[0],
                      self.fov_xy_start[1] * self.pixel_size_xy[1],
-                     (self.fov_xy_start[1] + tiff_dataset.tiff_shape[-2]) * self.pixel_size_xy[1]]
+                     (self.fov_xy_start[1] + self.tiff_dataset.tiff_shape[-2]) * self.pixel_size_xy[1]]
 
-        return tiff_dataset.tiff_shape, fov_xy_nm, preds_rescale_array
+        return self.tiff_dataset.tiff_shape, fov_xy_nm, preds_rescale_array
 
     def check_single_frame_output(self, frame_num):
-        # todo: modify according to file list
         """
         check the network outputs of a single frame
 
@@ -426,36 +447,18 @@ class SmlmDataAnalyzer:
             frame_num (int): the frame to be checked, start from 1
         """
 
-        if self.tiff_path.is_dir():
-            files_list = natsort.natsorted(self.tiff_path.glob('*.tif*'))
-            files_list = [str(file_tmp) for file_tmp in files_list]
-        else:
-            files_list = [str(self.tiff_path)]
-
-        # tiff_handle = local_tifffile.TiffFile(self.tiff_path, is_ome=True)
-        tiff_handle = tifffile.TiffFile(files_list[0])
-
-        tiff_shape = tiff_handle.series[0].shape
-        end_frame_num = tiff_shape[0]
-
-        assert frame_num <= end_frame_num, \
-            f'frame_num {frame_num} is larger than the total frame number {end_frame_num}'
+        assert frame_num <= self.tiff_dataset.sum_file_length, \
+            f'frame_num {frame_num} is larger than the total frame number {self.tiff_dataset.sum_file_length}'
 
         local_context = getattr(self.loc_model, 'local_context', False)
         if local_context:
-            idx1, idx2, idx3 = self.get_context_index(end_frame_num, frame_num)
-            data_1 = tiff_handle.asarray(series=0, key=idx1)
-            data_2 = tiff_handle.asarray(series=0, key=idx2)
-            data_3 = tiff_handle.asarray(series=0, key=idx3)
-            data_block = np.concatenate((data_1[None], data_2[None], data_3[None]), axis=0)
+            idx1, idx2, idx3 = self.get_context_index(self.tiff_dataset.sum_file_length, frame_num)
+            data_block = self.tiff_dataset.get_specific_frame(frame_num_list=[idx1, idx2, idx3])
         else:
-            data_block = tiff_handle.asarray(series=0, key=frame_num-1)
-        tiff_handle.close()
+            data_block = self.tiff_dataset.get_specific_frame(frame_num_list=[frame_num-1])
 
-        data_block = data_block[None] if data_block.ndim == 2 else data_block
-
-        fov_xy = [self.fov_xy_start[0], self.fov_xy_start[0] + tiff_shape[-1] - 1,
-                  self.fov_xy_start[1], self.fov_xy_start[1] + tiff_shape[-2] - 1]
+        fov_xy = [self.fov_xy_start[0], self.fov_xy_start[0] + self.tiff_dataset.tiff_shape[-1] - 1,
+                  self.fov_xy_start[1], self.fov_xy_start[1] + self.tiff_dataset.tiff_shape[-2] - 1]
 
         sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list = split_fov(data=data_block, fov_xy=fov_xy,
                                                                                  sub_fov_size=self.sub_fov_size,
@@ -486,7 +489,7 @@ class SmlmDataAnalyzer:
 
         merge_inference_dict = self.merge_sub_fov_inference(sub_fov_inference_list, sub_fov_xy_list,
                                                             original_sub_fov_xy_list, self.sub_fov_size,
-                                                            local_context, tiff_shape)
+                                                            local_context, self.tiff_dataset.tiff_shape)
         merge_inference_dict['raw_image'] = data_block[1 if local_context else 0]
 
         ailoc.common.plot_single_frame_inference(merge_inference_dict)
@@ -584,7 +587,7 @@ class SmlmDataAnalyzer:
             target_image_number: the image that want to check, start from 1
 
         Returns:
-            (int, int, int): indices of the target image and its neighbors in the image stack
+            (int, int, int): indices of the target image and its neighbors in the image stack, start from 0
         """
 
         target_index = target_image_number - 1  # Convert image number to 0-based index
