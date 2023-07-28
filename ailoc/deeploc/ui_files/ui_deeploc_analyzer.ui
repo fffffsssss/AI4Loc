@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>919</width>
-    <height>461</height>
+    <height>542</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -24,65 +24,73 @@
      <property name="title">
       <string>Input/Output Parameters</string>
      </property>
-     <layout class="QHBoxLayout" name="horizontalLayout_12">
+     <layout class="QVBoxLayout" name="verticalLayout">
       <item>
-       <layout class="QVBoxLayout" name="verticalLayout">
+       <layout class="QHBoxLayout" name="horizontalLayout_9">
         <item>
-         <layout class="QHBoxLayout" name="horizontalLayout_11">
-          <item>
-           <widget class="QPushButton" name="select_output_bt">
-            <property name="font">
-             <font>
-              <family>Arial Rounded MT Bold</family>
-             </font>
-            </property>
-            <property name="text">
-             <string>Output File</string>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QLineEdit" name="output_path_le"/>
-          </item>
-         </layout>
+         <widget class="QPushButton" name="select_model_bt">
+          <property name="font">
+           <font>
+            <family>Arial Rounded MT Bold</family>
+           </font>
+          </property>
+          <property name="text">
+           <string>Select DeepLoc model</string>
+          </property>
+         </widget>
         </item>
         <item>
-         <layout class="QHBoxLayout" name="horizontalLayout_10">
-          <item>
-           <widget class="QPushButton" name="select_image_bt">
-            <property name="font">
-             <font>
-              <family>Arial Rounded MT Bold</family>
-             </font>
-            </property>
-            <property name="text">
-             <string>Select Images/Directory</string>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QLineEdit" name="image_path_le"/>
-          </item>
-         </layout>
+         <widget class="QLineEdit" name="model_path_le"/>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_10">
+        <item>
+         <widget class="QPushButton" name="select_image_bt">
+          <property name="font">
+           <font>
+            <family>Arial Rounded MT Bold</family>
+           </font>
+          </property>
+          <property name="text">
+           <string>Select image file  /</string>
+          </property>
+         </widget>
         </item>
         <item>
-         <layout class="QHBoxLayout" name="horizontalLayout_9">
-          <item>
-           <widget class="QPushButton" name="select_model_bt">
-            <property name="font">
-             <font>
-              <family>Arial Rounded MT Bold</family>
-             </font>
-            </property>
-            <property name="text">
-             <string>Select DeepLoc Model</string>
-            </property>
-           </widget>
-          </item>
-          <item>
-           <widget class="QLineEdit" name="model_path_le"/>
-          </item>
-         </layout>
+         <widget class="QPushButton" name="select_directory_bt">
+          <property name="font">
+           <font>
+            <family>Arial Rounded MT Bold</family>
+           </font>
+          </property>
+          <property name="text">
+           <string>directory</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="image_path_le"/>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_11">
+        <item>
+         <widget class="QPushButton" name="select_output_bt">
+          <property name="font">
+           <font>
+            <family>Arial Rounded MT Bold</family>
+           </font>
+          </property>
+          <property name="text">
+           <string>Output file</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="output_path_le"/>
         </item>
        </layout>
       </item>
@@ -263,6 +271,53 @@
     </widget>
    </item>
    <item>
+    <layout class="QHBoxLayout" name="horizontalLayout_5">
+     <item>
+      <spacer name="horizontalSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>338</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="start_anlz_bt">
+       <property name="font">
+        <font>
+         <family>Arial Rounded MT Bold</family>
+         <pointsize>16</pointsize>
+        </font>
+       </property>
+       <property name="styleSheet">
+        <string notr="true">color: rgb(255, 255, 255);
+background-color: rgb(255, 170, 0);</string>
+       </property>
+       <property name="text">
+        <string>Start analyzing!</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="horizontalSpacer_2">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>338</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+    </layout>
+   </item>
+   <item>
     <widget class="QGroupBox" name="Display_gb">
      <property name="font">
       <font>
@@ -274,7 +329,7 @@
      </property>
      <layout class="QHBoxLayout" name="horizontalLayout_13">
       <item>
-       <widget class="QTextBrowser" name="textBrowser"/>
+       <widget class="QTextBrowser" name="print_info_tb"/>
       </item>
      </layout>
     </widget>
