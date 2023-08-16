@@ -9,9 +9,9 @@ import numpy as np
 import scipy.io as scio
 import sys
 
-from ailoc.common.calibrationwidget.ui_files.calibrationform import Ui_CalibrationForm
-from ailoc.common.calibrationwidget.tabplotwidget import TabPlotWidget
-from ailoc.common.calibrationwidget.calibration_funcs.calibrate3D import Calibrate3DProcess
+from ui_applications.calibrationwidget.ui_files.calibrationform import Ui_CalibrationForm
+from ui_applications.calibrationwidget.tabplotwidget import TabPlotWidget
+from ui_applications.calibrationwidget.calibration_funcs.calibrate3D import Calibrate3DProcess
 
 
 class CalibrationWidget(QtWidgets.QWidget, Ui_CalibrationForm):

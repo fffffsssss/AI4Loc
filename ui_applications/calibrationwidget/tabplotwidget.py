@@ -4,13 +4,11 @@
 #
 # -*- coding: utf-8 -*-
 
-
+from PyQt5.QtWidgets import *
 import matplotlib
 matplotlib.use('qt5agg')
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qt5agg import NavigationToolbar2QT as NavigationToolbar
-from PyQt5.QtWidgets import *
-import matplotlib.pyplot as plt
 
 
 class TabPlotWidget(QWidget):
