@@ -163,7 +163,7 @@ class SmlmTiffDataset(torch.utils.data.Dataset):
     """
 
     def __init__(self, tiff_path, start_frame_num, time_block_gb, sub_fov_size, over_cut, fov_xy_start,
-                 end_frame_num=None):
+                 end_frame_num=None, ui_print_signal=None):
 
         self.tiff_path = pathlib.Path(tiff_path)
         self.start_frame_num = start_frame_num
@@ -203,16 +203,20 @@ class SmlmTiffDataset(torch.utils.data.Dataset):
         self.time_block_n_img = int(np.ceil(self.time_block_gb*(1024**3) / single_frame_nbyte))
         tiff_handle.close()
 
-        print(f"frame ranges || filename: ")
+        print_message_tmp = f"frame ranges || filename: "
+        print(print_message_tmp)
+        ui_print_signal.emit(print_message_tmp) if ui_print_signal is not None else None
         for i in range(len(self.file_range_list)):
-            print(f"[{self.file_range_list[i][0]}-{self.file_range_list[i][1]}] || {self.file_name_list[i]}")
+            print_message_tmp = f"[{self.file_range_list[i][0]}-{self.file_range_list[i][1]}] || {self.file_name_list[i]}"
+            print(print_message_tmp)
+            ui_print_signal.emit(print_message_tmp) if ui_print_signal is not None else None
 
         self.sum_file_length = np.array(self.file_range_list)[:, 1].sum() - np.array(self.file_range_list)[:, 0].sum() + len(self.file_range_list)
         self.end_frame_num = self.sum_file_length if end_frame_num is None or end_frame_num > self.sum_file_length else end_frame_num
         if self.sum_file_length != self.tiff_shape[0]:
-            print(f"\033[0;31m",
-                  f'Warning: meta data shows that the tiff stack has {self.tiff_shape[0]} frames, '
-                  f'the sum of all file pages is {self.sum_file_length}'"\033[0m")
+            print_message_tmp = f"Warning: meta data shows that the tiff stack has {self.tiff_shape[0]} frames, the sum of all file pages is {self.sum_file_length}"
+            print('\033[0;31m'+print_message_tmp+'\033[0m')
+            ui_print_signal.emit(print_message_tmp) if ui_print_signal is not None else None
 
         frame_slice = []
         i = 0
@@ -301,7 +305,8 @@ class SmlmDataAnalyzer:
     """
 
     def __init__(self, loc_model, tiff_path, output_path, time_block_gb=1, batch_size=16,
-                 sub_fov_size=128, over_cut=8, num_workers=0, camera=None, fov_xy_start=None):
+                 sub_fov_size=128, over_cut=8, num_workers=0, camera=None, fov_xy_start=None,
+                 ui_print_signal=None):
         """
         Args:
             loc_model (ailoc.common.XXLoc): localization model object
@@ -337,17 +342,29 @@ class SmlmDataAnalyzer:
         self.fov_xy_start = fov_xy_start if fov_xy_start is not None else [0, 0]
         self.num_workers = num_workers
         self.pixel_size_xy = loc_model.data_simulator.psf_model.pixel_size_xy
+        self.ui_print_signal = ui_print_signal
 
-        print('the file to save the predictions is: ', self.output_path)
+        print_message_tmp = f'the file to save the predictions is: {self.output_path}'
+        print(print_message_tmp)
+        self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+
         if os.path.exists(self.output_path):
             try:
                 last_preds = ailoc.common.read_csv_array(self.output_path)
                 last_frame_num = int(last_preds[-1, 0])
                 del last_preds
-                print('append the pred list to existed csv, the last analyzed frame is:', last_frame_num)
+
+                print_message_tmp = f'append the pred list to existed csv, the last analyzed frame is: {last_frame_num}'
+                print(print_message_tmp)
+                self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+
             except IndexError:
                 last_frame_num = 0
-                print('the csv file exists but is empty, start from the first frame')
+
+                print_message_tmp = 'the csv file exists but is empty, start from the first frame'
+                print(print_message_tmp)
+                self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+
         else:
             last_frame_num = 0
             preds_empty = np.array([])
@@ -357,7 +374,8 @@ class SmlmDataAnalyzer:
         self.tiff_dataset = SmlmTiffDataset(tiff_path=self.tiff_path, start_frame_num=last_frame_num,
                                             time_block_gb=self.time_block_gb,
                                             sub_fov_size=self.sub_fov_size, over_cut=self.over_cut,
-                                            fov_xy_start=self.fov_xy_start)
+                                            fov_xy_start=self.fov_xy_start,
+                                            ui_print_signal=self.ui_print_signal)
 
     def divide_and_conquer(self):
         """
@@ -383,20 +401,22 @@ class SmlmDataAnalyzer:
             time_cost_block = time.time()-time_start
             time_start = time.time()
 
-            print(f'Analyzing block: {block_num+1}/{len(self.tiff_dataset)}, '
-                  f'contain frames: {len(sub_fov_data_list[0])}, '
-                  f'already analyzed: {self.tiff_dataset.frame_slice[block_num].start}/{self.tiff_dataset.end_frame_num}, '
-                  f'ETA: {time_cost_block*(len(self.tiff_dataset)-block_num)/60:.2f} min')
+            print_message_tmp = f'Analyzing block: {block_num+1}/{len(self.tiff_dataset)}, ' \
+                                f'contain frames: {len(sub_fov_data_list[0])}, ' \
+                                f'already analyzed: {self.tiff_dataset.frame_slice[block_num].start}/{self.tiff_dataset.end_frame_num}, ' \
+                                f'ETA: {time_cost_block*(len(self.tiff_dataset)-block_num)/60:.2f} min'
+            print(print_message_tmp)
+            self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
             sub_fov_molecule_list = []
             for i_fov in range(len(sub_fov_xy_list)):
-
-                print(f'\rProcessing sub-FOV: {i_fov+1}/{len(sub_fov_xy_list)}, {sub_fov_xy_list[i_fov]}, '
-                      f'keep molecules in: {original_sub_fov_xy_list[i_fov]}, '
-                      f'loc model: {type(self.loc_model)}', end='')
-
+                print_message_tmp = f'\rProcessing sub-FOV: {i_fov+1}/{len(sub_fov_xy_list)}, {sub_fov_xy_list[i_fov]}, ' \
+                                    f'keep molecules in: {original_sub_fov_xy_list[i_fov]}, ' \
+                                    f'loc model: {type(self.loc_model)}'
                 if self.loc_model.data_simulator.psf_model.zernike_coef_map is not None:
-                    print(f'aberration map size: {self.loc_model.data_simulator.psf_model.zernike_coef_map.shape}', end='')
+                    print_message_tmp += f', aberration map size: {self.loc_model.data_simulator.psf_model.zernike_coef_map.shape}'
+                print(print_message_tmp, end='')
+                self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
                 with autocast():
                     molecule_list_tmp, inference_dict_tmp = data_analyze(loc_model=self.loc_model,
@@ -406,7 +426,9 @@ class SmlmDataAnalyzer:
                                                                          batch_size=self.batch_size)
                 sub_fov_molecule_list.append(molecule_list_tmp)
 
-            print('')
+            print_message_tmp = ''
+            print(print_message_tmp)
+            self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
             # merge the localizations in each sub-FOV to whole FOV, filter repeated localizations in over cut region
             molecule_list_block = self.filter_over_cut(sub_fov_molecule_list, sub_fov_xy_list,
@@ -419,17 +441,22 @@ class SmlmDataAnalyzer:
 
         # histogram equalization for grid artifacts removal, maybe delete in the future
         time_start = time.time()
-        print('applying histogram equalization to the xy offsets to avoid grid artifacts in the '
-              'difficult conditions (low SNR, high density, etc.)\n'
-              'replace the original xnm and ynm with x_rescale and y_rescale')
+
+        print_message_tmp = 'applying histogram equalization to the xy offsets to avoid grid artifacts ' \
+                            'in the difficult conditions (low SNR, high density, etc.) ' \
+                            'replace the original xnm and ynm with x_rescale and y_rescale'
+        print(print_message_tmp)
+        self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+
         preds_norescale_array = ailoc.common.read_csv_array(self.output_path)
         preds_rescale_array = ailoc.common.rescale_offset(preds_norescale_array, pixel_size=self.pixel_size_xy,
                                                           rescale_bins=20, sig_3d=False)
         ailoc.common.write_csv_array(preds_rescale_array, filename=self.output_path,
                                      write_mode='write rescaled localizations')
-        print(f'histogram equalization finished, time cost (min): {(time.time() - time_start) / 60:.2f}')
 
-        print('analysis finished ! the file containing results is:', self.output_path)
+        print_message_tmp = f'histogram equalization finished, time cost (min): {(time.time() - time_start) / 60:.2f}'
+        print(print_message_tmp)
+        self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
         # all saved localizations are in the following physical FOV, the unit is nm
         fov_xy_nm = [self.fov_xy_start[0]*self.pixel_size_xy[0],
@@ -467,7 +494,7 @@ class SmlmDataAnalyzer:
         sub_fov_molecule_list = []
         sub_fov_inference_list = []
         for i_fov in range(len(sub_fov_data_list)):
-            print(f'\rProcessing {i_fov + 1}/{len(sub_fov_data_list)} sub-FOV: {sub_fov_xy_list[i_fov]}, '
+            print(f'\rProcessing sub-FOV: {i_fov+1}/{len(sub_fov_xy_list)}, {sub_fov_xy_list[i_fov]}, '
                   f'keep molecules in: {original_sub_fov_xy_list[i_fov]}, '
                   f'loc model: {type(self.loc_model)}', end='')
             if self.loc_model.data_simulator.psf_model.zernike_coef_map is not None:

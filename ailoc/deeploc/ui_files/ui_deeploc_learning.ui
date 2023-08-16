@@ -1,0 +1,1021 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>DeepLoc_learning</class>
+ <widget class="QWidget" name="DeepLoc_learning">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1216</width>
+    <height>774</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Form</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout_7">
+   <item>
+    <widget class="QGroupBox" name="PSF_params_gb">
+     <property name="font">
+      <font>
+       <family>Arial Rounded MT Bold</family>
+      </font>
+     </property>
+     <property name="title">
+      <string>PSF parameters</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout">
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_9">
+        <item>
+         <widget class="QPushButton" name="select_calibration_bt">
+          <property name="font">
+           <font>
+            <family>Arial Rounded MT Bold</family>
+           </font>
+          </property>
+          <property name="text">
+           <string>Select Zernike Calibration File</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="model_path_le"/>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_10">
+        <item>
+         <widget class="QLabel" name="na_l">
+          <property name="text">
+           <string>NA</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="na_le">
+          <property name="text">
+           <string>1.5</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="lambda_l">
+          <property name="text">
+           <string>wavelength</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="lambda_le">
+          <property name="text">
+           <string>680</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="refmed_l">
+          <property name="text">
+           <string>refmed</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="refmed_le">
+          <property name="text">
+           <string>1.33</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="refcov_l">
+          <property name="text">
+           <string>refcov</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="refcov_le">
+          <property name="text">
+           <string>1.524</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="refimm_l">
+          <property name="text">
+           <string>refimm</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="refimm_le">
+          <property name="text">
+           <string>1.518</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="objstage0_l">
+          <property name="text">
+           <string>objstage0</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="objstage0_le">
+          <property name="text">
+           <string>-0</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="pixelsizex_l">
+          <property name="text">
+           <string>pixelsizeX</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="pixelsizex_le">
+          <property name="text">
+           <string>100</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="pixelsizey_l">
+          <property name="text">
+           <string>pixelsizeY</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="pixelsizey_le">
+          <property name="text">
+           <string>100</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="otfrescale_l">
+          <property name="text">
+           <string>otf_rescale</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="otfrescale_le">
+          <property name="text">
+           <string>0.5</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="npupil_l">
+          <property name="text">
+           <string>npupil</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="npupil_le">
+          <property name="text">
+           <string>64</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="psfsize_l">
+          <property name="text">
+           <string>PSF size</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="psfsize_le">
+          <property name="text">
+           <string>51</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QGroupBox" name="zernikemodes_gb">
+        <property name="title">
+         <string>Zernike modes</string>
+        </property>
+        <layout class="QHBoxLayout" name="horizontalLayout">
+         <item>
+          <layout class="QVBoxLayout" name="verticalLayout_2">
+           <item>
+            <layout class="QHBoxLayout" name="horizontalLayout_2">
+             <item>
+              <widget class="QLabel" name="zer2m2_l">
+               <property name="text">
+                <string>2, -2</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer2m2_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer22_l">
+               <property name="text">
+                <string>2, 2</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer22_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer3m1_l">
+               <property name="text">
+                <string>3, -1</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer3m1_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer31_l">
+               <property name="text">
+                <string>3, 1</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer31_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer40_l">
+               <property name="text">
+                <string>4, 0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer40_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer3m3_l">
+               <property name="text">
+                <string>3, -3</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer3m3_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer33_l">
+               <property name="text">
+                <string>3, 3</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer33_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="horizontalLayout_3">
+             <item>
+              <widget class="QLabel" name="zer4m2_l">
+               <property name="text">
+                <string>4, -2</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer4m2_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer42_l">
+               <property name="text">
+                <string>4, 2</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer42_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer5m1_l">
+               <property name="text">
+                <string>5, -1</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer5m1_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer51_l">
+               <property name="text">
+                <string>5, 1</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer51_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer60_l">
+               <property name="text">
+                <string>6, 0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer60_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer4m3_l">
+               <property name="text">
+                <string>4, -4</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer4m4_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer44_l">
+               <property name="text">
+                <string>4, 4</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer44_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <layout class="QHBoxLayout" name="horizontalLayout_4">
+             <item>
+              <widget class="QLabel" name="zer5m3_l">
+               <property name="text">
+                <string>5, -3</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer5m3_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer53_l">
+               <property name="text">
+                <string>5, 3</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer53_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer6m2_l">
+               <property name="text">
+                <string>6, -2</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer6m2_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer62_l">
+               <property name="text">
+                <string>6, 2</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer62_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer71_l">
+               <property name="text">
+                <string>7, 1</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer71_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer7m1_l">
+               <property name="text">
+                <string>7, -1</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer7m1_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="zer80_l">
+               <property name="text">
+                <string>8, 0</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="zer80_le">
+               <property name="text">
+                <string>0.0</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </item>
+        </layout>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="camera_params_gb">
+     <property name="font">
+      <font>
+       <family>Arial Rounded MT Bold</family>
+      </font>
+     </property>
+     <property name="title">
+      <string>Camera parameters</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_3">
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_6">
+        <item>
+         <widget class="QComboBox" name="cameratype_cb">
+          <item>
+           <property name="text">
+            <string>sCMOS</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>EMCCD</string>
+           </property>
+          </item>
+          <item>
+           <property name="text">
+            <string>Idea Camera</string>
+           </property>
+          </item>
+         </widget>
+        </item>
+        <item>
+         <spacer name="horizontalSpacer_3">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <widget class="QGroupBox" name="scmosparameter_gb">
+        <property name="title">
+         <string>sCMOS parameters</string>
+        </property>
+        <layout class="QVBoxLayout" name="verticalLayout_4">
+         <item>
+          <layout class="QHBoxLayout" name="horizontalLayout_7">
+           <item>
+            <widget class="QLabel" name="scmosqe_l">
+             <property name="text">
+              <string>Quantum efficiency</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLineEdit" name="scmosqe_le">
+             <property name="text">
+              <string>0.9</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="scmosspuriouscharge_l">
+             <property name="text">
+              <string>Spurious charge</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLineEdit" name="scmosspuriouscharge_le">
+             <property name="text">
+              <string>0.002</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="scmosreadnoisesigma_l">
+             <property name="text">
+              <string>Read noise sigma</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLineEdit" name="scmosreadnoisesigma_le">
+             <property name="text">
+              <string>1.6</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="scmose_per_adu_l">
+             <property name="text">
+              <string>electron/adu</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLineEdit" name="scmose_per_adu_le">
+             <property name="text">
+              <string>0.5</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="scmosbaseline_l">
+             <property name="text">
+              <string>baseline</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLineEdit" name="scmosbaseline_le">
+             <property name="text">
+              <string>100</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+        </layout>
+       </widget>
+      </item>
+      <item>
+       <widget class="QGroupBox" name="emccdparameter_gb">
+        <property name="title">
+         <string>EMCCD parameters</string>
+        </property>
+        <layout class="QVBoxLayout" name="verticalLayout_5">
+         <item>
+          <layout class="QHBoxLayout" name="horizontalLayout_8">
+           <item>
+            <widget class="QLabel" name="emccdqe_l">
+             <property name="text">
+              <string>Quantum efficiency</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLineEdit" name="emccdqe_le">
+             <property name="text">
+              <string>0.9</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="emccdspuriouscharge_l">
+             <property name="text">
+              <string>Spurious charge</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLineEdit" name="emccdspuriouscharge_le">
+             <property name="text">
+              <string>0.002</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="emccdemgain_l">
+             <property name="text">
+              <string>EM gain</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLineEdit" name="emccdemgain_le">
+             <property name="text">
+              <string>300</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="emccdreadnoisesigma_l">
+             <property name="text">
+              <string>Read noise sigma</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLineEdit" name="emccdreadnoisesigma_le">
+             <property name="text">
+              <string>74.4</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="emccde_per_adu_l">
+             <property name="text">
+              <string>electron/adu</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLineEdit" name="emccde_per_adu_le">
+             <property name="text">
+              <string>45</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLabel" name="emccdbaseline_l">
+             <property name="text">
+              <string>baseline</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QLineEdit" name="emccdbaseline_le">
+             <property name="text">
+              <string>100</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </item>
+        </layout>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="sampler_params_gb">
+     <property name="font">
+      <font>
+       <family>Arial Rounded MT Bold</family>
+      </font>
+     </property>
+     <property name="title">
+      <string>Sampler parameters</string>
+     </property>
+     <layout class="QVBoxLayout" name="verticalLayout_6">
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_11">
+        <item>
+         <widget class="QCheckBox" name="local_context_cb">
+          <property name="text">
+           <string>Local context         </string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QCheckBox" name="robust_training_cb">
+          <property name="text">
+           <string>Robust training         </string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="trainsize_l">
+          <property name="text">
+           <string>Train size</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="trainsize_le">
+          <property name="text">
+           <string>128</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="num_em_avg_l">
+          <property name="text">
+           <string>Average number of emitters</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="num_em_avg_le">
+          <property name="text">
+           <string>128</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="num_eval_images_l">
+          <property name="text">
+           <string>Number of evaluation images</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="num_eval_images_l_2">
+          <property name="text">
+           <string>1000</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="horizontalLayout_12">
+        <item>
+         <widget class="QLabel" name="photonrangemin_l">
+          <property name="text">
+           <string>Photon range min</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="photonrangemin_le">
+          <property name="text">
+           <string>1000</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="photonrangemax_l">
+          <property name="text">
+           <string>Photon range max</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="photonrangemax_le">
+          <property name="text">
+           <string>8000</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="zrangemin_l">
+          <property name="text">
+           <string>Z range min</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="zrangemin_le">
+          <property name="text">
+           <string>-700</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="zrangemax_l">
+          <property name="text">
+           <string>Z range max</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="zrangemax_le">
+          <property name="text">
+           <string>700</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="bgrangemin_l">
+          <property name="text">
+           <string>Background range min</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="bgrangemin_le">
+          <property name="text">
+           <string>50</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="bgrangemax_l">
+          <property name="text">
+           <string>Background range max</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLineEdit" name="bgrangemax_le">
+          <property name="text">
+           <string>100</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="horizontalLayout_5">
+     <item>
+      <spacer name="horizontalSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>338</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="start_train_bt">
+       <property name="font">
+        <font>
+         <family>Arial Rounded MT Bold</family>
+         <pointsize>16</pointsize>
+        </font>
+       </property>
+       <property name="styleSheet">
+        <string notr="true"/>
+       </property>
+       <property name="text">
+        <string>Start training!</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="horizontalSpacer_2">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>338</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="stop_train_bt">
+       <property name="enabled">
+        <bool>false</bool>
+       </property>
+       <property name="font">
+        <font>
+         <family>Arial Rounded MT Bold</family>
+         <pointsize>16</pointsize>
+        </font>
+       </property>
+       <property name="text">
+        <string>Stop</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="Display_gb">
+     <property name="font">
+      <font>
+       <family>Arial Rounded MT Bold</family>
+      </font>
+     </property>
+     <property name="title">
+      <string>Print Info</string>
+     </property>
+     <layout class="QHBoxLayout" name="horizontalLayout_13">
+      <item>
+       <widget class="QTextBrowser" name="print_info_tb">
+        <property name="font">
+         <font>
+          <family>Arial</family>
+          <pointsize>9</pointsize>
+         </font>
+        </property>
+        <property name="mouseTracking">
+         <bool>true</bool>
+        </property>
+        <property name="acceptDrops">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

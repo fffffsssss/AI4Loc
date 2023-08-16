@@ -5,7 +5,12 @@ sys.path.append('../')
 import ailoc.deeploc
 
 
-def analyze_pipeline():
+def deeploc_main_learning():
+    #todo
+    pass
+
+
+def deeploc_main_inference():
     loc_model_path = 'E:/projects/FS_work/AI-Loc/AI-Loc_project/test/reproduce_efig.4/2023-07-06-21DeepLoc.pt'
     image_path = 'E:/projects/FS_work/AI-Loc/AI-Loc_project/test/reproduce_efig.4/match_data/1.tif'
     if os.path.isfile(image_path):
@@ -24,21 +29,18 @@ def analyze_pipeline():
     num_workers = 0
     fov_xy_start = [0, 0]
 
-    ailoc.deeploc.deeploc_analyze(loc_model_path,
-                                  image_path,
-                                  save_path,
-                                  time_block_gb,
-                                  batch_size,
-                                  sub_fov_size,
-                                  over_cut,
-                                  num_workers,
-                                  fov_xy_start)
-
-
-def main():
-    print("hello world")
+    ailoc.deeploc.app_inference(loc_model_path,
+                                image_path,
+                                save_path,
+                                time_block_gb,
+                                batch_size,
+                                sub_fov_size,
+                                over_cut,
+                                num_workers,
+                                fov_xy_start)
 
 
 if __name__ == '__main__':
-    # analyze_pipeline()
-    main()
+    # deeploc_main_learning()
+    deeploc_main_inference()
+    # ailoc.deeploc.app_inference_gui()
