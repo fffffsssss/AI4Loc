@@ -39,8 +39,8 @@ def pair_localizations(prediction, ground_truth, frame_num=None, fov_xy_nm=None,
             the number of frames whose localizations will be paired, should be looped through
             because the ground truth or predictions on the last frame may be empty. If None, use the last
             frame number of the ground truth, may have a little bias.
-        fov_xy_nm (list or None):
-            [x_start, x_end, y_start, y_end] in nm unit, localizations in where will be paired. If None,
+        fov_xy_nm (tuple or None):
+            (x_start, x_end, y_start, y_end) in nm unit, localizations in where will be paired. If None,
             all localizations are paired.
         border (int or float):
             If fov_xy_range is not None, localizations close to the margin of the FOV will be
@@ -83,7 +83,7 @@ def pair_localizations(prediction, ground_truth, frame_num=None, fov_xy_nm=None,
         for idx_tmp in reversed(np.sort(pred_idx)):
             del pred_list[idx_tmp]
 
-    print(f"FOV={fov_xy_nm}, border={border}, tolerance_xy={tolerance_xy}, tolerance_z={tolerance_z}\n"
+    print(f"FOV={fov_xy_nm} nm, border={border}, tolerance_xy={tolerance_xy}, tolerance_z={tolerance_z}\n"
           f"pairing localizations on {frame_num} images, ground truth: {len(gt_list)}, predictions: {len(pred_list)}, "
           f"please waiting...")
 

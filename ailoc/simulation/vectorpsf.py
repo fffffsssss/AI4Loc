@@ -50,7 +50,7 @@ class VectorPSF(ABC):
             torch.Tensor: blured psf data
         """
 
-        kernel = VectorPSF._gauss2D_kernel(shape=[5, 5], sigmax=sigma_xy[0], sigmay=sigma_xy[1]).reshape([1, 1, 5, 5])
+        kernel = VectorPSF._gauss2D_kernel(shape=(5, 5), sigmax=sigma_xy[0], sigmay=sigma_xy[1]).reshape((1, 1, 5, 5))
         psf_size = psfdata.shape[1]
         psfdata = psfdata.view(-1, 1, psf_size, psf_size)
         tmp = nn.functional.conv2d(psfdata, kernel, padding=2, stride=1)

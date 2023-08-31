@@ -1,0 +1,38 @@
+一、约定总则：
+
+
+二、项目结构
+通用工具都放在common里，根据开发需要实现xxloc算法，比如deeploc，syncloc等
+├── root
+│   ├── ailoc
+│   │   ├── common                   // 通用工具
+│   │   │   ├── beads_calibration     // 校准beads，从smap_py拷贝
+│   │   ├── simulation               // 训练数据模拟，包括先验采样，PSF，相机等
+│   │   ├── deeploc                  // deeploc算法实现，包括loss，network，forward方式等
+│   │   ├── syncloc                  // syncloc算法实现，包括loss，network，forward方式等
+│   ├── demo_pipelines              // 用于演示用法的notebook，包含了校准beads，训练模型，推理等
+│   │   ├── notebook
+│   │   ├── pyscripts
+
+三、开发环境
+1. 使用Pycharm 2022.2.4开发环境进行开发，Python版本为3.9.7；尽可能解决该IDE提示的编码规则警告
+3. 如果更新了依赖模块，在Pycharm terminal执行：pip3.exe freeze > requirements.txt
+4. 导入依赖模块，在Pycharm terminal执行：pip3 install -r .\requirements.txt
+
+
+四、命名规范
+1. 包名和模块名
+	全部使用小写字母，可以使用下划线；比如：view，patient_register
+2. 文件名
+	全部小写，可以使用下划线；比如：save.png，generate_rcc.sh
+3. 类名
+	大驼峰命名，即每个单词首字母大写；比如：ImageProcess
+4. 私有类
+	下划线开头，名字为大驼峰命名；比如：_OpenDir
+5. 函数名
+	全部小写，每个单词使用下划线分隔；比如：def draw_roi(self)
+	私有函数，以下划线开头，比如：def _show_text(self)
+6. 变量名
+	全部小写，每个单词使用下划线分隔；比如：first_roi_color
+7. 常量
+	全部大写，每个单纯使用下划线分割；比如：MAX_TIME_IN_US

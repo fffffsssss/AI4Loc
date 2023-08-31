@@ -77,7 +77,7 @@ class DeepLoc(ailoc.common.XXLoc):
 
         return total_loss
 
-    def online_train(self, batch_size=16, max_iterations=50000, eval_freq=500):
+    def online_train(self, batch_size=16, max_iterations=50000, eval_freq=500, file_name=None):
         """
         Train the network.
 
@@ -86,9 +86,10 @@ class DeepLoc(ailoc.common.XXLoc):
             max_iterations (int): maximum number of iterations
             eval_freq (int): every eval_freq iterations the network will be saved
                 and evaluated on the evaluation dataset to check the current performance
+            file_name (str): the name of the file to save the network
         """
 
-        file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H') + 'DeepLoc'
+        file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H') + 'DeepLoc' if file_name is None else file_name
 
         print('Start training...')
 
@@ -218,7 +219,7 @@ class DeepLoc(ailoc.common.XXLoc):
         Args:
             data (torch.Tensor): a batch of data to be analyzed.
             camera (ailoc.simulation.Camera): camera object used to transform the data to photon unit.
-            sub_fov_xy (list of int): [x_start, x_end, y_start, y_end], start from 0, in pixel unit,
+            sub_fov_xy (tuple of int): (x_start, x_end, y_start, y_end), start from 0, in pixel unit,
                 the FOV indicator for these images
 
         Returns:
@@ -258,8 +259,8 @@ class DeepLoc(ailoc.common.XXLoc):
             metric_dict, paired_array = ailoc.common.pair_localizations(prediction=np.array(molecule_list_pred),
                                                                         ground_truth=self.evaluation_dataset['molecule_list_gt'],
                                                                         frame_num=self.evaluation_dataset['data'].shape[0],
-                                                                        fov_xy_nm=[0, self.evaluation_dataset['data'].shape[-1]*self.data_simulator.psf_model.pixel_size_xy[0],
-                                                                                   0, self.evaluation_dataset['data'].shape[-2]*self.data_simulator.psf_model.pixel_size_xy[1]])
+                                                                        fov_xy_nm=(0, self.evaluation_dataset['data'].shape[-1]*self.data_simulator.psf_model.pixel_size_xy[0],
+                                                                                   0, self.evaluation_dataset['data'].shape[-2]*self.data_simulator.psf_model.pixel_size_xy[1]))
 
             for k in self.evaluation_recorder.keys():
                 if k in metric_dict.keys():
@@ -271,7 +272,7 @@ class DeepLoc(ailoc.common.XXLoc):
 
         self.network.train()
 
-    def build_evaluation_dataset(self):
+    def build_evaluation_dataset(self, napari_plot=False):
         """
         Build the evaluation dataset, sampled by the same way as training data.
         """
@@ -287,8 +288,9 @@ class DeepLoc(ailoc.common.XXLoc):
               f"contain {len(molecule_list_gt)} target molecules, "
               f"time cost: {time.time() - t0:.2f}s")
 
-        print('visually checking evaluation data...')
-        ailoc.common.viewdata_napari(eval_data)
+        if napari_plot:
+            print('visually checking evaluation data...')
+            ailoc.common.viewdata_napari(eval_data)
 
     def save(self, file_name):
         """

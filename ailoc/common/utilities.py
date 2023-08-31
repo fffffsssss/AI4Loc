@@ -1,15 +1,24 @@
 import csv
 import random
 from operator import itemgetter
-import os
 import numpy as np
 import scipy.stats
 import torch
 from matplotlib import pyplot as plt
-import PyQt5.QtWidgets as qtw
 import napari
+import tifffile
+import os
 
 import ailoc.common.local_tifffile
+
+
+def setup_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def gpu(x):
@@ -27,6 +36,8 @@ def cpu(x):
     Transforms torch tensor into numpy array
     """
 
+    if not isinstance(x, torch.Tensor):
+        return np.array(x, dtype=np.float32)
     return x.cpu().detach().numpy()
 
 
@@ -217,9 +228,11 @@ def setup_seed(seed):
 
 
 def read_first_size_gb_tiff(image_path, size_gb=4):
-    with ailoc.common.local_tifffile.TiffFile(image_path, is_ome=False) as tif:
+    # with ailoc.common.local_tifffile.TiffFile(image_path, is_ome=False) as tif:
+    with tifffile.TiffFile(image_path, is_ome=False) as tif:
         total_shape = tif.series[0].shape
-        occu_mem = total_shape[0] * total_shape[1] * total_shape[2] * 16 / (1024 ** 3) / 8
+        # occu_mem = total_shape[0] * total_shape[1] * total_shape[2] * 16 / (1024 ** 3) / 8
+        occu_mem = tif.series[0].size * tif.series[0].dtype.itemsize / (1024 ** 3)  # GBytes
         if occu_mem < size_gb:
             index_img = total_shape[0]
         else:
@@ -251,4 +264,3 @@ def cmpdata_napari(data1, data2):
     data3 = np.concatenate((data1, data2, data1-data2), axis=2)
     viewer = napari.view_image(data3, colormap='turbo')
     napari.run()
-

@@ -1,6 +1,6 @@
 import torch
 import numpy as np
-from deprecated import deprecated
+# from deprecated import deprecated
 
 import ailoc.common
 
@@ -41,19 +41,19 @@ class MoleculeSampler:
 
         self.photon_range = sampler_params['photon_range']
         self.photon_scale = np.max(np.abs(self.photon_range))
-        self.photon_range_scaled = [self.photon_range[0] / self.photon_scale, self.photon_range[1] / self.photon_scale]
+        self.photon_range_scaled = (self.photon_range[0] / self.photon_scale, self.photon_range[1] / self.photon_scale)
         assert self.photon_range_scaled[0] >= 0 and self.photon_range_scaled[1] <= 1, \
             "scaled photon range should be included in [0, 1]"
 
         self.z_range = sampler_params['z_range']
         self.z_scale = np.max(np.abs(self.z_range))
-        self.z_range_scaled = [self.z_range[0] / self.z_scale, self.z_range[1] / self.z_scale]
+        self.z_range_scaled = (self.z_range[0] / self.z_scale, self.z_range[1] / self.z_scale)
         assert self.z_range_scaled[0] >= -1 and self.z_range_scaled[1] <= 1, \
             "scaled z range should be included in [-1, 1]"
 
         self.bg_range = sampler_params['bg_range']
         self.bg_scale = np.max(np.abs(self.bg_range))
-        self.bg_range_scaled = [self.bg_range[0] / self.bg_scale, self.bg_range[1] / self.bg_scale]
+        self.bg_range_scaled = (self.bg_range[0] / self.bg_scale, self.bg_range[1] / self.bg_scale)
         assert self.bg_range_scaled[0] >= 0 and self.bg_range_scaled[1] <= 1, \
             "scaled bg range should be included in [0, 1]"
 
@@ -228,37 +228,37 @@ class MoleculeSampler:
         bg_s = bg_s.reshape(batch_size, 1, 1).expand(-1, train_prob_map.shape[-2], train_prob_map.shape[-1])
         return bg_s
 
-    @deprecated(reason='aberration map is no longer a property of the MoleculeSampler')
-    def sample_aberration(self, sub_fov_xy):
-        """
-        Sample the aberration map for the current sub-fov
-
-        Args:
-            sub_fov_xy (list): [x_start, x_end, y_start, y_end]
-
-        Returns:
-            torch.Tensor or None: aberration map for the current sub-fov
-        """
-
-        if self.aberration_map is None:
-            return None
-        return self.aberration_map[:, sub_fov_xy[2]:sub_fov_xy[3] + 1, sub_fov_xy[0]:sub_fov_xy[1] + 1]
-
-    @deprecated(reason='read noise map is no longer a property of the MoleculeSampler')
-    def sample_read_noise(self, sub_fov_xy):
-        """
-        Sample the read noise map for the current sub-fov
-
-        Args:
-            sub_fov_xy (list): [x_start, x_end, y_start, y_end]
-
-        Returns:
-            torch.Tensor or None: read noise map for the current sub-fov
-        """
-
-        if self.read_noise_map is None:
-            return None
-        return self.read_noise_map[sub_fov_xy[2]:sub_fov_xy[3] + 1, sub_fov_xy[0]:sub_fov_xy[1] + 1]
+    # @deprecated(reason='aberration map is no longer a property of the MoleculeSampler')
+    # def sample_aberration(self, sub_fov_xy):
+    #     """
+    #     Sample the aberration map for the current sub-fov
+    #
+    #     Args:
+    #         sub_fov_xy (list): [x_start, x_end, y_start, y_end]
+    #
+    #     Returns:
+    #         torch.Tensor or None: aberration map for the current sub-fov
+    #     """
+    #
+    #     if self.aberration_map is None:
+    #         return None
+    #     return self.aberration_map[:, sub_fov_xy[2]:sub_fov_xy[3] + 1, sub_fov_xy[0]:sub_fov_xy[1] + 1]
+    #
+    # @deprecated(reason='read noise map is no longer a property of the MoleculeSampler')
+    # def sample_read_noise(self, sub_fov_xy):
+    #     """
+    #     Sample the read noise map for the current sub-fov
+    #
+    #     Args:
+    #         sub_fov_xy (list): [x_start, x_end, y_start, y_end]
+    #
+    #     Returns:
+    #         torch.Tensor or None: read noise map for the current sub-fov
+    #     """
+    #
+    #     if self.read_noise_map is None:
+    #         return None
+    #     return self.read_noise_map[sub_fov_xy[2]:sub_fov_xy[3] + 1, sub_fov_xy[0]:sub_fov_xy[1] + 1]
 
     @staticmethod
     def _compute_prob_map(size_row, size_col, num_em_avg):
@@ -294,7 +294,7 @@ class MoleculeSampler:
                 if idx // column_num % row_num * (train_size - overlap) + train_size <= fov_size[0] else fov_size[0] - train_size
 
             # it represents the [x, y] position, not [row, column], numerical range is [0, fov_size-1]
-            sliding_windows.append([x_start, x_start + train_size - 1, y_start, y_start + train_size - 1])
+            sliding_windows.append((x_start, x_start + train_size - 1, y_start, y_start + train_size - 1))
 
         return sliding_windows
 

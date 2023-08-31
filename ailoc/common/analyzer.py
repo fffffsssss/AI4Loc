@@ -22,7 +22,7 @@ def data_analyze(loc_model, data, sub_fov_xy, camera, batch_size=32):
         loc_model (ailoc.common.XXLoc): the localization model to use, should implement the abstract analyze function,
             which takes a batch of images as input and return the molecule array
         data (np.ndarray): sequential images to analyze, shape (num_img, height, width)
-        sub_fov_xy (list of int): [x_start, x_end, y_start, y_end], start from 0, in pixel unit, the FOV indicator for
+        sub_fov_xy (tuple of int): (x_start, x_end, y_start, y_end), start from 0, in pixel unit, the FOV indicator for
             these images, the local position adds these will be global position
         camera (ailoc.simulation.Camera): camera object used to transform the data to photon unit
         batch_size (int): data are processed in batches
@@ -87,19 +87,19 @@ def split_fov(data, fov_xy=None, sub_fov_size=128, over_cut=8):
     Args:
         data (np.ndarray): sequential images to analyze, shape (num_img, height, width), as the lateral size may be
             too large to cause GPU memory overflow, the data will be divided into sub-FOVs and analyzed separately
-        fov_xy (list of int or None): [x_start, x_end, y_start, y_end], start from 0, in pixel unit, the FOV indicator
+        fov_xy (tuple of int or None): (x_start, x_end, y_start, y_end), start from 0, in pixel unit, the FOV indicator
             for these images
         sub_fov_size (int): in pixel, size of the sub-FOVs, must be multiple of 4
         over_cut: must be multiple of 4, cut a slightly larger sub-FOV to avoid artifact from the incomplete PSFs at
             image edge.
 
     Returns:
-        (list, list, list): list of sub-FOV data with over cut, list of over cut sub-FOV indicator
-            [x_start, x_end, y_start, y_end] and list of sub-FOV indicator without over cut
+        (list of np.ndarray, list of tuple, list of tuple): list of sub-FOV data with over cut, list of over cut sub-FOV indicator
+            (x_start, x_end, y_start, y_end) and list of sub-FOV indicator without over cut
     """
 
     if fov_xy is None:
-        fov_xy = [0, data.shape[-1] - 1, 0, data.shape[-2] - 1]
+        fov_xy = (0, data.shape[-1] - 1, 0, data.shape[-2] - 1)
         fov_xy_start = [0, 0]
     else:
         fov_xy_start = [fov_xy[0], fov_xy[2]]
@@ -110,8 +110,6 @@ def split_fov(data, fov_xy=None, sub_fov_size=128, over_cut=8):
 
     # enforce the image size to be multiple of 4, pad with estimated background adu. fov_xy_start should be modified
     # according to the padding size, and sub_fov_xy for sub-area images should be modified too.
-    pad_h = 0
-    pad_w = 0
     if (h % 4 != 0) or (w % 4 != 0):
         empty_area_adu, _ = ailoc.common.get_mean_percentile(data, percentile=50)
         if h % 4 != 0:
@@ -127,6 +125,8 @@ def split_fov(data, fov_xy=None, sub_fov_size=128, over_cut=8):
             fov_xy_start[0] -= pad_w
             w += pad_w
 
+    assert sub_fov_size % 4 == 0 and over_cut % 4 == 0, 'sub_fov_size and over_cut must be multiple of 4'
+
     # divide the data into sub-FOVs with over_cut
     row_sub_fov = int(np.ceil(h / sub_fov_size))
     col_sub_fov = int(np.ceil(w / sub_fov_size))
@@ -141,18 +141,22 @@ def split_fov(data, fov_xy=None, sub_fov_size=128, over_cut=8):
             x_origin_end = w if x_origin_start + sub_fov_size > w else x_origin_start + sub_fov_size
             y_origin_end = h if y_origin_start + sub_fov_size > h else y_origin_start + sub_fov_size
 
-            x_start = col * sub_fov_size if col * sub_fov_size - over_cut < 0 else col * sub_fov_size - over_cut
-            y_start = row * sub_fov_size if row * sub_fov_size - over_cut < 0 else row * sub_fov_size - over_cut
-            x_end = w if x_origin_start + sub_fov_size + over_cut > w else x_origin_start + sub_fov_size + over_cut
-            y_end = h if y_origin_start + sub_fov_size + over_cut > h else y_origin_start + sub_fov_size + over_cut
+            x_start = x_origin_start if x_origin_start - over_cut < 0 else x_origin_start - over_cut
+            y_start = y_origin_start if y_origin_start - over_cut < 0 else y_origin_start - over_cut
+            x_end = x_origin_end if x_origin_end + over_cut > w else x_origin_end + over_cut
+            y_end = y_origin_end if y_origin_end + over_cut > h else y_origin_end + over_cut
 
             sub_fov_data_tmp = data[:, y_start:y_end, x_start:x_end] + .0
 
             sub_fov_data_list.append(sub_fov_data_tmp)
-            sub_fov_xy_list.append([x_start + fov_xy_start[0], x_end - 1 + fov_xy_start[0],
-                                    y_start + fov_xy_start[1], y_end - 1 + fov_xy_start[1]])
-            original_sub_fov_xy_list.append([x_origin_start + fov_xy_start[0], x_origin_end - 1 + fov_xy_start[0],
-                                             y_origin_start + fov_xy_start[1], y_origin_end - 1 + fov_xy_start[1]])
+            sub_fov_xy_list.append((x_start + fov_xy_start[0],
+                                    x_end - 1 + fov_xy_start[0],
+                                    y_start + fov_xy_start[1],
+                                    y_end - 1 + fov_xy_start[1]))
+            original_sub_fov_xy_list.append((x_origin_start + fov_xy_start[0],
+                                             x_origin_end - 1 + fov_xy_start[0],
+                                             y_origin_start + fov_xy_start[1],
+                                             y_origin_end - 1 + fov_xy_start[1]))
 
     return sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list
 
@@ -184,21 +188,21 @@ class SmlmTiffDataset(torch.utils.data.Dataset):
                 length_tmp = len(tiff_handle_tmp.pages)
                 tiff_handle_tmp.close()
                 self.file_name_list.append(file_tmp)
-                self.file_range_list.append([start_num, start_num + length_tmp - 1, length_tmp])
+                self.file_range_list.append((start_num, start_num + length_tmp - 1, length_tmp))
                 start_num += length_tmp
         else:
             tiff_handle_tmp = tifffile.TiffFile(self.tiff_path)
             length_tmp = len(tiff_handle_tmp.pages)
             tiff_handle_tmp.close()
             self.file_name_list.append(str(self.tiff_path))
-            self.file_range_list.append([0, length_tmp - 1, length_tmp])
+            self.file_range_list.append((0, length_tmp - 1, length_tmp))
 
         # make the plan to read image stack sequentially
         # tiff_handle = local_tifffile.TiffFile(self.tiff_path, is_ome=True)
         tiff_handle = tifffile.TiffFile(self.file_name_list[0])
         self.tiff_shape = tiff_handle.series[0].shape
-        self.fov_xy = [fov_xy_start[0], fov_xy_start[0] + self.tiff_shape[-1] - 1,
-                       fov_xy_start[1], fov_xy_start[1] + self.tiff_shape[-2] - 1]
+        self.fov_xy = (fov_xy_start[0], fov_xy_start[0] + self.tiff_shape[-1] - 1,
+                       fov_xy_start[1], fov_xy_start[1] + self.tiff_shape[-2] - 1)
         single_frame_nbyte = tiff_handle.series[0].size * tiff_handle.series[0].dtype.itemsize / self.tiff_shape[0]
         self.time_block_n_img = int(np.ceil(self.time_block_gb*(1024**3) / single_frame_nbyte))
         tiff_handle.close()
@@ -339,7 +343,7 @@ class SmlmDataAnalyzer:
         self.camera = camera if camera is not None else loc_model.data_simulator.camera
         self.sub_fov_size = sub_fov_size
         self.over_cut = over_cut
-        self.fov_xy_start = fov_xy_start if fov_xy_start is not None else [0, 0]
+        self.fov_xy_start = fov_xy_start if fov_xy_start is not None else (0, 0)
         self.num_workers = num_workers
         self.pixel_size_xy = loc_model.data_simulator.psf_model.pixel_size_xy
         self.ui_print_signal = ui_print_signal
@@ -383,7 +387,7 @@ class SmlmDataAnalyzer:
         divided into sub-FOVs and analyzed separately.
 
         Returns:
-            (tuple, list, np.ndarray): return the data shape and the physical FOV in nm that contains
+            (tuple, tuple, np.ndarray): return the data shape and the physical FOV in nm that contains
                 all localizations, and the localization results.
         """
 
@@ -439,7 +443,7 @@ class SmlmDataAnalyzer:
             ailoc.common.write_csv_array(input_array=molecule_list_block, filename=self.output_path,
                                          write_mode='append localizations')
 
-        # histogram equalization for grid artifacts removal, maybe delete in the future
+        # todo histogram equalization for grid artifacts removal, maybe delete in the future
         time_start = time.time()
 
         print_message_tmp = 'applying histogram equalization to the xy offsets to avoid grid artifacts ' \
@@ -459,10 +463,10 @@ class SmlmDataAnalyzer:
         self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
         # all saved localizations are in the following physical FOV, the unit is nm
-        fov_xy_nm = [self.fov_xy_start[0]*self.pixel_size_xy[0],
+        fov_xy_nm = (self.fov_xy_start[0]*self.pixel_size_xy[0],
                      (self.fov_xy_start[0]+self.tiff_dataset.tiff_shape[-1])*self.pixel_size_xy[0],
                      self.fov_xy_start[1] * self.pixel_size_xy[1],
-                     (self.fov_xy_start[1] + self.tiff_dataset.tiff_shape[-2]) * self.pixel_size_xy[1]]
+                     (self.fov_xy_start[1] + self.tiff_dataset.tiff_shape[-2]) * self.pixel_size_xy[1])
 
         return self.tiff_dataset.tiff_shape, fov_xy_nm, preds_rescale_array
 
@@ -484,8 +488,8 @@ class SmlmDataAnalyzer:
         else:
             data_block = self.tiff_dataset.get_specific_frame(frame_num_list=[frame_num-1])
 
-        fov_xy = [self.fov_xy_start[0], self.fov_xy_start[0] + self.tiff_dataset.tiff_shape[-1] - 1,
-                  self.fov_xy_start[1], self.fov_xy_start[1] + self.tiff_dataset.tiff_shape[-2] - 1]
+        fov_xy = (self.fov_xy_start[0], self.fov_xy_start[0] + self.tiff_dataset.tiff_shape[-1] - 1,
+                  self.fov_xy_start[1], self.fov_xy_start[1] + self.tiff_dataset.tiff_shape[-2] - 1)
 
         sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list = split_fov(data=data_block, fov_xy=fov_xy,
                                                                                  sub_fov_size=self.sub_fov_size,
@@ -530,11 +534,11 @@ class SmlmDataAnalyzer:
             sub_fov_molecule_list (list):
                 [frame, x, y, z, photon,...], molecule list on each sub-FOV data
                 with xy position in the whole FOV.
-            sub_fov_xy_list (list):
-                [x_start, x_end, y_start, y_end] unit pixel, the sub-FOV indicator with over cut
-            original_sub_fov_xy_list (list):
+            sub_fov_xy_list (list of tuple):
+                (x_start, x_end, y_start, y_end) unit pixel, the sub-FOV indicator with over cut
+            original_sub_fov_xy_list (list of tuple):
                 the sub-FOV indicator without over cut, unit pixel
-            pixel_size_xy (list of int):
+            pixel_size_xy (tuple of int):
                 pixel size in xy dimension, unit nm
 
         Returns:
@@ -544,14 +548,14 @@ class SmlmDataAnalyzer:
 
         molecule_list = []
         for i_fov in range(len(sub_fov_molecule_list)):
-            curr_sub_fov_xy = [sub_fov_xy_list[i_fov][0] * pixel_size_xy[0],
-                               (sub_fov_xy_list[i_fov][1]+1) * pixel_size_xy[0],
-                               sub_fov_xy_list[i_fov][2] * pixel_size_xy[1],
-                               (sub_fov_xy_list[i_fov][3]+1) * pixel_size_xy[1]]
-            curr_ori_sub_fov_xy_nm = [original_sub_fov_xy_list[i_fov][0] * pixel_size_xy[0],
+            # curr_sub_fov_xy = (sub_fov_xy_list[i_fov][0] * pixel_size_xy[0],
+            #                    (sub_fov_xy_list[i_fov][1]+1) * pixel_size_xy[0],
+            #                    sub_fov_xy_list[i_fov][2] * pixel_size_xy[1],
+            #                    (sub_fov_xy_list[i_fov][3]+1) * pixel_size_xy[1])
+            curr_ori_sub_fov_xy_nm = (original_sub_fov_xy_list[i_fov][0] * pixel_size_xy[0],
                                       (original_sub_fov_xy_list[i_fov][1]+1) * pixel_size_xy[0],
                                       original_sub_fov_xy_list[i_fov][2] * pixel_size_xy[1],
-                                      (original_sub_fov_xy_list[i_fov][3]+1) * pixel_size_xy[1]]
+                                      (original_sub_fov_xy_list[i_fov][3]+1) * pixel_size_xy[1])
 
             curr_mol_array = np.array(sub_fov_molecule_list[i_fov])
             if len(curr_mol_array) > 0:
