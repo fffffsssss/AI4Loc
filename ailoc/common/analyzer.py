@@ -314,7 +314,7 @@ class SmlmDataAnalyzer:
         """
         Args:
             loc_model (ailoc.common.XXLoc): localization model object
-            tiff_path (str): the path to the tiff file
+            tiff_path (str): the path of the tiff file, can also be a directory containing multiple tiff files
             output_path (str): the path to save the analysis results
             time_block_gb (int or float): the size (GB) of the data block loaded into the RAM iteratively,
                 to deal with the large data problem
@@ -333,6 +333,7 @@ class SmlmDataAnalyzer:
                 parameter is normally [0,0] as we usually treat the input images as the whole FOV. However, when using
                 an FD-DeepLoc model trained with pixel-wise field-dependent aberration, this parameter should be carefully
                 set to ensure the consistency of the input data position relative to the training aberration map.
+            ui_print_signal (PyQt5.QtCore.pyqtSignal): the signal to print the message to the UI
         """
 
         self.loc_model = loc_model
@@ -358,7 +359,8 @@ class SmlmDataAnalyzer:
                 last_frame_num = int(last_preds[-1, 0])
                 del last_preds
 
-                print_message_tmp = f'append the pred list to existed csv, the last analyzed frame is: {last_frame_num}'
+                print_message_tmp = f'divide_and_conquer will append the pred list to existed csv, ' \
+                                    f'the last analyzed frame is: {last_frame_num}'
                 print(print_message_tmp)
                 self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
@@ -371,9 +373,9 @@ class SmlmDataAnalyzer:
 
         else:
             last_frame_num = 0
-            preds_empty = np.array([])
-            ailoc.common.write_csv_array(input_array=preds_empty, filename=self.output_path,
-                                         write_mode='write localizations')
+            # preds_empty = np.array([])
+            # ailoc.common.write_csv_array(input_array=preds_empty, filename=self.output_path,
+            #                              write_mode='write localizations')
 
         self.tiff_dataset = SmlmTiffDataset(tiff_path=self.tiff_path, start_frame_num=last_frame_num,
                                             time_block_gb=self.time_block_gb,
@@ -390,6 +392,11 @@ class SmlmDataAnalyzer:
             (tuple, tuple, np.ndarray): return the data shape and the physical FOV in nm that contains
                 all localizations, and the localization results.
         """
+
+        if not os.path.exists(self.output_path):
+            preds_empty = np.array([])
+            ailoc.common.write_csv_array(input_array=preds_empty, filename=self.output_path,
+                                         write_mode='write localizations')
 
         tiff_loader = torch.utils.data.DataLoader(self.tiff_dataset, batch_size=1, shuffle=False,
                                                   num_workers=self.num_workers, collate_fn=collect_func)
@@ -468,6 +475,10 @@ class SmlmDataAnalyzer:
                      self.fov_xy_start[1] * self.pixel_size_xy[1],
                      (self.fov_xy_start[1] + self.tiff_dataset.tiff_shape[-2]) * self.pixel_size_xy[1])
 
+        print_message_tmp = f'the file to save the predictions is: {self.output_path}'
+        print(print_message_tmp)
+        self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+
         return self.tiff_dataset.tiff_shape, fov_xy_nm, preds_rescale_array
 
     def check_single_frame_output(self, frame_num):
@@ -475,18 +486,18 @@ class SmlmDataAnalyzer:
         check the network outputs of a single frame
 
         Args:
-            frame_num (int): the frame to be checked, start from 1
+            frame_num (int): the frame to be checked, start from 0
         """
 
-        assert frame_num <= self.tiff_dataset.sum_file_length, \
-            f'frame_num {frame_num} is larger than the total frame number {self.tiff_dataset.sum_file_length}'
+        assert self.tiff_dataset.sum_file_length > frame_num >= 0, \
+            f'frame_num {frame_num} is not in the valid range: [0-{self.tiff_dataset.sum_file_length-1}]'
 
         local_context = getattr(self.loc_model, 'local_context', False)
         if local_context:
             idx1, idx2, idx3 = self.get_context_index(self.tiff_dataset.sum_file_length, frame_num)
             data_block = self.tiff_dataset.get_specific_frame(frame_num_list=[idx1, idx2, idx3])
         else:
-            data_block = self.tiff_dataset.get_specific_frame(frame_num_list=[frame_num-1])
+            data_block = self.tiff_dataset.get_specific_frame(frame_num_list=[frame_num])
 
         fov_xy = (self.fov_xy_start[0], self.fov_xy_start[0] + self.tiff_dataset.tiff_shape[-1] - 1,
                   self.fov_xy_start[1], self.fov_xy_start[1] + self.tiff_dataset.tiff_shape[-2] - 1)
@@ -615,13 +626,13 @@ class SmlmDataAnalyzer:
 
         Args:
             stack_length: total number of images in the stack
-            target_image_number: the image that want to check, start from 1
+            target_image_number: the image that want to check, start from 0
 
         Returns:
             (int, int, int): indices of the target image and its neighbors in the image stack, start from 0
         """
 
-        target_index = target_image_number - 1  # Convert image number to 0-based index
+        target_index = target_image_number  # Convert image number to 0-based index
 
         # Calculate the range of indices for the target image and its neighbors
         pre_index = max(0, target_index - 1)

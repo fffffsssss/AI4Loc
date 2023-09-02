@@ -160,7 +160,8 @@ class MoleculeSampler:
             if curr_aber_map is not None else torch.tile(ailoc.common.gpu(psf_model.zernike_coef), dims=(num_psf, 1))
 
         if robust_training:
-            zernike_coefs += ailoc.common.gpu(torch.normal(mean=0, std=3.33, size=(num_psf, num_zernike)))
+            zernike_coefs += ailoc.common.gpu(torch.normal(mean=0, std=psf_model.wavelength/100,
+                                                           size=(num_psf, num_zernike)))
 
         return zernike_coefs
 

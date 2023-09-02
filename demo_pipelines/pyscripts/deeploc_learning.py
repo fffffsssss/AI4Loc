@@ -45,7 +45,7 @@ def deeploc_train():
     #                       'read_noise_sigma': 1.6, 'read_noise_map': None,
     #                       'e_per_adu': 0.5, 'baseline': 100.0}
 
-    sampler_params_dict = {'local_context': True, 'robust_training': False,
+    sampler_params_dict = {'local_context': True, 'robust_training': True,
                            'train_size': 64, 'num_em_avg': 5, 'num_evaluation_data': 1000,
                            'photon_range': (1000, 10000), 'z_range': (-700, 700), 'bg_range': (40, 60)}
 

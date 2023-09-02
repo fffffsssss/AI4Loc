@@ -6,6 +6,8 @@ import tifffile
 import stackview
 from IPython.display import display
 import scipy.io as scio
+import torch
+import os
 
 import ailoc.common.beads_calibration.main_calibration
 
@@ -14,7 +16,7 @@ import ailoc.common.beads_calibration.main_calibration
 class SelectFilesButton(widgets.Button):
     """A file widget that leverages tkinter.filedialog."""
 
-    def __init__(self, nofile_description='Select Files'):
+    def __init__(self, nofile_description='Select files'):
         super(SelectFilesButton, self).__init__()
         # Add the selected_files trait
         # self.add_traits(files=traitlets.traitlets.List())
@@ -52,7 +54,107 @@ class SelectFilesButton(widgets.Button):
             self.icon = "square-o"
             self.style.button_color = "orange"
         else:
-            self.description = "Files Selected: " + str(self.files)
+            self.description = "Files selected: " + str(self.files)
+            self.icon = "check-square-o"
+            b.style.button_color = "Salmon"
+
+
+class SelectFolderButton(widgets.Button):
+    """A file widget that leverages tkinter.filedialog."""
+    def __init__(self, nofile_description='Select folder'):
+        super().__init__()
+        # Add the selected_files trait
+        # self.add_traits(files=traitlets.traitlets.List())
+        self.files = None
+        self.nofile_description = nofile_description
+
+        # Create the button.
+        self.description = self.nofile_description
+        self.icon = "square-o"
+        self.style.button_color = "orange"
+        self.layout = widgets.Layout(width='100%', height='80px')
+        # Set on click behavior.
+        self.on_click(self.select_folder)
+
+    def select_folder(self, b):
+        """Generate instance of tkinter.filedialog.
+
+        Parameters
+        ----------
+        b : obj:
+            An instance of ipywidgets.widgets.Button
+        """
+        # Create Tk root
+        root = Tk()
+        # Hide the main window
+        root.withdraw()
+        # Raise the root to the top of all windows.
+        root.call('wm', 'attributes', '.', '-topmost', True)
+        # List of selected fileswill be set to b.value
+        # self.files = filedialog.askopenfilename(multiple=True)
+        self.files = filedialog.askdirectory(mustexist=True,)
+
+        if self.files == '':
+            self.description = self.nofile_description
+            self.icon = "square-o"
+            self.style.button_color = "orange"
+        else:
+            self.description = "Folder selected: " + str(self.files)
+            self.icon = "check-square-o"
+            b.style.button_color = "Salmon"
+
+
+class SaveFilesButton(widgets.Button):
+    """A file widget that leverages tkinter.filedialog."""
+
+    def __init__(self,
+                 nofile_description='Save files',
+                 initialdir="/",
+                 initialfile="results",
+                 # defaultextension='.csv',
+                 filetypes=[('csv', '*.csv')]):
+        super().__init__()
+        self.files = None
+        self.nofile_description = nofile_description
+        self.initialdir = initialdir
+        self.initialfile = initialfile
+        # self.defaultextension = defaultextension
+        self.filetypes = filetypes
+
+        # Create the button.
+        self.description = self.nofile_description
+        self.icon = "square-o"
+        self.style.button_color = "orange"
+        self.layout = widgets.Layout(width='100%', height='80px')
+        # Set on click behavior.
+        self.on_click(self.save_files)
+
+    def save_files(self, b):
+        """Generate instance of tkinter.filedialog.
+
+        Parameters
+        ----------
+        b : obj:
+            An instance of ipywidgets.widgets.Button
+        """
+        # Create Tk root
+        root = Tk()
+        # Hide the main window
+        root.withdraw()
+        # Raise the root to the top of all windows.
+        root.call('wm', 'attributes', '.', '-topmost', True)
+
+        self.files = filedialog.asksaveasfilename(initialdir=self.initialdir,
+                                                  initialfile=self.initialfile,
+                                                  # defaultextension=self.defaultextension,
+                                                  filetypes=self.filetypes)
+
+        if self.files == '':
+            self.description = self.nofile_description
+            self.icon = "square-o"
+            self.style.button_color = "orange"
+        else:
+            self.description = "Save files: " + str(self.files)
             self.icon = "check-square-o"
             b.style.button_color = "Salmon"
 
@@ -60,7 +162,7 @@ class SelectFilesButton(widgets.Button):
 class SelectFilesButtonShow(widgets.GridspecLayout):
     """A file widget that leverages tkinter.filedialog."""
 
-    def __init__(self, nofile_description='Select Files'):
+    def __init__(self, nofile_description='Select files'):
         super(SelectFilesButtonShow, self).__init__(5, 1)
 
         self.nofile_description = nofile_description
@@ -101,7 +203,7 @@ class SelectFilesButtonShow(widgets.GridspecLayout):
             self.button.style.button_color = "orange"
             self[1:, 0] = widgets.Label(value="No images to show")
         else:
-            self.button.description = "Files Selected: " + str(self.files)
+            self.button.description = "Files selected: " + str(self.files)
             self.button.icon = "check-square-o"
             self.button.style.button_color = "Salmon"
 
@@ -687,5 +789,104 @@ class DeepLocSetLearnParamWidget:
         self.psf_param_widget.display_notebook_gui()
         self.cam_param_widget.display_notebook_gui()
         self.sampler_param_widget.display_notebook_gui()
+        display(self.ok_button)
+        display(self.output_widget)
+
+
+class DeepLocSetAnalyzerParamWidget:
+    def __init__(self):
+        self.select_deeploc_button = SelectFilesButton(nofile_description='Select DeepLoc model')
+        self.select_deeploc_button.observe(self.set_save_csv_button_initialdir, names='description')
+
+        self.select_folder_receiver = widgets.Checkbox(value=True,
+                                                       description='Select all tiff files under the folder',
+                                                       disabled=False,
+                                                       indent=False)
+
+        # self.select_data_button = SelectFolderButton(nofile_description='Select data folder')
+        self.select_data_button = SelectFilesButton(nofile_description='Select tiff file')
+
+        self.save_csv_button = SaveFilesButton(nofile_description='Save predicted CSV',
+                                               initialdir='../../results/',
+                                               initialfile='predictions.csv')
+
+        self.time_block_gb_receiver = widgets.BoundedIntText(description='Block(GB)',
+                                                             value=1,
+                                                             step=0.1,
+                                                             min=0.01,
+                                                             max=100,)
+        self.batch_size_receiver = widgets.BoundedIntText(description='Batch size',
+                                                          value=16,
+                                                          step=1,
+                                                          min=1,
+                                                          max=1024)
+        self.sub_fov_size_receiver = widgets.BoundedIntText(description='Sub-FOV',
+                                                            value=128,
+                                                            step=4,
+                                                            min=32,
+                                                            max=2048)
+        self.over_cut_receiver = widgets.BoundedIntText(description='Over-cut',
+                                                        value=8,
+                                                        step=4,
+                                                        min=4,
+                                                        max=32)
+        self.num_workers_receiver = widgets.BoundedIntText(description='Workers',
+                                                            value=0,
+                                                            step=1,
+                                                            min=0,
+                                                            max=16)
+        self.ok_button = widgets.Button(description='OK')
+        self.ok_button.on_click(self.set_analyzer_params)
+        self.output_widget = widgets.Output()
+
+        # layout
+        self.analyzer_param_widget = widgets.GridspecLayout(3, 2)
+        self.analyzer_param_widget[0, 0] = self.time_block_gb_receiver
+        self.analyzer_param_widget[0, 1] = self.batch_size_receiver
+        self.analyzer_param_widget[1, 0] = self.sub_fov_size_receiver
+        self.analyzer_param_widget[1, 1] = self.over_cut_receiver
+        self.analyzer_param_widget[2, 0] = self.num_workers_receiver
+
+        self.analyzer_param = {}
+
+    def set_analyzer_params(self, b):
+        loc_model_path = self.select_deeploc_button.files
+        # load the completely trained model
+        with open(loc_model_path, 'rb') as f:
+            deeploc_model = torch.load(f)
+        self.analyzer_param['deeploc_model'] = deeploc_model
+        if self.select_folder_receiver.value:
+            self.analyzer_param['tiff_path'] = os.path.dirname(self.select_data_button.files)
+        else:
+            self.analyzer_param['tiff_path'] = self.select_data_button.files
+        self.analyzer_param['output_path'] = self.save_csv_button.files
+        self.analyzer_param['time_block_gb'] = self.time_block_gb_receiver.value
+        self.analyzer_param['batch_size'] = self.batch_size_receiver.value
+        self.analyzer_param['sub_fov_size'] = self.sub_fov_size_receiver.value
+        self.analyzer_param['over_cut'] = self.over_cut_receiver.value
+        self.analyzer_param['num_workers'] = self.num_workers_receiver.value
+
+        with self.output_widget:
+            self.output_widget.clear_output()
+            print('DeepLoc analysis parameters: ')
+            print(self.analyzer_param)
+            print('Plot training process: ')
+            ailoc.common.plot_train_record(deeploc_model)
+
+    def set_save_csv_button_initialdir(self, change):
+        if change['new'] == self.select_deeploc_button.nofile_description:
+            self.save_csv_button.initialdir = '../../results/'
+            self.save_csv_button.initialfile = 'predictions.csv'
+        else:
+            self.save_csv_button.initialdir = os.path.dirname(self.select_deeploc_button.files)
+            self.save_csv_button.initialfile = os.path.basename(self.select_deeploc_button.files).split('.')[0] + \
+                                               '_predictions.csv'
+
+    def display_notebook_gui(self):
+        display(self.select_deeploc_button)
+        display(self.select_folder_receiver)
+        display(self.select_data_button)
+        display(self.save_csv_button)
+        display(self.analyzer_param_widget)
         display(self.ok_button)
         display(self.output_widget)
