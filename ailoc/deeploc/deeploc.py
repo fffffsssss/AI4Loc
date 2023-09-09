@@ -317,7 +317,7 @@ class DeepLoc(ailoc.common.XXLoc):
         plt.figure(constrained_layout=True)
         for j in range(num_z_step):
             plt.subplot(int(np.ceil(num_z_step/7)), 7, j + 1)
-            plt.imshow(psf[j], cmap='turbo')
+            plt.imshow(psf[j], cmap='gray')
             plt.title(f"{ailoc.common.cpu(z[j]):.0f} nm")
         plt.show()
 
@@ -330,7 +330,7 @@ class DeepLoc(ailoc.common.XXLoc):
         data_cam, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_sample, curr_sub_fov_xy = \
             self.data_simulator.sample_training_data(batch_size=1, iter_train=0)
 
-        cmap = 'turbo'
+        cmap = 'gray'
 
         if self.data_simulator.mol_sampler.local_context:
             fig, ax = plt.subplots(2, 2, constrained_layout=True)

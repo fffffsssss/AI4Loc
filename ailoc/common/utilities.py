@@ -8,8 +8,9 @@ from matplotlib import pyplot as plt
 import napari
 import tifffile
 import os
+import cv2
 
-import ailoc.common.local_tifffile
+# import ailoc.common.local_tifffile
 
 
 def setup_seed(seed):
@@ -21,24 +22,24 @@ def setup_seed(seed):
     torch.backends.cudnn.benchmark = False
 
 
-def gpu(x):
+def gpu(x, data_type=torch.float32):
     """
     Transforms numpy array or torch tensor to torch.cuda.FloatTensor
     """
 
     if not isinstance(x, torch.Tensor):
-        return torch.tensor(x, device='cuda:0', dtype=torch.float32)
-    return x.to(device='cuda:0', dtype=torch.float32)
+        return torch.tensor(x, device='cuda:0', dtype=data_type)
+    return x.to(device='cuda:0', dtype=data_type)
 
 
-def cpu(x):
+def cpu(x, data_type=np.float32):
     """
     Transforms torch tensor into numpy array
     """
 
     if not isinstance(x, torch.Tensor):
-        return np.array(x, dtype=np.float32)
-    return x.cpu().detach().numpy()
+        return np.array(x, dtype=data_type)
+    return x.cpu().detach().numpy().astype(data_type)
 
 
 def softp(x):
@@ -137,6 +138,46 @@ def get_bg_stats_gamma(images, percentile=10, plot=False, xlim=None, floc=0):
         # plt.tight_layout()
         plt.show()
     return fit_alpha * fit_beta, fit_beta  # return the expectation and scale
+
+
+def get_bg_stats_gauss(images, percentile=10, plot=False):
+    """Infers the parameters of a gauss distribution that fit the background of SMLM recordings.
+    Identifies the darkest pixels from the averaged images as background.
+
+    Args:
+        images (np.ndarray): 3D array of recordings
+        percentile (float): Percentile between 0 and 100. Sets the percentage of pixels that are assumed to only containg background activity (i.e. no fluorescent signal)
+        plot (bool): If true produces a plot of the histogram and fit
+
+    Returns:
+        (float, float): (bg_min, bg_max) background parameters
+    """
+
+    # get the positions where the mean intensity is below the percentile
+    roi_idx = np.where(images.mean(0) < np.percentile(images.mean(0), percentile))
+    pixel_vals = images[:, roi_idx[0], roi_idx[1]].reshape(-1)
+
+    # fit the gauss distribution
+    result = scipy.stats.norm.fit(pixel_vals)
+
+    if plot:
+        plt.figure(constrained_layout=True)
+        _ = plt.hist(pixel_vals,
+                     bins=np.linspace(pixel_vals.min(), pixel_vals.max(), 50),
+                     # histtype='step',
+                     alpha=0.5,
+                     label='bg data')
+        _ = plt.hist(np.random.normal(loc=result[0], scale=result[1], size=len(pixel_vals)),
+                     bins=np.linspace(pixel_vals.min(), pixel_vals.max()),
+                     # histtype='step',
+                     alpha=0.5,
+                     label='bg fit')
+        plt.legend()
+        plt.show()
+
+    bg_range = tuple(np.clip([result[0] - 2 * result[1], result[0] + 2 * result[1]],
+                             a_min=0, a_max=None))
+    return bg_range
 
 
 def get_mean_percentile(images, percentile=10):
@@ -264,3 +305,49 @@ def cmpdata_napari(data1, data2):
     data3 = np.concatenate((data1, data2, data1-data2), axis=2)
     viewer = napari.view_image(data3, colormap='turbo')
     napari.run()
+
+
+def plot_image(image):
+    plt.figure(figsize=(10, 10))
+    plt.imshow(image, cmap='gray')
+    plt.show()
+
+
+def fig2data(fig):
+    """
+    fig = plt.figure()
+    image = fig2data(fig)
+    @brief Convert a Matplotlib figure to a 4D numpy array with RGBA channels and return it
+    @param fig a matplotlib figure
+    @return a numpy 3D array of RGBA values
+    """
+    import PIL.Image as Image
+    # draw the renderer
+    fig.canvas.draw()
+
+    # Get the RGBA buffer from the figure
+    w, h = fig.canvas.get_width_height()
+    buf = np.fromstring(fig.canvas.tostring_argb(), dtype=np.uint8)
+    buf.shape = (w, h, 4)
+
+    # canvas.tostring_argb give pixmap in ARGB mode. Roll the ALPHA channel to have it in RGBA mode
+    buf = np.roll(buf, 3, axis=2)
+    image = Image.frombytes("RGBA", (w, h), buf.tostring())
+    image = np.asarray(image)
+    return image
+
+
+if __name__ == "__main__":
+    # Generate a figure with matplotlib</font>
+    figure = plt.figure()
+    plot = figure.add_subplot(111)
+
+    # draw a cardinal sine plot
+    x = np.arange(1, 100, 0.1)
+    y = np.sin(x) / x
+    plot.plot(x, y)
+    plt.show()
+    ##
+    image = fig2data(figure)
+    cv2.imshow('image', image)
+    cv2.waitKey(0)

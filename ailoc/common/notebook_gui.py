@@ -223,7 +223,7 @@ class ZernikeFitParamWidget(widgets.GridspecLayout):
                                                            max=10,
                                                            min=1)
         self.minimum_distance_receiver = widgets.BoundedIntText(description='Min dist:',
-                                                                value=20,
+                                                                value=25,
                                                                 step=1,
                                                                 max=100,
                                                                 min=1,
@@ -411,16 +411,14 @@ class DeepLocSetPSFParamWidget(widgets.GridspecLayout):
                                                         step=1,
                                                         max=100,
                                                         min=17)
-        self.objstage0_receiver = widgets.BoundedFloatText(description='objstage0:',
-                                                           value=0,
-                                                           step=1,
-                                                           max=10000,
-                                                           min=-10000)
-        self.zemit0_receiver = widgets.BoundedFloatText(description='zemit0:',
-                                                        value=0,
-                                                        step=1,
-                                                        max=10000,
-                                                        min=-10000)
+        self.objstage0_receiver = widgets.HBox([widgets.Label(value='Nominal focus position (close to sample is minus, '
+                                                                    'focus on coverslip is 0):'),
+                                                widgets.BoundedFloatText(value=0, step=1, max=10000, min=-10000)])
+        # self.zemit0_receiver = widgets.BoundedFloatText(description='zemit0:',
+        #                                                 value=0,
+        #                                                 step=1,
+        #                                                 max=10000,
+        #                                                 min=-10000)
         self.zernike_coef_label = widgets.Label('Zernike coefficients: ')
         self.zernike_mode = widgets.GridspecLayout(2, 21)
         self.zernike_mode[0, 0] = widgets.Label(value='2,-2')
@@ -463,8 +461,8 @@ class DeepLocSetPSFParamWidget(widgets.GridspecLayout):
         self[5, 1] = self.pixelsizey_receiver
         self[6, 0] = self.npupil_receiver
         self[6, 1] = self.psf_size_receiver
-        self[7, 0] = self.objstage0_receiver
-        self[7, 1] = self.zemit0_receiver
+        self[7, :] = self.objstage0_receiver
+        # self[7, 1] = self.zemit0_receiver
         self[8, :] = self.zernike_coef_label
         self[9:11, :] = self.zernike_mode
         # self[11, :] = self.ok_button
@@ -503,8 +501,9 @@ class DeepLocSetPSFParamWidget(widgets.GridspecLayout):
         self.psf_params_dict['refmed'] = self.refmed_receiver.value
         self.psf_params_dict['refcov'] = self.refcov_receiver.value
         self.psf_params_dict['refimm'] = self.refimm_receiver.value
-        self.psf_params_dict['objstage0'] = self.objstage0_receiver.value
-        self.psf_params_dict['zemit0'] = self.zemit0_receiver.value
+        self.psf_params_dict['objstage0'] = self.objstage0_receiver.children[1].value
+        # self.psf_params_dict['zemit0'] = self.zemit0_receiver.value
+        self.psf_params_dict['zemit0'] = -self.psf_params_dict['objstage0']/self.psf_params_dict['refimm']*self.psf_params_dict['refmed']
         self.psf_params_dict['pixel_size_xy'] = (self.pixelsizex_receiver.value,
                                                  self.pixelsizey_receiver.value)
         self.psf_params_dict['otf_rescale_xy'] = (self.otf_rescale_receiver.value,

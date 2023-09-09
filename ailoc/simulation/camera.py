@@ -95,7 +95,14 @@ class SCMOS(Camera):
 
     def __init__(self, camera_params):
         super().__init__(camera_params)
-        self.read_noise_map = camera_params['read_noise_map']
+        try:
+            self.read_noise_sigma = camera_params['read_noise_sigma']
+        except KeyError:
+            self.read_noise_sigma = None
+        try:
+            self.read_noise_map = camera_params['read_noise_map']
+        except KeyError:
+            self.read_noise_map = None
         if (self.read_noise_map is None) != (self.read_noise_sigma is None):
             pass
         else:

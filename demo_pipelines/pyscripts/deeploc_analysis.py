@@ -7,7 +7,7 @@ import time
 import ailoc.common
 
 
-def deeploc_inference():
+def deeploc_analyze():
 
     loc_model_path = '../../results/2023-09-01-11DeepLoc.pt'
     image_path = '../../datasets/match_data/1.tif'   # can be a tiff file path or a folder path
@@ -52,4 +52,4 @@ def deeploc_inference():
 
 
 if __name__ == '__main__':
-    deeploc_inference()
+    deeploc_analyze()
