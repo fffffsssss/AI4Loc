@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import perlin_numpy
 # from deprecated import deprecated
 
 import ailoc.common
@@ -24,6 +25,7 @@ class MoleculeSampler:
                 photon_range: list of [min, max]
                 z_range: list of [min, max]
                 bg_range: list of [min, max]
+                bg_perlin: flag whether to use perlin noise for background
             aberration_map (None or np.ndarray): aberration map of the psf_model, used to determine the whole FOV size
                 (num of zernike, FOV_size_x, FOV_size_y)
             read_noise_map (None or np.ndarray): read noise map of the scmos camera model, used to determine the whole
@@ -56,6 +58,7 @@ class MoleculeSampler:
         self.bg_range_scaled = (self.bg_range[0] / self.bg_scale, self.bg_range[1] / self.bg_scale)
         assert self.bg_range_scaled[0] >= 0 and self.bg_range_scaled[1] <= 1, \
             "scaled bg range should be included in [0, 1]"
+        self.bg_perlin = sampler_params['bg_perlin']
 
         # determine the FOV size and sliding windows provided the aberration map and read noise map
         if aberration_map is not None and read_noise_map is not None:
@@ -223,10 +226,20 @@ class MoleculeSampler:
         Sample background for training data simulation
         """
 
-        ones = ailoc.common.gpu(torch.ones(batch_size))
-        bg_s = ailoc.common.gpu(torch.distributions.Uniform(ones * self.bg_range_scaled[0],
-                                                            ones * self.bg_range_scaled[1]).sample())
-        bg_s = bg_s.reshape(batch_size, 1, 1).expand(-1, train_prob_map.shape[-2], train_prob_map.shape[-1])
+        if self.bg_perlin:
+            bg_s = np.zeros((batch_size, self.train_size, self.train_size))
+            res = np.clip(self.train_size//64, a_min=1, a_max=None)
+            for i in range(batch_size):
+                perlin_noise = perlin_numpy.generate_perlin_noise_2d((self.train_size, self.train_size), (res, res))
+                perlin_noise = (perlin_noise - np.min(perlin_noise)) / (np.max(perlin_noise) - np.min(perlin_noise))
+                bg_s[i] = perlin_noise*(self.bg_range_scaled[1] - self.bg_range_scaled[0]) + self.bg_range_scaled[0]
+            bg_s = ailoc.common.gpu(bg_s)
+        else:
+            ones = ailoc.common.gpu(torch.ones(batch_size))
+            bg_s = ailoc.common.gpu(torch.distributions.Uniform(ones * self.bg_range_scaled[0],
+                                                                ones * self.bg_range_scaled[1]).sample())
+            bg_s = bg_s.reshape(batch_size, 1, 1).expand(-1, train_prob_map.shape[-2], train_prob_map.shape[-1])
+
         return bg_s
 
     # @deprecated(reason='aberration map is no longer a property of the MoleculeSampler')

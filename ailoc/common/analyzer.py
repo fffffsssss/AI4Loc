@@ -8,13 +8,14 @@ import time
 import tifffile
 import natsort
 import pathlib
+import gc
 
 import ailoc.common
 # from ailoc.common import local_tifffile
 import ailoc.simulation
 
 
-def data_analyze(loc_model, data, sub_fov_xy, camera, batch_size=32):
+def data_analyze(loc_model, data, sub_fov_xy, camera, batch_size=32, retain_infer_map=False):
     """
     Analyze a series of images using the localization model.
 
@@ -26,6 +27,7 @@ def data_analyze(loc_model, data, sub_fov_xy, camera, batch_size=32):
             these images, the local position adds these will be global position
         camera (ailoc.simulation.Camera): camera object used to transform the data to photon unit
         batch_size (int): data are processed in batches
+        retain_infer_map (bool): whether to retain the raw network inference output, if True, it will cost more memory
 
     Returns:
         (list, dict): molecule list [frame, x, y, z, photon...] with position in the whole FOV
@@ -67,15 +69,17 @@ def data_analyze(loc_model, data, sub_fov_xy, camera, batch_size=32):
                 molecule_array_tmp[:, 2] += sub_fov_xy[2] * loc_model.data_simulator.psf_model.pixel_size_xy[1]
             molecule_list_pred += molecule_array_tmp.tolist()
 
-            inference_dict_list.append(inference_dict_tmp)
+            inference_dict_list.append(inference_dict_tmp) if retain_infer_map else None
 
         # stack the inference_dict_list to a single dict
         inference_dict = {}
-        for keys in inference_dict_tmp:
+        all_keys = copy.deepcopy(inference_dict_tmp).keys()
+        for keys in all_keys:
             tmp_list = []
             for i_batch in range(len(inference_dict_list)):
                 tmp_list.append(inference_dict_list[i_batch][keys])
-            inference_dict[keys] = np.concatenate(tmp_list, axis=0)
+                del inference_dict_list[i_batch][keys]
+            inference_dict[keys] = np.concatenate(tmp_list, axis=0) if len(tmp_list) > 0 else None
 
     return molecule_list_pred, inference_dict
 
@@ -326,11 +330,11 @@ class SmlmDataAnalyzer:
             num_workers: number of workers for data loading, for torch.utils.data.DataLoader
             camera (ailoc.simulation.Camera or None): camera object used to transform the data to photon unit, if None, use
                 the default camera object in the loc_model
-            fov_xy_start (list of int or None): [x_start, y_start] in pixel unit, If None, use [0,0].
+            fov_xy_start (list of int or None): (x_start, y_start) in pixel unit, If None, use (0,0).
                 The global xy pixel position (not row and column) of the tiff images in the whole pixelated FOV,
-                start from the top left. For example, [102, 41] means the top left pixel
+                start from the top left. For example, (102, 41) means the top left pixel
                 of the input images (namely data[:, 0, 0]) corresponds to the pixel xy (102,41) in the whole FOV. This
-                parameter is normally [0,0] as we usually treat the input images as the whole FOV. However, when using
+                parameter is normally (0,0) as we usually treat the input images as the whole FOV. However, when using
                 an FD-DeepLoc model trained with pixel-wise field-dependent aberration, this parameter should be carefully
                 set to ensure the consistency of the input data position relative to the training aberration map.
             ui_print_signal (PyQt5.QtCore.pyqtSignal): the signal to print the message to the UI
@@ -377,11 +381,19 @@ class SmlmDataAnalyzer:
             # ailoc.common.write_csv_array(input_array=preds_empty, filename=self.output_path,
             #                              write_mode='write localizations')
 
-        self.tiff_dataset = SmlmTiffDataset(tiff_path=self.tiff_path, start_frame_num=last_frame_num,
+        self.tiff_dataset = SmlmTiffDataset(tiff_path=self.tiff_path,
+                                            start_frame_num=last_frame_num,
                                             time_block_gb=self.time_block_gb,
-                                            sub_fov_size=self.sub_fov_size, over_cut=self.over_cut,
+                                            sub_fov_size=self.sub_fov_size,
+                                            over_cut=self.over_cut,
                                             fov_xy_start=self.fov_xy_start,
                                             ui_print_signal=self.ui_print_signal)
+
+        # all saved localizations are in the following physical FOV, the unit is nm
+        self.fov_xy_nm = (self.fov_xy_start[0] * self.pixel_size_xy[0],
+                          (self.fov_xy_start[0] + self.tiff_dataset.tiff_shape[-1]) * self.pixel_size_xy[0],
+                          self.fov_xy_start[1] * self.pixel_size_xy[1],
+                          (self.fov_xy_start[1] + self.tiff_dataset.tiff_shape[-2]) * self.pixel_size_xy[1])
 
     def divide_and_conquer(self):
         """
@@ -389,8 +401,7 @@ class SmlmDataAnalyzer:
         divided into sub-FOVs and analyzed separately.
 
         Returns:
-            (tuple, tuple, np.ndarray): return the data shape and the physical FOV in nm that contains
-                all localizations, and the localization results.
+            np.ndarray: return the localization results.
         """
 
         if not os.path.exists(self.output_path):
@@ -434,8 +445,11 @@ class SmlmDataAnalyzer:
                                                                          data=sub_fov_data_list[i_fov],
                                                                          sub_fov_xy=sub_fov_xy_list[i_fov],
                                                                          camera=self.camera,
-                                                                         batch_size=self.batch_size)
+                                                                         batch_size=self.batch_size,
+                                                                         retain_infer_map=False)
                 sub_fov_molecule_list.append(molecule_list_tmp)
+                # del molecule_list_tmp, inference_dict_tmp
+                # gc.collect()
 
             print_message_tmp = ''
             print(print_message_tmp)
@@ -450,36 +464,56 @@ class SmlmDataAnalyzer:
             ailoc.common.write_csv_array(input_array=molecule_list_block, filename=self.output_path,
                                          write_mode='append localizations')
 
-        # todo histogram equalization for grid artifacts removal, maybe delete in the future
+        # # histogram equalization for grid artifacts removal
+        # time_start = time.time()
+        #
+        # print_message_tmp = 'applying histogram equalization to the xy offsets to avoid grid artifacts ' \
+        #                     'in the difficult conditions (low SNR, high density, etc.) ' \
+        #                     'replace the original xnm and ynm with x_rescale and y_rescale'
+        # print(print_message_tmp)
+        # self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+        #
+        # preds_norescale_array = ailoc.common.read_csv_array(self.output_path)
+        # preds_rescale_array = ailoc.common.rescale_offset(preds_norescale_array, pixel_size=self.pixel_size_xy,
+        #                                                   rescale_bins=20, sig_3d=False)
+        # tmp_path = os.path.dirname(self.output_path) + '/' + os.path.basename(self.output_path).split('.')[0] + '_rescale.csv'
+        # ailoc.common.write_csv_array(preds_rescale_array, filename=tmp_path,
+        #                              write_mode='write localizations')
+        #
+        # print_message_tmp = f'histogram equalization finished, time cost (min): {(time.time() - time_start) / 60:.2f}'
+        # print(print_message_tmp)
+        # self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+        #
+        # print_message_tmp = f'the file to save the predictions is: {tmp_path}'
+        # print(print_message_tmp)
+        # self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+
+        # resampling the localizations with large uncertainty to avoid the grid artifacts
         time_start = time.time()
 
-        print_message_tmp = 'applying histogram equalization to the xy offsets to avoid grid artifacts ' \
+        print_message_tmp = 'resample the xy offsets to avoid grid artifacts ' \
                             'in the difficult conditions (low SNR, high density, etc.) ' \
                             'replace the original xnm and ynm with x_rescale and y_rescale'
         print(print_message_tmp)
         self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
         preds_norescale_array = ailoc.common.read_csv_array(self.output_path)
-        preds_rescale_array = ailoc.common.rescale_offset(preds_norescale_array, pixel_size=self.pixel_size_xy,
-                                                          rescale_bins=20, sig_3d=False)
-        ailoc.common.write_csv_array(preds_rescale_array, filename=self.output_path,
-                                     write_mode='write rescaled localizations')
+        preds_rescale_array = ailoc.common.resample_offset(preds_norescale_array,
+                                                           pixel_size=self.pixel_size_xy,
+                                                           threshold=0.25)
+        tmp_path = os.path.dirname(self.output_path) + '/' + os.path.basename(self.output_path).split('.')[0] + '_resample.csv'
+        ailoc.common.write_csv_array(preds_rescale_array, filename=tmp_path,
+                                     write_mode='write localizations')
 
-        print_message_tmp = f'histogram equalization finished, time cost (min): {(time.time() - time_start) / 60:.2f}'
+        print_message_tmp = f'resample finished, time cost (min): {(time.time() - time_start) / 60:.2f}'
         print(print_message_tmp)
         self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
-        # all saved localizations are in the following physical FOV, the unit is nm
-        fov_xy_nm = (self.fov_xy_start[0]*self.pixel_size_xy[0],
-                     (self.fov_xy_start[0]+self.tiff_dataset.tiff_shape[-1])*self.pixel_size_xy[0],
-                     self.fov_xy_start[1] * self.pixel_size_xy[1],
-                     (self.fov_xy_start[1] + self.tiff_dataset.tiff_shape[-2]) * self.pixel_size_xy[1])
-
-        print_message_tmp = f'the file to save the predictions is: {self.output_path}'
+        print_message_tmp = f'the file to save the predictions is: {tmp_path}'
         print(print_message_tmp)
         self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
-        return self.tiff_dataset.tiff_shape, fov_xy_nm, preds_rescale_array
+        return preds_rescale_array
 
     def check_single_frame_output(self, frame_num):
         """
@@ -520,7 +554,8 @@ class SmlmDataAnalyzer:
                                                                      data=sub_fov_data_list[i_fov],
                                                                      sub_fov_xy=sub_fov_xy_list[i_fov],
                                                                      camera=self.camera,
-                                                                     batch_size=self.batch_size)
+                                                                     batch_size=self.batch_size,
+                                                                     retain_infer_map=True)
             sub_fov_molecule_list.append(molecule_list_tmp)
             sub_fov_inference_list.append(inference_dict_tmp)
         print('')

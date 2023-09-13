@@ -32,7 +32,8 @@ def read_csv_array(path):
     photon_col = [col for col in df.columns if 'photon' in col or 'intensity' in col]
 
     remaining_cols = [col for col in df.columns if col is not x_col[0] and col is not y_col[0]
-                      and col is not z_col[0] and col is not frame_col[0] and col is not photon_col[0]]
+                      and col is not z_col[0] and col is not frame_col[0] and col is not photon_col[0]
+                      and ('Unnamed' not in col)]
 
     assert all([frame_col, x_col, y_col, z_col, photon_col]), \
         'Could not find columns with frame,x,y,z,photon in the csv file'

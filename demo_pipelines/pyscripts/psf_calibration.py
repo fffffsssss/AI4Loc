@@ -12,7 +12,7 @@ import ailoc.common
 import ailoc.simulation
 
 
-def bead_stack_calibrate():
+def beads_stack_calibrate():
     """
     Bead stack calibration.
     """
@@ -42,7 +42,7 @@ def bead_stack_calibrate():
                        'psf_size': 51}
 
     # set camera parameters
-    camera_params_dict = {'type': 'scmos',
+    camera_params_dict = {'camera_type': 'scmos',
                           'qe': 0.81, 'spurious_charge': 0.002,
                           'read_noise_sigma': 1.6, 'read_noise_map': None,
                           'e_per_adu': 0.47, 'baseline': 100.0}
@@ -86,4 +86,4 @@ def bead_stack_calibrate():
 
 
 if __name__ == "__main__":
-    bead_stack_calibrate()
+    beads_stack_calibrate()

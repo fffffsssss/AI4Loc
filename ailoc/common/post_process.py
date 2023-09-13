@@ -1,3 +1,4 @@
+import matplotlib.pyplot as plt
 import torch
 import numpy as np
 import torch.nn.functional as F
@@ -151,10 +152,6 @@ def gmm_to_localizations(inference_dict, thre_integrated, pixel_size_xy, z_scale
         (np.ndarray, dict): the molecule list with frame ordered based on the input dict, the modified inference dict.
     """
 
-    # todo: implement this function, we can treat the localizations with low/high uncertainty differently
-    #  to avoid the grid effects. For example, we can sample the distribution with high uncertainty
-    #  instead of taking the mean value.
-
     inference_dict['prob_sampled'] = sample_prob(inference_dict['prob'], batch_size, thre_integrated)
     molecule_array = inference_map_to_localizations(inference_dict, pixel_size_xy, z_scale, photon_scale)
     inference_dict['bg_sampled'] = inference_dict['bg'] * bg_scale
@@ -244,10 +241,106 @@ def rescale_offset(preds_array, pixel_size=None, rescale_bins=20, sig_3d=False):
         xo_rescale[inds] = histogram_equalization(xo[inds]) + np.mean(xo[inds])
         yo_rescale[inds] = histogram_equalization(yo[inds]) + np.mean(yo[inds])
 
+        # fig, ax = plt.subplots(1, 2, constrained_layout=True)
+        # ax[0].hist(xo[inds], bins=100)
+        # ax[1].hist(xo_rescale[inds], bins=100)
+        # plt.show()
+
     x_rescale = preds_array[:, 1] + (xo_rescale-xo) * pixel_size[0]
     y_rescale = preds_array[:, 2] + (yo_rescale-yo) * pixel_size[1]
 
-    preds_array_rescale = np.column_stack((preds_array, xo_rescale, yo_rescale, x_rescale, y_rescale))
+    # preds_array_rescale = np.column_stack((preds_array, xo_rescale, yo_rescale, x_rescale, y_rescale))
+    preds_array_rescale = preds_array.copy()
+    preds_array_rescale[:, 1:3] = np.column_stack((x_rescale, y_rescale))
+
+    # plot the histogram of the original and rescaled offsets
+    fig, ax = plt.subplots(2, 2, constrained_layout=True)
+    ax[0, 0].hist(xo, bins=100, label='original x offset')
+    ax[0, 0].legend()
+    ax[0, 0].set_xlim([-0.5, 0.5])
+    ax[0, 1].hist(xo_rescale, bins=100, label='rescaled x offset')
+    ax[0, 1].legend()
+    ax[0, 1].set_xlim([-0.5, 0.5])
+    ax[1, 0].hist(yo, bins=100, label='original y offset')
+    ax[1, 0].legend()
+    ax[1, 0].set_xlim([-0.5, 0.5])
+    ax[1, 1].hist(yo_rescale, bins=100, label='rescaled y offset')
+    ax[1, 1].legend()
+    ax[1, 1].set_xlim([-0.5, 0.5])
+    plt.show()
 
     return preds_array_rescale
 
+
+def resample_offset(preds_array, pixel_size=None, threshold=0.3):
+    """
+    Resample localizations' xy offsets with large uncertainties to avoid that zero expectation with large uncertainty
+    results in grid effects, the original xy will be replaced by the resampled xy.
+
+    Args:
+        preds_array (np.ndarray): the molecule list with format [frame, x, y, z, photon, integrated prob, x uncertainty,
+            y uncertainty, z uncertainty, photon uncertainty, x_offset_pixel, y_offset_pixel].
+        threshold (float): the threshold of the uncertainty to resample, if the uncertainty relative to pixel size
+            is larger than the threshold, the xy offset will be resampled.
+        pixel_size (tuple of int): (int int), the pixel size in the xy plane.
+
+    Returns:
+        np.ndarray: the resampled molecule list, with the original xo, yo, xnm, ynm replaced by the resampled ones.
+    """
+
+    if pixel_size is None:
+        pixel_size = (100, 100)
+
+    xo = preds_array[:, -2].copy()
+    yo = preds_array[:, -1].copy()
+
+    x_sig = preds_array[:, -6].copy()
+    y_sig = preds_array[:, -5].copy()
+    z_sig = preds_array[:, -4].copy()
+
+    xo_resample = xo.copy()
+    yo_resample = yo.copy()
+
+    tot_sig = np.sqrt(x_sig ** 2 + y_sig ** 2)
+
+    # sig_thre = threshold * np.sqrt(pixel_size[0] ** 2 + pixel_size[1] ** 2)
+    sig_thre_x = threshold * pixel_size[0]
+    sig_thre_y = threshold * pixel_size[1]
+
+    # inds = np.where(tot_sig > sig_thre)
+    inds_x = np.where(x_sig > sig_thre_x)
+    inds_y = np.where(y_sig > sig_thre_y)
+
+    # xo_resample[inds] = np.random.normal(0, 1, len(inds[0])) * x_sig[inds] / pixel_size[0] + xo[inds]
+    # yo_resample[inds] = np.random.normal(0, 1, len(inds[0])) * y_sig[inds] / pixel_size[1] + yo[inds]
+
+    xo_resample[inds_x] = np.random.normal(0, 1, len(inds_x[0])) * x_sig[inds_x] / pixel_size[0] + xo[inds_x]
+    yo_resample[inds_y] = np.random.normal(0, 1, len(inds_y[0])) * y_sig[inds_y] / pixel_size[1] + yo[inds_y]
+
+    # xo_resample[inds_x] = histogram_equalization(xo[inds_x]) + np.mean(xo[inds_x])
+    # yo_resample[inds_y] = histogram_equalization(yo[inds_y]) + np.mean(yo[inds_y])
+
+    x_resample = preds_array[:, 1] + (xo_resample-xo) * pixel_size[0]
+    y_resample = preds_array[:, 2] + (yo_resample-yo) * pixel_size[1]
+
+    # preds_array_resample = np.column_stack((preds_array, xo_resample, yo_resample, x_resample, y_resample))
+    preds_array_resample = preds_array.copy()
+    preds_array_resample[:, 1:3] = np.column_stack((x_resample, y_resample))
+
+    # plot the histogram of the original and resampled offsets
+    fig, ax = plt.subplots(2, 2, constrained_layout=True)
+    ax[0, 0].hist(xo, bins=100, label='original x offset')
+    ax[0, 0].legend()
+    ax[0, 0].set_xlim([-0.5, 0.5])
+    ax[0, 1].hist(xo_resample, bins=100, label='resampled x offset')
+    ax[0, 1].legend()
+    ax[0, 1].set_xlim([-0.5, 0.5])
+    ax[1, 0].hist(yo, bins=100, label='original y offset')
+    ax[1, 0].legend()
+    ax[1, 0].set_xlim([-0.5, 0.5])
+    ax[1, 1].hist(yo_resample, bins=100, label='resampled y offset')
+    ax[1, 1].legend()
+    ax[1, 1].set_xlim([-0.5, 0.5])
+    plt.show()
+
+    return preds_array_resample

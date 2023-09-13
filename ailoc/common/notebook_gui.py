@@ -358,6 +358,11 @@ class BeadsCalibrationWidget:
         display(self.set_param_widget.output)
 
 
+class PSFCalibrationWidget:
+    # TODO: implement this for newly added PSF calibration based on pytorch model
+    pass
+
+
 class DeepLocSetPSFParamWidget(widgets.GridspecLayout):
     def __init__(self):
         super().__init__(12, 2)
@@ -651,9 +656,9 @@ class DeepLocSetCamParamWidget:
 
     def set_camera_params(self, b):
         if self.select_cam_dropdown.value == 'Idea Camera':
-            self.camera_params_dict['type'] = 'idea'
+            self.camera_params_dict['camera_type'] = 'idea'
         elif self.select_cam_dropdown.value == 'sCMOS':
-            self.camera_params_dict['type'] = 'scmos'
+            self.camera_params_dict['camera_type'] = 'scmos'
             self.camera_params_dict['qe'] = self.scmos_param_receiver.qe_receiver.value
             self.camera_params_dict['spurious_charge'] = self.scmos_param_receiver.spurious_charge_receiver.value
             self.camera_params_dict['read_noise_sigma'] = self.scmos_param_receiver.readout_noise_receiver.value
@@ -661,7 +666,7 @@ class DeepLocSetCamParamWidget:
             self.camera_params_dict['e_per_adu'] = self.scmos_param_receiver.eperadu_receiver.value
             self.camera_params_dict['baseline'] = self.scmos_param_receiver.baseline_receiver.value
         elif self.select_cam_dropdown.value == 'EMCCD':
-            self.camera_params_dict['type'] = 'emccd'
+            self.camera_params_dict['camera_type'] = 'emccd'
             self.camera_params_dict['qe'] = self.emccd_param_receiver.qe_receiver.value
             self.camera_params_dict['spurious_charge'] = self.emccd_param_receiver.spurious_charge_receiver.value
             self.camera_params_dict['em_gain'] = self.emccd_param_receiver.emgain_receiver.value

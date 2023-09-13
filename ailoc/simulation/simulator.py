@@ -20,16 +20,16 @@ class Simulator:
         """
 
         self.psf_model = ailoc.simulation.VectorPSFCUDA(psf_params)
-        if camera_params['type'].upper() == 'EMCCD':
+        if camera_params['camera_type'].upper() == 'EMCCD':
             self.camera = ailoc.simulation.EMCCD(camera_params)
             self.mol_sampler = ailoc.simulation.MoleculeSampler(sampler_params,
                                                                 self.psf_model.zernike_coef_map)
-        elif camera_params['type'].upper() == 'SCMOS':
+        elif camera_params['camera_type'].upper() == 'SCMOS':
             self.camera = ailoc.simulation.SCMOS(camera_params)
             self.mol_sampler = ailoc.simulation.MoleculeSampler(sampler_params,
                                                                 self.psf_model.zernike_coef_map,
                                                                 self.camera.read_noise_map)
-        elif camera_params['type'].upper() == 'IDEA':
+        elif camera_params['camera_type'].upper() == 'IDEA':
             self.camera = ailoc.simulation.IdeaCamera()
             self.mol_sampler = ailoc.simulation.MoleculeSampler(sampler_params,
                                                                 self.psf_model.zernike_coef_map)

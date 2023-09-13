@@ -71,8 +71,8 @@ def deeploc_train():
                        }
 
     # # manually set camera parameters
-    # camera_params_dict = {'type': 'idea'}
-    # camera_params_dict = {'type': 'emccd',
+    # camera_params_dict = {'camera_type': 'idea'}
+    # camera_params_dict = {'camera_type': 'emccd',
     #                       'qe': 0.9, 
     #                       'spurious_charge': 0.002, 
     #                       'em_gain': 300,
@@ -80,7 +80,7 @@ def deeploc_train():
     #                       'e_per_adu': 45, 
     #                       'baseline': 100.0,
     #                       }
-    # camera_params_dict = {'type': 'scmos',
+    # camera_params_dict = {'camera_type': 'scmos',
     #                       'qe': 0.9,
     #                       'spurious_charge': 0.002,
     #                       'read_noise_sigma': 1.6,
@@ -92,17 +92,22 @@ def deeploc_train():
     camera_params_dict = calib_dict['calib_params_dict']['camera_params_dict']
 
     # manually set sampler parameters
-    sampler_params_dict = {'local_context': True, 
+    sampler_params_dict = {'local_context': False,
                            'robust_training': True,
                            'train_size': 128,
-                           'num_em_avg': 10,
+                           'num_em_avg': 5,
                            'num_evaluation_data': 1000,
                            'photon_range': (1000, 10000), 
                            'z_range': (-3000, 3000),
                            'bg_range': bg_range if 'bg_range' in locals().keys() else (40, 60),
+                           'bg_perlin': True,
                            }
 
-    print(psf_params_dict, camera_params_dict, sampler_params_dict)
+    # print learning parameters
+    for params_dict in [psf_params_dict, camera_params_dict, sampler_params_dict]:
+        for keys in params_dict.keys():
+            params = params_dict[keys].transpose() if keys == 'zernike_mode' else params_dict[keys]
+            print(f"{keys}: {params}")
 
     deeploc_model = ailoc.deeploc.DeepLoc(psf_params_dict, camera_params_dict, sampler_params_dict)
 
@@ -112,8 +117,11 @@ def deeploc_train():
 
     deeploc_model.build_evaluation_dataset(napari_plot=True)
 
-    file_name = '../../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H') + 'DeepLoc'
-    deeploc_model.online_train(batch_size=10, max_iterations=30000, eval_freq=500, file_name=file_name)
+    file_name = '../../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H') + 'DeepLoc.pt'
+    deeploc_model.online_train(batch_size=10,
+                               max_iterations=30000,
+                               eval_freq=500,
+                               file_name=file_name)
 
     # plot evaluation performance during the training
     ailoc.common.plot_train_record(deeploc_model)
@@ -123,9 +131,12 @@ def deeploc_ckpoint_train():
     model_name = '../../results/2023-09-09-16DeepLoc.pt'
     with open(model_name, 'rb') as f:
         deeploc_model = torch.load(f)
-    deeploc_model.online_train(batch_size=10, max_iterations=30000, eval_freq=500)
+    deeploc_model.online_train(batch_size=10,
+                               max_iterations=30000,
+                               eval_freq=500,
+                               file_name=model_name)
 
 
 if __name__ == '__main__':
-    # deeploc_train()
-    deeploc_ckpoint_train()
+    deeploc_train()
+    # deeploc_ckpoint_train()
