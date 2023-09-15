@@ -116,7 +116,7 @@ class SyncLoc(ailoc.common.XXLoc):
         self.scheduler.step()
         self._iter_sleep += 1
 
-        return loss.detach()
+        return loss.detach().cpu().numpy()
 
     def wake_train(self, real_data, num_sample):
         p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(real_data,
@@ -145,7 +145,7 @@ class SyncLoc(ailoc.common.XXLoc):
         self.data_simulator.psf_model.zernike_coef = self.learned_psf.zernike_coef.detach().cpu().numpy()
         # print(self.learned_psf.zernike_coef.detach().cpu().numpy())
 
-        return loss.detach()
+        return loss.detach().cpu().numpy()
 
     def sample_posterior(self, p_pred, xyzph_pred, xyzph_sig_pred, bg_pred, num_sample):
         with torch.no_grad():
@@ -156,6 +156,7 @@ class SyncLoc(ailoc.common.XXLoc):
             xyzph_sample = torch.distributions.Normal(loc=(xyzph_pred.permute([1, 0, 2, 3])[:, :, None]).expand(-1, -1, num_sample, -1, -1),
                                                       scale=(xyzph_sig_pred.permute([1, 0, 2, 3])[:, :, None]).expand(-1, -1, num_sample, -1, -1)).sample()
             # xyzph_sample = (xyzph_pred.detach().permute([1, 0, 2, 3])[:, :, None]).expand(-1, -1, num_sample, -1, -1)
+            xyzph_sample[3] = torch.clamp(xyzph_sample[3], min=0.0)
             bg_sample = bg_pred.detach()
 
         return delta, xyzph_sample, bg_sample
@@ -204,8 +205,9 @@ class SyncLoc(ailoc.common.XXLoc):
             try:
                 print(f"Iterations: {self._iter_sleep}/{max_iterations} || "
                       f"Loss_sleep: {self.evaluation_recorder['loss_sleep'][self._iter_sleep]:.2f} || "
+                      f"Loss_wake: {self.evaluation_recorder['loss_wake'][self._iter_sleep]:.2f} || "
                       f"IterTime: {self.evaluation_recorder['iter_time'][self._iter_sleep]:.2f} ms || "
-                      f"ETA: {self.evaluation_recorder['iter_time'][self._iter_sleep] * (max_iterations - self._iter_sleep) / 3600000:.2f} h", end='')
+                      f"ETA: {self.evaluation_recorder['iter_time'][self._iter_sleep] * (max_iterations - self._iter_sleep) / 3600000:.2f} h || ", end='')
 
                 print(f"SumProb: {self.evaluation_recorder['n_per_img'][self._iter_sleep]:.2f} || "
                       f"Eff_3D: {self.evaluation_recorder['eff_3d'][self._iter_sleep]:.2f} || "
@@ -225,12 +227,13 @@ class SyncLoc(ailoc.common.XXLoc):
             total_loss_wake = []
             for i in range(eval_freq):
                 loss_sleep = self.sleep_train(batch_size=batch_size)
-                total_loss_sleep.append(ailoc.common.cpu(loss_sleep))
+                total_loss_sleep.append(loss_sleep)
 
                 if self._iter_sleep > 5000:
                     real_data_sample = ailoc.common.gpu(self.sample_real_data(real_data, batch_size))
                     loss_wake = self.wake_train(real_data_sample, num_sample)
-                    total_loss_wake.append(ailoc.common.cpu(loss_wake))
+                    total_loss_wake.append(loss_wake)
+            torch.cuda.empty_cache()
 
             avg_iter_time = 1000 * (time.time() - t0) / eval_freq
             avg_loss_sleep = np.mean(total_loss_sleep)

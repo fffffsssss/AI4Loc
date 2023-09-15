@@ -87,7 +87,6 @@ def bg_loss(bg_pred, bg_gt):
 
 
 def compute_log_p_x_given_h(data, model):
-
     loss = - model + data + data*torch.log(model/data)
     return loss.sum([-2, -1])
 

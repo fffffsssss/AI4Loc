@@ -220,7 +220,7 @@ class SyncLocNet(nn.Module):
 
         # scale the uncertainty and add epsilon, the output range becomes (0.001, 3.001),
         # maybe can use RELU for unlimited upper range and stable gradient
-        xyzph_sig_pred = torch.sigmoid(outputs['xyzph_sig']) * 3 + 0.001
+        xyzph_sig_pred = torch.sigmoid(outputs['xyzph_sig']) * 3 + 0.00001
 
         # output bg range is (0, 1), the training sampling range is in (0,1)
         bg_pred = torch.sigmoid(outputs['bg'])[:, 0]  # bg

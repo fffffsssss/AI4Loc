@@ -36,7 +36,7 @@ class Camera(ABC):
         if self.em_gain is not None:
             x_e /= self.em_gain
         x_e -= self.spurious_charge
-        x_photon = torch.clamp(x_e / self.qe, min=0)
+        x_photon = torch.clamp(x_e / self.qe, min=1e-10)
 
         return x_photon
 

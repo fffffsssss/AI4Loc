@@ -3,9 +3,11 @@ import numpy as np
 import scipy.signal
 from matplotlib.colors import hsv_to_rgb
 from matplotlib.colors import rgb_to_hsv
+from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 import cv2
 import PIL
 from PIL import ImageEnhance
+import torch
 
 import ailoc.common
 
@@ -72,6 +74,84 @@ def plot_train_record(model):
     plt.ylabel('loss')
 
     plt.show(block=True)
+
+
+def plot_syncloc_record(model):
+    recorder = model.evaluation_recorder
+
+    plt.figure(figsize=(9, 6), constrained_layout=True)
+    plt.subplot(3, 3, 1)
+    plot_od(recorder['rmse_lat'])
+    plt.xlabel('iterations')
+    plt.ylabel('RMSE_Lateral')
+
+    plt.subplot(3, 3, 2)
+    plot_od(recorder['rmse_ax'])
+    plt.xlabel('iterations')
+    plt.ylabel('RMSE_Axial')
+
+    plt.subplot(3, 3, 3)
+    plot_od(recorder['rmse_vol'])
+    plt.xlabel('iterations')
+    plt.ylabel('RMSE_Voxel')
+
+    plt.subplot(3, 3, 4)
+    plot_od(recorder['eff_3d'])
+    plt.xlabel('iterations')
+    plt.ylabel('3D efficiency')
+
+    plt.subplot(3, 3, 5)
+    plot_od(recorder['recall'])
+    plt.xlabel('iterations')
+    plt.ylabel('recall')
+
+    plt.subplot(3, 3, 6)
+    plot_od(recorder['precision'])
+    plt.xlabel('iterations')
+    plt.ylabel('precision')
+
+    plt.subplot(3, 3, 7)
+    plot_od(recorder['jaccard'])
+    plt.xlabel('iterations')
+    plt.ylabel('jaccard')
+
+    plt.subplot(3, 3, 8)
+    plot_od(recorder['loss_sleep'])
+    plt.xlabel('iterations')
+    plt.ylabel('loss_sleep')
+
+    plt.subplot(3, 3, 9)
+    plot_od(recorder['loss_wake'])
+    plt.xlabel('iterations')
+    plt.ylabel('loss_wake')
+
+    plt.show(block=True)
+
+    # plot the pseudo-color image of the zernike phase and save it as a gif
+
+
+    zernike_phase_list = []
+    for zernike_tmp in recorder['learned_psf_zernike'].items():
+        model.learned_psf.zernike_coef = ailoc.common.gpu(zernike_tmp[1])
+        model.learned_psf._pre_compute()
+        phase_tmp = ailoc.common.cpu(torch.real(torch.log(model.learned_psf.zernike_phase)/1j))
+
+        # Create a pseudo-color plot of the depth slice
+        fig, ax = plt.subplots()
+        im = ax.imshow(phase_tmp, cmap='turbo')
+        fig.colorbar(im, ax=ax)
+
+        # Convert the plot to an image array
+        canvas = FigureCanvas(fig)
+        canvas.draw()
+        image_array = np.array(canvas.renderer.buffer_rgba())
+        zernike_phase_list.append(image_array)
+
+        plt.close(fig)
+
+    # zernike_phase_3d = np.stack(zernike_phase_list, axis=0)
+
+    return zernike_phase_list
 
 
 def plot_single_frame_inference(inference_dict):

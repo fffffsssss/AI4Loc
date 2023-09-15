@@ -513,7 +513,7 @@ class SmlmDataAnalyzer:
         print(print_message_tmp)
         self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
-        return preds_rescale_array
+        return preds_norescale_array, preds_rescale_array
 
     def check_single_frame_output(self, frame_num):
         """

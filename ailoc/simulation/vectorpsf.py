@@ -493,7 +493,7 @@ class VectorPSFTorch(VectorPSF):
         apod = 1 / torch.sqrt(costhetaimm)
         # define aperture
         aperturemask = torch.where((xpupil ** 2 + ypupil ** 2).real < 1.0, 1.0, 0.0)
-        amplitude = aperturemask * apod
+        self.amplitude = aperturemask * apod
 
         # setting of vectorial functions
         phi = torch.atan2(torch.real(ypupil), torch.real(xpupil))
@@ -532,12 +532,12 @@ class VectorPSFTorch(VectorPSF):
         for izer in range(self.zernike_mode.shape[0]):
             waberration += zernikecoefs_norm[izer] * allzernikes[izer]
         waberration *= aperturemask
-        zernike_phase = torch.exp(1j * 2 * np.pi * waberration / self.wavelength)
+        self.zernike_phase = torch.exp(1j * 2 * np.pi * waberration / self.wavelength)
 
         self.pupilmatrix = torch.empty([2, 3, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
         for imat in range(2):
             for jmat in range(3):
-                self.pupilmatrix[imat, jmat] = amplitude * zernike_phase * polarizationvector[imat, jmat]
+                self.pupilmatrix[imat, jmat] = self.amplitude * self.zernike_phase * polarizationvector[imat, jmat]
 
         # czt transform(fft the pupil)
         xrange = self.pixel_size_xy[0] * self.psf_size / 2
@@ -553,7 +553,7 @@ class VectorPSFTorch(VectorPSF):
         fieldmatrix_norm = torch.empty([2, 3, self.psf_size, self.psf_size], dtype=self.complex_type, device='cuda')
         for itel in range(2):
             for jtel in range(3):
-                Pupilfunction_norm = amplitude * polarizationvector[itel, jtel]
+                Pupilfunction_norm = self.amplitude * polarizationvector[itel, jtel]
                 inter_image_norm = torch.transpose(self.czt(Pupilfunction_norm, self.ax, self.bx, self.dx), 1, 0)
                 fieldmatrix_norm[itel, jtel] = torch.transpose(self.czt(inter_image_norm, self.ay, self.by, self.dy), 1,
                                                                0)
