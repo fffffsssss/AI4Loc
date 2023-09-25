@@ -18,7 +18,7 @@ def beads_stack_calibrate():
     """
 
     # load bead stack
-    beads_file_name = "E:/projects/FS_work/AI-Loc/AI-Loc_project/datasets/NPC_DMO6_alpha30/beads-DMO6_alpha30_+-3umstep50nm_5/DMO6_alpha30_+-3umstep50nm_5_MMStack_Default.ome.tif"
+    beads_file_name = "../../datasets/npc_DMO1.2__5/beads_DMO1.2_+-1um_10nm_2/DMO1.2_+-1um_10nm_2_MMStack_Default.ome.tif"
     beads_data = tifffile.imread(beads_file_name)
 
     # set psf parameters
@@ -26,18 +26,18 @@ def beads_stack_calibrate():
                              4, -2, 0, 4, 2, 0, 5, -1, 0, 5, 1, 0, 6, 0, 0, 4, -4, 0, 4, 4, 0,
                              5, -3, 0, 5, 3, 0, 6, -2, 0, 6, 2, 0, 7, 1, 0, 7, -1, 0, 8, 0, 0],
                             dtype=np.float32).reshape([21, 3])
-    psf_params_dict = {'na': 1.35,
+    psf_params_dict = {'na': 1.5,
                        'wavelength': 680,  # unit: nm
-                       'refmed': 1.406,
+                       'refmed': 1.518,
                        'refcov': 1.524,
-                       'refimm': 1.406,
+                       'refimm': 1.518,
                        'zernike_mode': zernike_aber[:, 0:2],
                        'zernike_coef': zernike_aber[:, 2],
                        'zernike_coef_map': None,
                        'objstage0': 0,
                        'zemit0': 0,
-                       'pixel_size_xy': (110, 100),
-                       'otf_rescale_xy': (0, 0),
+                       'pixel_size_xy': (108, 108),
+                       'otf_rescale_xy': (0., 0.),  # this is an empirical value, which maybe due to the pixelation
                        'npupil': 64,
                        'psf_size': 51}
 
@@ -52,11 +52,11 @@ def beads_stack_calibrate():
     calib_params_dict = {'raw_images': beads_data,
                          'camera_model': camera,
                          'camera_params_dict': camera_params_dict,
-                         'z_step': 50,
-                         'roi_size': 51,
+                         'z_step': 10,
+                         'roi_size': 25,
                          'filter_sigma': 3,
                          'threshold_abs': 20,
-                         'fit_brightest': True,
+                         'fit_brightest': False,
                          'psf_params_dict': psf_params_dict}
     psf_params_dict['psf_size'] = calib_params_dict['roi_size']
 

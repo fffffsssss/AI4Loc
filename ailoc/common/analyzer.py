@@ -170,7 +170,8 @@ class SmlmTiffDataset(torch.utils.data.Dataset):
     Dataset for SMLM tiff file, each item is a time block data divided into several sub-FOVs.
     """
 
-    def __init__(self, tiff_path, start_frame_num, time_block_gb, sub_fov_size, over_cut, fov_xy_start,
+    def __init__(self, tiff_path, start_frame_num=0, time_block_gb=1,
+                 sub_fov_size=256, over_cut=8, fov_xy_start=(0, 0),
                  end_frame_num=None, ui_print_signal=None):
 
         self.tiff_path = pathlib.Path(tiff_path)
@@ -297,6 +298,23 @@ class SmlmTiffDataset(torch.utils.data.Dataset):
             data_block.append(data_tmp)
 
         data_block = np.concatenate(data_block, axis=0)
+
+        return data_block
+
+    def sample_random_images(self, num_images, image_size):
+        """
+        Sample random images from the dataset.
+
+        Args:
+            num_images (int): number of images to sample
+            image_size (int): the size of the image to sample
+        """
+
+        raise NotImplementedError
+
+        frame_num_start = np.random.choice(np.arange(self.end_frame_num), size=1, replace=False)
+        frame_num_list = list(np.arange(frame_num_start, frame_num_start + num_images))
+        data_block = self.get_specific_frame(frame_num_list)
 
         return data_block
 

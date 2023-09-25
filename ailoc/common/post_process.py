@@ -54,7 +54,7 @@ def spatial_integration(p_pred, thre_candi_1=0.3, thre_candi_2=0.6):
         return ailoc.common.cpu(p_integrated_candidate[:, 0])
 
 
-def sample_prob(p_pred, batch_size, thre_integrated=0.7):
+def sample_prob(p_pred, batch_size, thre_integrated=0.7, thre_candi_1=0.3, thre_candi_2=0.6):
     """
     Sample the probability map to get the binary map that indicates the existence of a molecule.
 
@@ -71,7 +71,7 @@ def sample_prob(p_pred, batch_size, thre_integrated=0.7):
     p_integrated = np.zeros_like(p_pred)
     for i in range(int(np.ceil(num_img/batch_size))):
         slice_tmp = np.index_exp[i*batch_size: min((i+1)*batch_size, num_img)]
-        p_integrated[slice_tmp] = spatial_integration(p_pred[slice_tmp])
+        p_integrated[slice_tmp] = spatial_integration(p_pred[slice_tmp], thre_candi_1, thre_candi_2)
 
     p_sampled = np.where(p_integrated > thre_integrated, 1, 0)
 

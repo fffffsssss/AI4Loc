@@ -129,7 +129,8 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
         n_beads = 1
         data_stacked = data_stacked[final_slice]
 
-    objstage_prior = ailoc.common.gpu(torch.linspace(-(n_zstack//2*z_step), n_zstack//2*z_step, n_zstack))
+    # first we move the objective away from the beads and step closer
+    objstage_prior = ailoc.common.gpu(torch.linspace(n_zstack//2*z_step, -(n_zstack//2*z_step), n_zstack))
     psf_torch_fitted = ailoc.simulation.VectorPSFTorch(psf_params_dict, req_grad=True, data_type=torch.float32)
 
     # n_beads parameters
@@ -228,7 +229,7 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
         bg_tmp = torch.clamp(bg_fitted, min=0)
 
         psf_torch_fitted._pre_compute()
-        mu = psf_torch_fitted.simulate(x_tmp, y_tmp, z_tmp, photons_tmp, objstage_tmp) + bg_tmp[:, None, None]
+        mu = psf_torch_fitted.simulate_parallel(x_tmp, y_tmp, z_tmp, photons_tmp, objstage_tmp) + bg_tmp[:, None, None]
 
         assert torch.min(mu) >= 0, 'fitting failed, mu should be positive'
         if photons_fitted.min() <= 0 or bg_fitted.min() <= 0:
@@ -270,7 +271,7 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
     photons_tmp = photons_fitted * 1000
     bg_tmp = bg_fitted
 
-    mu = psf_torch_fitted.simulate(x_tmp, y_tmp, z_tmp, photons_tmp, objstage_tmp) + bg_tmp[:, None, None]
+    mu = psf_torch_fitted.simulate_parallel(x_tmp, y_tmp, z_tmp, photons_tmp, objstage_tmp) + bg_tmp[:, None, None]
 
     results = {'calib_params_dict': params_dict, 'psf_torch_fitted': psf_torch_fitted,
                'data_stacked': data_stacked, 'data_fitted': mu}

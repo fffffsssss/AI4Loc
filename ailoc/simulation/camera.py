@@ -83,7 +83,7 @@ class EMCCD(Camera):
         read_noise_map = torch.zeros_like(x_gamma)+self.read_noise_sigma
         x_read = x_gamma + read_noise_map * torch.randn_like(x_gamma)
 
-        x_adu = torch.clamp(x_read / self.e_per_adu + self.baseline, min=0)
+        x_adu = torch.clamp(x_read / self.e_per_adu + self.baseline, min=1)
 
         return x_adu
 
@@ -138,7 +138,7 @@ class SCMOS(Camera):
 
         x_read = x_poisson + curr_read_noise_sigma * torch.randn_like(x_poisson)
 
-        x_adu = torch.clamp(x_read / self.e_per_adu + self.baseline, min=0)
+        x_adu = torch.clamp(x_read / self.e_per_adu + self.baseline, min=1)
 
         return x_adu
 

@@ -4,6 +4,8 @@ import time
 import collections
 import matplotlib.pyplot as plt
 import datetime
+import random
+from deprecated import deprecated
 
 import ailoc.common
 import ailoc.simulation
@@ -15,12 +17,12 @@ class SyncLoc(ailoc.common.XXLoc):
     SyncLoc class, simultaneously learning the localization network and the PSF model.
     """
 
-    def __init__(self, psf_params_dict, camera_params_dict, sampler_params_dict):
+    def __init__(self, psf_params_dict, camera_params_dict, sampler_params_dict, warmup=5000):
         self.dict_psf_params, self.dict_camera_params, self.dict_sampler_params = \
             psf_params_dict, camera_params_dict, sampler_params_dict
 
         self._data_simulator = ailoc.simulation.Simulator(psf_params_dict, camera_params_dict, sampler_params_dict)
-        self.learned_psf = ailoc.simulation.VectorPSFTorch(psf_params_dict, req_grad=True, data_type=torch.float32)
+        self.learned_psf = ailoc.simulation.VectorPSFTorch(psf_params_dict, req_grad=True, data_type=torch.float64)
         self.scale_ph_offset = np.mean(self.dict_sampler_params['bg_range'])
         self.scale_ph_factor = self.dict_sampler_params['photon_range'][1]/50
 
@@ -31,14 +33,16 @@ class SyncLoc(ailoc.common.XXLoc):
         self.evaluation_recorder = self._init_recorder()
 
         self._iter_sleep = 0
+        self.warmup = warmup
 
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
         self.optimizer_net = torch.optim.AdamW(self.network.parameters(), lr=6e-4, weight_decay=0.1)
-        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer_net, step_size=1000, gamma=0.9)
+        self.scheduler_net = torch.optim.lr_scheduler.StepLR(self.optimizer_net, step_size=1000, gamma=0.9)
 
-        self.optimizer_psf = torch.optim.AdamW([self.learned_psf.zernike_coef], lr=25*6e-4)
-        # self.optimizer_psf = torch.optim.SGD([self.learned_psf.zernike_coef], lr=5)
+        # self.optimizer_psf = torch.optim.AdamW([self.learned_psf.zernike_coef], lr=25*6e-4)
+        self.optimizer_psf = torch.optim.Adam([self.learned_psf.zernike_coef], lr=0.01)
+        # self.optimizer_psf = torch.optim.SGD([self.learned_psf.zernike_coef], lr=0.001)
 
     @staticmethod
     def _init_recorder():
@@ -86,6 +90,21 @@ class SyncLoc(ailoc.common.XXLoc):
 
         return total_loss
 
+    def sleep_train(self, batch_size):
+        train_data, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt, _ = \
+            self.data_simulator.sample_training_data(batch_size=batch_size, iter_train=self._iter_sleep)
+        p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(train_data, self.data_simulator.camera)
+        self.optimizer_net.zero_grad()
+        loss = self.sleep_loss(p_pred, xyzph_pred, xyzph_sig_pred, bg_pred,
+                               p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=0.03, norm_type=2)
+        self.optimizer_net.step()
+        self.scheduler_net.step()
+        self._iter_sleep += 1
+
+        return loss.detach().cpu().numpy()
+
     def wake_loss(self, real_data, xyzph_pred, xyzph_sig_pred, reconstruction, delta_map_sample, xyzph_map_sample):
         num_sample = reconstruction.shape[1]
         log_p_x_given_h = ailoc.syncloc.compute_log_p_x_given_h(data=real_data[:, None].expand(-1, num_sample, -1, -1),
@@ -100,25 +119,11 @@ class SyncLoc(ailoc.common.XXLoc):
             importance_norm = torch.exp(importance - importance.logsumexp(dim=-1, keepdim=True))
 
         total_loss = - torch.mean(torch.sum(importance_norm * (log_p_x_given_h + log_q_h_given_x), dim=-1, keepdim=True))
+        # total_loss = - torch.mean(torch.sum(importance_norm * log_p_x_given_h, dim=-1, keepdim=True))
 
         return total_loss
 
-    def sleep_train(self, batch_size):
-        train_data, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt, _ = \
-            self.data_simulator.sample_training_data(batch_size=batch_size, iter_train=self._iter_sleep)
-        p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(train_data, self.data_simulator.camera)
-        self.optimizer_net.zero_grad()
-        loss = self.sleep_loss(p_pred, xyzph_pred, xyzph_sig_pred, bg_pred,
-                               p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=0.03, norm_type=2)
-        self.optimizer_net.step()
-        self.scheduler.step()
-        self._iter_sleep += 1
-
-        return loss.detach().cpu().numpy()
-
-    def wake_train(self, real_data, num_sample):
+    def wake_train_v1(self, real_data, num_sample):
         p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(real_data,
                                                                      self.data_simulator.camera)
         delta_map_sample, xyzph_map_sample, bg_sample = self.sample_posterior(p_pred,
@@ -126,20 +131,166 @@ class SyncLoc(ailoc.common.XXLoc):
                                                                               xyzph_sig_pred,
                                                                               bg_pred,
                                                                               num_sample)
+        real_data = self.data_simulator.camera.backward(real_data)
         self.learned_psf._pre_compute()
         reconstruction = self.data_simulator.gen_noiseless_data(self.learned_psf,
                                                                 delta_map_sample,
                                                                 xyzph_map_sample,
                                                                 bg_sample,
                                                                 None)
-        real_data = self.data_simulator.camera.backward(real_data)
         self.optimizer_net.zero_grad()
         self.optimizer_psf.zero_grad()
         loss = self.wake_loss(real_data, xyzph_pred, xyzph_sig_pred, reconstruction, delta_map_sample, xyzph_map_sample)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=0.03, norm_type=2)
         self.optimizer_net.step()
-        self.scheduler.step()
+        self.scheduler_net.step()
+        self.optimizer_psf.step()
+
+        self.data_simulator.psf_model.zernike_coef = self.learned_psf.zernike_coef.detach().cpu().numpy()
+        # print(self.learned_psf.zernike_coef.detach().cpu().numpy())
+
+        return loss.detach().cpu().numpy()
+
+    def wake_train_v2(self, real_data, num_sample, max_recon_psfs=1000):
+        """
+        as the number of psfs in real data is unknown, we limit the number of reconstructed PSF to be max_recon_psfs
+        """
+
+        p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(real_data,
+                                                                     self.data_simulator.camera)
+
+        delta_map_sample, xyzph_map_sample, bg_sample = self.sample_posterior(p_pred,
+                                                                              xyzph_pred,
+                                                                              xyzph_sig_pred,
+                                                                              bg_pred,
+                                                                              num_sample)
+
+        if len(delta_map_sample.nonzero()) > 0.0075 * p_pred.shape[0] * p_pred.shape[1] * p_pred.shape[
+            2] * num_sample:
+            print('too many non-zero elements in delta_map_sample, the network probably diverges, '
+                  'consider decreasing the PSF learning rate to make the network more stable')
+
+        real_data = self.data_simulator.camera.backward(real_data)
+
+        real_data_crop, \
+        delta_map_sample_crop, \
+        xyzph_map_sample_crop, \
+        bg_sample_crop, \
+        xyzph_pred_crop, \
+        xyzph_sig_pred_crop = self.crop_patches(delta_map_sample,
+                                                real_data,
+                                                xyzph_map_sample,
+                                                bg_sample,
+                                                xyzph_pred,
+                                                xyzph_sig_pred,
+                                                crop_size=self.data_simulator.mol_sampler.train_size,
+                                                max_psfs=max_recon_psfs)
+
+        if real_data_crop is None:
+            return np.nan
+
+        self.learned_psf._pre_compute()
+        reconstruction = self.data_simulator.reconstruct_posterior(self.learned_psf,
+                                                                   delta_map_sample_crop,
+                                                                   xyzph_map_sample_crop,
+                                                                   bg_sample_crop, )
+
+        self.optimizer_net.zero_grad()
+        self.optimizer_psf.zero_grad()
+        loss = self.wake_loss(real_data_crop,
+                              xyzph_pred_crop,
+                              xyzph_sig_pred_crop,
+                              reconstruction,
+                              delta_map_sample_crop,
+                              xyzph_map_sample_crop)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=0.03, norm_type=2)
+        self.optimizer_net.step()
+        self.scheduler_net.step()
+        self.optimizer_psf.step()
+
+        self.data_simulator.psf_model.zernike_coef = self.learned_psf.zernike_coef.detach().cpu().numpy()
+        # print(self.learned_psf.zernike_coef.detach().cpu().numpy())
+
+        return loss.detach().cpu().numpy()
+
+    def wake_train_v3(self, real_dataset, batch_size, num_sample=50, max_recon_psfs=1000):
+        """
+        as the number of psfs in real data is unknown, we limit the number of reconstructed PSF to be max_recon_psfs,
+        the non-uniform z distribution of the emitters in real data is also considered
+        """
+        # todo: maybe we can calculate a z distribution of the emitters in real data every user-defined iterations,
+        #  and use it to weight the reconstruction loss, so that the learned psf will relieve the z bias of the real data
+        #
+
+        # sample the real data and analyze to find enough emitters at different z positions, then crop the patches,
+        # the cropped patches are used for the wake phase training
+        with torch.no_grad():
+            real_data_tmp = real_dataset.sample_random_images(num_images=batch_size*10,
+                                                              image_size=self.data_simulator.mol_sampler.train_size*2)
+            p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(real_data_tmp,
+                                                                         self.data_simulator.camera)
+            delta_tmp = ailoc.common.gpu(ailoc.common.sample_prob(ailoc.common.cpu(p_pred), batch_size))
+            if len(delta_tmp.nonzero()) > 0.0075 * p_pred.shape[0] * p_pred.shape[1] * p_pred.shape[2] * num_sample:
+                print('too many non-zero elements in delta_map_sample, the network probably diverges, '
+                      'consider decreasing the PSF learning rate to make the network more stable')
+            real_data, z_dist = self.crop_patches_resample(real_data_tmp,
+                                                           delta_tmp,
+                                                           xyzph_pred,
+                                                           self.data_simulator.mol_sampler.train_size)
+
+        p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(real_data,
+                                                                     self.data_simulator.camera)
+
+        delta_map_sample, xyzph_map_sample, bg_sample = self.sample_posterior(p_pred,
+                                                                              xyzph_pred,
+                                                                              xyzph_sig_pred,
+                                                                              bg_pred,
+                                                                              num_sample)
+
+        if len(delta_map_sample.nonzero()) > 0.0075 * p_pred.shape[0] * p_pred.shape[1] * p_pred.shape[
+            2] * num_sample:
+            print('too many non-zero elements in delta_map_sample, the network probably diverges, '
+                  'consider decreasing the PSF learning rate to make the network more stable')
+
+        real_data = self.data_simulator.camera.backward(real_data)
+
+        real_data_crop, \
+        delta_map_sample_crop, \
+        xyzph_map_sample_crop, \
+        bg_sample_crop, \
+        xyzph_pred_crop, \
+        xyzph_sig_pred_crop = self.crop_patches(delta_map_sample,
+                                                real_data,
+                                                xyzph_map_sample,
+                                                bg_sample,
+                                                xyzph_pred,
+                                                xyzph_sig_pred,
+                                                crop_size=self.data_simulator.mol_sampler.train_size,
+                                                max_psfs=max_recon_psfs)
+
+        if real_data_crop is None:
+            return np.nan
+
+        self.learned_psf._pre_compute()
+        reconstruction = self.data_simulator.reconstruct_posterior(self.learned_psf,
+                                                                   delta_map_sample_crop,
+                                                                   xyzph_map_sample_crop,
+                                                                   bg_sample_crop, )
+
+        self.optimizer_net.zero_grad()
+        self.optimizer_psf.zero_grad()
+        loss = self.wake_loss(real_data_crop,
+                              xyzph_pred_crop,
+                              xyzph_sig_pred_crop,
+                              reconstruction,
+                              delta_map_sample_crop,
+                              xyzph_map_sample_crop)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=0.03, norm_type=2)
+        self.optimizer_net.step()
+        self.scheduler_net.step()
         self.optimizer_psf.step()
 
         self.data_simulator.psf_model.zernike_coef = self.learned_psf.zernike_coef.detach().cpu().numpy()
@@ -152,35 +303,53 @@ class SyncLoc(ailoc.common.XXLoc):
             batch_size, h, w = p_pred.shape[0], p_pred.shape[-2], p_pred.shape[-1]
             delta = ailoc.common.gpu(
                 ailoc.common.sample_prob(
-                    ailoc.common.cpu(p_pred), batch_size, 0.7))[:, None].expand(-1, num_sample, -1, -1)
+                    ailoc.common.cpu(p_pred), batch_size))[:, None].expand(-1, num_sample, -1, -1)
             xyzph_sample = torch.distributions.Normal(loc=(xyzph_pred.permute([1, 0, 2, 3])[:, :, None]).expand(-1, -1, num_sample, -1, -1),
                                                       scale=(xyzph_sig_pred.permute([1, 0, 2, 3])[:, :, None]).expand(-1, -1, num_sample, -1, -1)).sample()
             # xyzph_sample = (xyzph_pred.detach().permute([1, 0, 2, 3])[:, :, None]).expand(-1, -1, num_sample, -1, -1)
-            xyzph_sample[3] = torch.clamp(xyzph_sample[3], min=0.0)
+            xyzph_sample[0] = torch.clamp(xyzph_sample[0], min=-self.learned_psf.psf_size//2, max=self.learned_psf.psf_size//2)
+            xyzph_sample[1] = torch.clamp(xyzph_sample[1], min=-self.learned_psf.psf_size//2, max=self.learned_psf.psf_size//2)
+            xyzph_sample[2] = torch.clamp(xyzph_sample[2], min=-3.0, max=3.0)
+            xyzph_sample[3] = torch.clamp(xyzph_sample[3], min=0.0, max=3.0)
             bg_sample = bg_pred.detach()
 
         return delta, xyzph_sample, bg_sample
 
+    def prepare_sample_real_data(self, real_data, batch_size):
+        n, h, w = real_data.shape
+        # assert n >= batch_size + 2 and h >= self.data_simulator.mol_sampler.train_size \
+        #        and w >= self.data_simulator.mol_sampler.train_size, 'real data is too small'
+
+        self.sample_window_size = min(h // 4 * 4, w // 4 * 4)
+        # self.sample_window_size = min(self.sample_window_size, self.data_simulator.mol_sampler.train_size)
+        self.sample_window_size = min(self.sample_window_size, 256)
+        self.h_sample_prob = real_data[:, :h - self.sample_window_size + 1, :].mean(axis=(0, 2)) / \
+                             np.sum(real_data[:, :h - self.sample_window_size + 1, :].mean(axis=(0, 2)))
+
+        self.w_sample_prob = real_data[:, :, :w - self.sample_window_size + 1].mean(axis=(0, 1)) / \
+                             np.sum(real_data[:, :, :w - self.sample_window_size + 1].mean(axis=(0, 1)))
+
     def sample_real_data(self, real_data, batch_size):
         n, h, w = real_data.shape
-        assert n >= batch_size+2, 'real data is too small'
-        window_size = min(h//4*4, w//4*4)
+
         n_start = np.random.randint(1, n-batch_size)
-        h_start = np.random.randint(0, h-window_size+1)
-        w_start = np.random.randint(0, w-window_size+1)
+        h_start = np.random.choice(np.arange(h-self.sample_window_size+1), size=1, p=self.h_sample_prob)[0]
+        w_start = np.random.choice(np.arange(w-self.sample_window_size+1), size=1, p=self.w_sample_prob)[0]
+        # h_start = np.random.randint(0, h-window_size+1)
+        # w_start = np.random.randint(0, w-window_size+1)
         if self.local_context:
             real_data_sample = real_data[n_start-1: n_start+batch_size+1,
-                                         h_start: h_start + window_size,
-                                         w_start: w_start + window_size]
+                                         h_start: h_start + self.sample_window_size,
+                                         w_start: w_start + self.sample_window_size]
         else:
             real_data_sample = real_data[n_start: n_start+batch_size,
-                                         h_start: h_start + window_size,
-                                         w_start: w_start + window_size]
+                                         h_start: h_start + self.sample_window_size,
+                                         w_start: w_start + self.sample_window_size]
 
         return real_data_sample.astype(np.float32)
 
     def online_train(self, batch_size=16, max_iterations=50000, eval_freq=500, file_name=None, real_data=None,
-                     num_sample=40):
+                     num_sample=50, max_recon_psfs=1000, online_build_eval_set=False):
         """
         Train the network.
 
@@ -192,34 +361,24 @@ class SyncLoc(ailoc.common.XXLoc):
             file_name (str): the name of the file to save the network
             real_data (np.ndarray): real data to be used in wake phase
             num_sample (int): number of samples for posterior based expectation estimation
+            max_recon_psfs (int): maximum number of reconstructed psfs, considering the GPU memory usage
+            online_build_eval_set (bool): whether to build the evaluation set online using the current learned psf,
+                if False, the evaluation set should be manually built before training
         """
 
         file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H') + 'SyncLoc.pt' if file_name is None else file_name
 
         assert real_data is not None, 'real data is not provided'
 
+        # real_dataset = ailoc.common.SmlmTiffDataset(real_data)
+
+        self.prepare_sample_real_data(real_data, batch_size)
+
         print('Start training...')
 
         if self._iter_sleep > 0:
             print('training from checkpoint, the recent performance is:')
-            try:
-                print(f"Iterations: {self._iter_sleep}/{max_iterations} || "
-                      f"Loss_sleep: {self.evaluation_recorder['loss_sleep'][self._iter_sleep]:.2f} || "
-                      f"Loss_wake: {self.evaluation_recorder['loss_wake'][self._iter_sleep]:.2f} || "
-                      f"IterTime: {self.evaluation_recorder['iter_time'][self._iter_sleep]:.2f} ms || "
-                      f"ETA: {self.evaluation_recorder['iter_time'][self._iter_sleep] * (max_iterations - self._iter_sleep) / 3600000:.2f} h || ", end='')
-
-                print(f"SumProb: {self.evaluation_recorder['n_per_img'][self._iter_sleep]:.2f} || "
-                      f"Eff_3D: {self.evaluation_recorder['eff_3d'][self._iter_sleep]:.2f} || "
-                      f"Jaccard: {self.evaluation_recorder['jaccard'][self._iter_sleep]:.2f} || "
-                      f"Recall: {self.evaluation_recorder['recall'][self._iter_sleep]:.2f} || "
-                      f"Precision: {self.evaluation_recorder['precision'][self._iter_sleep]:.2f} || "
-                      f"RMSE_lat: {self.evaluation_recorder['rmse_lat'][self._iter_sleep]:.2f} || "
-                      f"RMSE_ax: {self.evaluation_recorder['rmse_ax'][self._iter_sleep]:.2f} || "
-                      f"learned_psf_zernike: {self.evaluation_recorder['learned_psf_zernike'][self._iter_sleep]:} || ")
-
-            except KeyError:
-                print('No recent performance record found')
+            self.print_recoder(max_iterations)
 
         while self._iter_sleep < max_iterations:
             t0 = time.time()
@@ -229,10 +388,24 @@ class SyncLoc(ailoc.common.XXLoc):
                 loss_sleep = self.sleep_train(batch_size=batch_size)
                 total_loss_sleep.append(loss_sleep)
 
-                if self._iter_sleep > 5000:
+                # todo: maybe need a warmup phase to train detection channel despite the psf shape to
+                #  avoid too many detections in the beginning
+
+                if self._iter_sleep > self.warmup:
+                    # todo: maybe can set an interleave step for wake phase, and at the start of each wake phase,
+                    #  calculate the z distribution of the real data based on the current learned psf and network,
+                    #  use the z distribution to weight the real data samples or loss
+
                     real_data_sample = ailoc.common.gpu(self.sample_real_data(real_data, batch_size))
-                    loss_wake = self.wake_train(real_data_sample, num_sample)
-                    total_loss_wake.append(loss_wake)
+                    # loss_wake = self.wake_train_v1(real_data_sample, num_sample)
+                    # loss_wake = self.wake_train_v2(real_data_sample, num_sample, max_recon_psfs)
+                    loss_wake = self.wake_train_v3(real_data_sample, batch_size, num_sample, max_recon_psfs)
+                    total_loss_wake.append(loss_wake) if loss_wake is not np.nan else None
+
+                if self._iter_sleep % 100 == 0:
+                    self.evaluation_recorder['learned_psf_zernike'][
+                        self._iter_sleep] = self.learned_psf.zernike_coef.detach().cpu().numpy()
+
             torch.cuda.empty_cache()
 
             avg_iter_time = 1000 * (time.time() - t0) / eval_freq
@@ -241,32 +414,13 @@ class SyncLoc(ailoc.common.XXLoc):
             self.evaluation_recorder['loss_sleep'][self._iter_sleep] = avg_loss_sleep
             self.evaluation_recorder['loss_wake'][self._iter_sleep] = avg_loss_wake
             self.evaluation_recorder['iter_time'][self._iter_sleep] = avg_iter_time
-            self.evaluation_recorder['learned_psf_zernike'][self._iter_sleep] = self.learned_psf.zernike_coef.detach().cpu().numpy()
 
-            if self._iter_sleep > 500:
+            if self._iter_sleep > 1000:
                 print('----------------------------------------------------------------------------------------------')
-                # self.build_evaluation_dataset(napari_plot=False)
+                self.build_evaluation_dataset(napari_plot=False) if online_build_eval_set else None
                 self.online_evaluate(batch_size=batch_size)
-                print(f"Iterations: {self._iter_sleep}/{max_iterations} || "
-                      f"Loss_sleep: {self.evaluation_recorder['loss_sleep'][self._iter_sleep]:.2f} || "
-                      f"Loss_wake: {self.evaluation_recorder['loss_wake'][self._iter_sleep]:.2f} || "
-                      f"IterTime: {self.evaluation_recorder['iter_time'][self._iter_sleep]:.2f} ms || "
-                      f"ETA: {self.evaluation_recorder['iter_time'][self._iter_sleep] * (max_iterations - self._iter_sleep) / 3600000:.2f} h || "
-                      f"SumProb: {self.evaluation_recorder['n_per_img'][self._iter_sleep]:.2f} || "
-                      f"Eff_3D: {self.evaluation_recorder['eff_3d'][self._iter_sleep]:.2f} || "
-                      f"Jaccard: {self.evaluation_recorder['jaccard'][self._iter_sleep]:.2f} || "
-                      f"Recall: {self.evaluation_recorder['recall'][self._iter_sleep]:.2f} || "
-                      f"Precision: {self.evaluation_recorder['precision'][self._iter_sleep]:.2f} || "
-                      f"RMSE_lat: {self.evaluation_recorder['rmse_lat'][self._iter_sleep]:.2f} || "
-                      f"RMSE_ax: {self.evaluation_recorder['rmse_ax'][self._iter_sleep]:.2f} || "
-                      f"learned_psf_zernike: {self.evaluation_recorder['learned_psf_zernike'][self._iter_sleep]:} || ")
-            else:
-                print(f"Iterations: {self._iter_sleep}/{max_iterations} || "
-                      f"Loss_sleep: {self.evaluation_recorder['loss_sleep'][self._iter_sleep]:.2f} || "
-                      f"Loss_wake: {self.evaluation_recorder['loss_wake'][self._iter_sleep]:.2f} || "
-                      f"IterTime: {self.evaluation_recorder['iter_time'][self._iter_sleep]:.2f} ms || "
-                      f"ETA: {self.evaluation_recorder['iter_time'][self._iter_sleep] * (max_iterations - self._iter_sleep) / 3600000:.2f} h")
 
+            self.print_recoder(max_iterations)
             self.save(file_name)
 
         print('training finished!')
@@ -365,8 +519,9 @@ class SyncLoc(ailoc.common.XXLoc):
 
                 n_per_img.append(inference_dict_tmp['prob'].sum((-2, -1)).mean())
 
-                molecule_array_tmp[:, 0] += i*batch_size
-                molecule_list_pred += molecule_array_tmp.tolist()
+                if len(molecule_array_tmp) > 0:
+                    molecule_array_tmp[:, 0] += i*batch_size
+                    molecule_list_pred += molecule_array_tmp.tolist()
 
             metric_dict, paired_array = ailoc.common.pair_localizations(prediction=np.array(molecule_list_pred),
                                                                         ground_truth=self.evaluation_dataset['molecule_list_gt'],
@@ -477,3 +632,128 @@ class SyncLoc(ailoc.common.XXLoc):
             ax[1].scatter(pix_gt[:, 1], pix_gt[:, 0], s=10, c='m', marker='x')
             ax[1].set_title('ground truth \non middle frame')
             plt.show()
+
+    @staticmethod
+    def crop_patches(delta_map_sample, real_data, xyzph_map_sample, bg_sample, xyzph_pred, xyzph_sig_pred,
+                     crop_size, max_psfs):
+        """
+        Crop the psf_patches on the canvas according to the delta map,
+        the max_num is the maximum number of psfs to be used for wake training.
+        """
+
+        delta_inds = delta_map_sample[:, 0].nonzero().transpose(1, 0)
+
+        if len(delta_inds[0]) == 0:
+            return None, None, None, None, None, None
+
+        if crop_size > delta_map_sample.shape[-1]:
+            crop_size = delta_map_sample.shape[-1]
+
+        # crop the psfs using the delta_inds, align the center pixel of the crop_size to the delta,
+        # if the delta is in the margin area, shift the delta and crop the psf
+        real_data_crop = []
+        delta_map_sample_crop = []
+        xyzph_map_sample_crop = []
+        bg_sample_crop = []
+        xyzph_pred_crop = []
+        xyzph_sig_pred_crop = []
+
+        delta_idx_list = list(range(len(delta_inds[0])))
+        photon_delta_list = xyzph_pred[:, 3][tuple(delta_inds)]
+        sorted_numbers, indices = torch.sort(photon_delta_list, descending=False)
+        delta_idx_list = [delta_idx_list[idx] for idx in indices]
+
+        num_psfs = 0
+        while len(delta_idx_list) > 0:
+            if num_psfs >= max_psfs:
+                break
+
+            # # random select a delta
+            # random_idx = random.sample(delta_idx_list, 1)[0]
+            # delta_idx_list.remove(random_idx)
+
+            # pop the brightest delta
+            random_idx = delta_idx_list.pop()
+
+            frame_num, center_h, center_w = delta_inds[:, random_idx]
+
+            # set the crop center, considering the margin area
+            if center_h < crop_size // 2:
+                center_h = crop_size // 2
+            elif center_h > real_data.shape[1] - crop_size // 2 - 1:
+                center_h = real_data.shape[1] - crop_size // 2 - 1
+            if center_w < crop_size // 2:
+                center_w = crop_size // 2
+            elif center_w > real_data.shape[2] - crop_size // 2 - 1:
+                center_w = real_data.shape[2] - crop_size // 2 - 1
+            # set the crop range,
+            h_range_tmp = (center_h - crop_size // 2, center_h - crop_size // 2 + crop_size)
+            w_range_tmp = (center_w - crop_size // 2, center_w - crop_size // 2 + crop_size)
+
+            # remove all delta in the crop area
+            curr_frame_delta = torch.where(delta_inds[0, :] == frame_num, delta_inds[1:, :], -1)
+            delta_inds_in_crop = (torch.eq(h_range_tmp[0] <= curr_frame_delta[0, :],
+                                           curr_frame_delta[0, :] < h_range_tmp[1]) *
+                                  torch.eq(w_range_tmp[0] <= curr_frame_delta[1, :],
+                                           curr_frame_delta[1, :] < w_range_tmp[1])).nonzero().tolist()
+
+            for j in delta_inds_in_crop:
+                try:
+                    delta_idx_list.remove(j[0])
+                except ValueError:
+                    pass
+
+            real_data_crop.append(real_data[frame_num,
+                                  h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]])
+
+            delta_map_sample_crop.append(delta_map_sample[frame_num, :,
+                                         h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]])
+
+            xyzph_map_sample_crop.append(xyzph_map_sample[:, frame_num, :,
+                                         h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]])
+
+            bg_sample_crop.append(bg_sample[frame_num,
+                                  h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]])
+
+            xyzph_pred_crop.append(xyzph_pred[frame_num, :,
+                                   h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]])
+
+            xyzph_sig_pred_crop.append(xyzph_sig_pred[frame_num, :,
+                                       h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]])
+
+            num_psfs += len(delta_map_sample_crop[-1].nonzero())
+
+        return torch.stack(real_data_crop), torch.stack(delta_map_sample_crop), \
+               torch.permute(torch.stack(xyzph_map_sample_crop), dims=(1, 0, 2, 3, 4)), \
+               torch.stack(bg_sample_crop), \
+               torch.stack(xyzph_pred_crop), \
+               torch.stack(xyzph_sig_pred_crop)
+
+    def print_recoder(self, max_iterations):
+        try:
+            print(f"Iterations: {self._iter_sleep}/{max_iterations} || "
+                  f"Loss_sleep: {self.evaluation_recorder['loss_sleep'][self._iter_sleep]:.2f} || "
+                  f"Loss_wake: {self.evaluation_recorder['loss_wake'][self._iter_sleep]:.2f} || "
+                  f"IterTime: {self.evaluation_recorder['iter_time'][self._iter_sleep]:.2f} ms || "
+                  f"ETA: {self.evaluation_recorder['iter_time'][self._iter_sleep] * (max_iterations - self._iter_sleep) / 3600000:.2f} h || ",
+                  end='')
+
+            print(f"SumProb: {self.evaluation_recorder['n_per_img'][self._iter_sleep]:.2f} || "
+                  f"Eff_3D: {self.evaluation_recorder['eff_3d'][self._iter_sleep]:.2f} || "
+                  f"Jaccard: {self.evaluation_recorder['jaccard'][self._iter_sleep]:.2f} || "
+                  f"Recall: {self.evaluation_recorder['recall'][self._iter_sleep]:.2f} || "
+                  f"Precision: {self.evaluation_recorder['precision'][self._iter_sleep]:.2f} || "
+                  f"RMSE_lat: {self.evaluation_recorder['rmse_lat'][self._iter_sleep]:.2f} || "
+                  f"RMSE_ax: {self.evaluation_recorder['rmse_ax'][self._iter_sleep]:.2f} || ")
+
+            print(f"learned_psf_zernike: ", end="")
+            for i in range(int(np.ceil(len(self.learned_psf.zernike_mode)/7))):
+                for j in range(7):
+                    print(f"{ailoc.common.cpu(self.learned_psf.zernike_mode)[i*7+j][0]:.0f},"
+                          f"{ailoc.common.cpu(self.learned_psf.zernike_mode)[i*7+j][1]:.0f}:"
+                          f"{self.evaluation_recorder['learned_psf_zernike'][self._iter_sleep][i*7+j]:.1f}", end='| ')
+
+            print('')
+
+        except KeyError:
+            print('No record found')

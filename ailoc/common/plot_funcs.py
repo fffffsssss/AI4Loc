@@ -128,18 +128,42 @@ def plot_syncloc_record(model):
     plt.show(block=True)
 
     # plot the pseudo-color image of the zernike phase and save it as a gif
-
-
+    print('Plot the phase learning process, this may take a while')
     zernike_phase_list = []
     for zernike_tmp in recorder['learned_psf_zernike'].items():
-        model.learned_psf.zernike_coef = ailoc.common.gpu(zernike_tmp[1])
-        model.learned_psf._pre_compute()
-        phase_tmp = ailoc.common.cpu(torch.real(torch.log(model.learned_psf.zernike_phase)/1j))
+        if zernike_tmp[0] < model.warmup:
+            continue
+        with torch.no_grad():
+            model.learned_psf.zernike_coef = ailoc.common.gpu(zernike_tmp[1])
+            model.learned_psf._pre_compute()
+            nz = 9
+            x = ailoc.common.gpu(torch.zeros(nz))
+            y = ailoc.common.gpu(torch.zeros(nz))
+            z = ailoc.common.gpu(torch.linspace(*model.data_simulator.mol_sampler.z_range, nz))
+            photons = ailoc.common.gpu(torch.ones(nz))
+            psf = ailoc.common.cpu(model.learned_psf.simulate_parallel(x, y, z, photons))
+            phase_tmp = ailoc.common.cpu(torch.real(torch.log(model.learned_psf.zernike_phase)/1j))
 
         # Create a pseudo-color plot of the depth slice
-        fig, ax = plt.subplots()
-        im = ax.imshow(phase_tmp, cmap='turbo')
-        fig.colorbar(im, ax=ax)
+        fig = plt.figure(figsize=(9, 6), dpi=150, constrained_layout=True)
+        fig.suptitle(f'iterations: {zernike_tmp[0]}')
+        gs = fig.add_gridspec(1, 2)
+        ax1 = fig.add_subplot(gs[0, 0])
+        im = ax1.imshow(phase_tmp, cmap='turbo')
+        fig.colorbar(im, ax=ax1, fraction=0.05)
+        ax1.set_title('zernike phase')
+
+        gs01 = gs[0, 1].subgridspec(nz//3, 3)
+        for i in range(nz):
+            ax2 = fig.add_subplot(gs01[i])
+            ax2.imshow(psf[i, :, :], cmap='gray')
+            ax2.set_title(f'{ailoc.common.cpu(z[i])} nm')
+
+        # # old plots, only plot the zernike phase
+        # fig, ax = plt.subplots()
+        # im = ax.imshow(phase_tmp, cmap='turbo',)
+        # plt.title(f'iterations: {zernike_tmp[0]}')
+        # fig.colorbar(im, ax=ax)
 
         # Convert the plot to an image array
         canvas = FigureCanvas(fig)
@@ -149,6 +173,7 @@ def plot_syncloc_record(model):
 
         plt.close(fig)
 
+    print('Plot done, saving the .gif')
     # zernike_phase_3d = np.stack(zernike_phase_list, axis=0)
 
     return zernike_phase_list

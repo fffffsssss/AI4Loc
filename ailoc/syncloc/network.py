@@ -215,15 +215,15 @@ class SyncLocNet(nn.Module):
         # output z range is (-2, 2), the training sampling range is in (-1,1)
         xyzph_pred[:, 2] = torch.tanh(xyzph_pred[:, 2]) * 2
 
-        # output photon range is (0, 1), the training sampling range is in (0,1)
-        xyzph_pred[:, 3] = torch.sigmoid(xyzph_pred[:, 3])
+        # output photon range is (0, 2), the training sampling range is in (0,1)
+        xyzph_pred[:, 3] = torch.sigmoid(xyzph_pred[:, 3]) * 2
 
         # scale the uncertainty and add epsilon, the output range becomes (0.001, 3.001),
         # maybe can use RELU for unlimited upper range and stable gradient
-        xyzph_sig_pred = torch.sigmoid(outputs['xyzph_sig']) * 3 + 0.00001
+        xyzph_sig_pred = torch.sigmoid(outputs['xyzph_sig']) * 3 + 1e-5
 
-        # output bg range is (0, 1), the training sampling range is in (0,1)
-        bg_pred = torch.sigmoid(outputs['bg'])[:, 0]  # bg
+        # output bg range is (0, 2), the training sampling range is in (0,1)
+        bg_pred = torch.sigmoid(outputs['bg'])[:, 0] * 2 + 1e-5  # bg
 
         return p_pred, xyzph_pred, xyzph_sig_pred, bg_pred
 

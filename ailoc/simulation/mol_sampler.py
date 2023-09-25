@@ -1,7 +1,7 @@
 import torch
 import numpy as np
 import perlin_numpy
-# from deprecated import deprecated
+from deprecated import deprecated
 
 import ailoc.common
 
@@ -226,7 +226,9 @@ class MoleculeSampler:
         Sample background for training data simulation
         """
 
-        if self.bg_perlin:
+        random_flag = np.random.rand() < 0.5
+
+        if self.bg_perlin and random_flag:
             bg_s = np.zeros((batch_size, self.train_size, self.train_size))
             res = np.clip(self.train_size//64, a_min=1, a_max=None)
             for i in range(batch_size):
@@ -242,37 +244,37 @@ class MoleculeSampler:
 
         return bg_s
 
-    # @deprecated(reason='aberration map is no longer a property of the MoleculeSampler')
-    # def sample_aberration(self, sub_fov_xy):
-    #     """
-    #     Sample the aberration map for the current sub-fov
-    #
-    #     Args:
-    #         sub_fov_xy (list): [x_start, x_end, y_start, y_end]
-    #
-    #     Returns:
-    #         torch.Tensor or None: aberration map for the current sub-fov
-    #     """
-    #
-    #     if self.aberration_map is None:
-    #         return None
-    #     return self.aberration_map[:, sub_fov_xy[2]:sub_fov_xy[3] + 1, sub_fov_xy[0]:sub_fov_xy[1] + 1]
-    #
-    # @deprecated(reason='read noise map is no longer a property of the MoleculeSampler')
-    # def sample_read_noise(self, sub_fov_xy):
-    #     """
-    #     Sample the read noise map for the current sub-fov
-    #
-    #     Args:
-    #         sub_fov_xy (list): [x_start, x_end, y_start, y_end]
-    #
-    #     Returns:
-    #         torch.Tensor or None: read noise map for the current sub-fov
-    #     """
-    #
-    #     if self.read_noise_map is None:
-    #         return None
-    #     return self.read_noise_map[sub_fov_xy[2]:sub_fov_xy[3] + 1, sub_fov_xy[0]:sub_fov_xy[1] + 1]
+    @deprecated(reason='aberration map is no longer a property of the MoleculeSampler')
+    def sample_aberration(self, sub_fov_xy):
+        """
+        Sample the aberration map for the current sub-fov
+
+        Args:
+            sub_fov_xy (list): [x_start, x_end, y_start, y_end]
+
+        Returns:
+            torch.Tensor or None: aberration map for the current sub-fov
+        """
+
+        if self.aberration_map is None:
+            return None
+        return self.aberration_map[:, sub_fov_xy[2]:sub_fov_xy[3] + 1, sub_fov_xy[0]:sub_fov_xy[1] + 1]
+
+    @deprecated(reason='read noise map is no longer a property of the MoleculeSampler')
+    def sample_read_noise(self, sub_fov_xy):
+        """
+        Sample the read noise map for the current sub-fov
+
+        Args:
+            sub_fov_xy (list): [x_start, x_end, y_start, y_end]
+
+        Returns:
+            torch.Tensor or None: read noise map for the current sub-fov
+        """
+
+        if self.read_noise_map is None:
+            return None
+        return self.read_noise_map[sub_fov_xy[2]:sub_fov_xy[3] + 1, sub_fov_xy[0]:sub_fov_xy[1] + 1]
 
     @staticmethod
     def _compute_prob_map(size_row, size_col, num_em_avg):

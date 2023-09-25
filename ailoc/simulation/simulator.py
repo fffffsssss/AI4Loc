@@ -109,9 +109,37 @@ class Simulator:
         x,y,z,photons = self._translate_maps(delta_map.reshape([-1, height, width]), xyzph_map.reshape([4, -1, height, width]))
 
         psf_patches = psf_model.simulate(x, y, z, photons, zernike_coefs) \
-            if zernike_coefs is not None else psf_model.simulate(x, y, z, photons)
+            if zernike_coefs is not None else psf_model.simulate_parallel(x, y, z, photons)
 
         raw_data = self.place_psfs(delta_map.reshape([-1, height, width]), psf_patches) + bg.reshape([-1, height, width])
+
+        return torch.reshape(raw_data, [batch_size, channels, height, width])
+
+    def reconstruct_posterior(self, psf_model, delta_map, xyzph_map, bg):
+        """
+        Reconstruct PSF images from the given delta map, psf model, and localization posterior.
+
+        Args:
+            psf_model (ailoc.simulation.VectorPSFTorch): psf model
+            delta_map (torch.Tensor): delta map with shape (batch_size, channels, height, width) to indicate where
+                the PSF images should be placed
+            xyzph_map (torch.Tensor): xyzph map with shape (batch_size, 4, height, width) to indicate the xyz phtons
+                of the PSF images
+            bg (torch.Tensor): background maps
+        """
+
+        batch_size, channels, height, width = delta_map.shape[0], delta_map.shape[1], delta_map.shape[2], \
+                                              delta_map.shape[3]
+
+        bg = torch.reshape(bg, [batch_size, 1, height, width]).repeat(1, channels, 1, 1) * self.mol_sampler.bg_scale
+
+        x, y, z, photons = self._translate_maps(delta_map.reshape([-1, height, width]),
+                                                xyzph_map.reshape([4, -1, height, width]))
+
+        psf_patches = psf_model.simulate_parallel(x, y, z, photons)
+
+        raw_data = self.place_psfs(delta_map.reshape([-1, height, width]), psf_patches) + bg.reshape(
+            [-1, height, width])
 
         return torch.reshape(raw_data, [batch_size, channels, height, width])
 
@@ -170,3 +198,7 @@ class Simulator:
                    canvas_col_start[i]:canvas_col_start[i] + w_cut.shape[2]] += w_cut
 
         return canvas
+
+
+
+
