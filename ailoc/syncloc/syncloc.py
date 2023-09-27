@@ -1,9 +1,12 @@
+import copy
+
 import torch
 import numpy as np
 import time
 import collections
 import matplotlib.pyplot as plt
 import datetime
+from torch.cuda.amp import autocast
 import random
 from deprecated import deprecated
 
@@ -37,12 +40,14 @@ class SyncLoc(ailoc.common.XXLoc):
 
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+        self.real_data_z_weight = None
+
         self.optimizer_net = torch.optim.AdamW(self.network.parameters(), lr=6e-4, weight_decay=0.1)
         self.scheduler_net = torch.optim.lr_scheduler.StepLR(self.optimizer_net, step_size=1000, gamma=0.9)
 
         # self.optimizer_psf = torch.optim.AdamW([self.learned_psf.zernike_coef], lr=25*6e-4)
         self.optimizer_psf = torch.optim.Adam([self.learned_psf.zernike_coef], lr=0.01)
-        # self.optimizer_psf = torch.optim.SGD([self.learned_psf.zernike_coef], lr=0.001)
+        # self.optimizer_psf = torch.optim.SGD([self.learned_psf.zernike_coef], lr=0.01)
 
     @staticmethod
     def _init_recorder():
@@ -105,7 +110,8 @@ class SyncLoc(ailoc.common.XXLoc):
 
         return loss.detach().cpu().numpy()
 
-    def wake_loss(self, real_data, xyzph_pred, xyzph_sig_pred, reconstruction, delta_map_sample, xyzph_map_sample):
+    def wake_loss(self, real_data, xyzph_pred, xyzph_sig_pred, reconstruction,
+                  delta_map_sample, xyzph_map_sample, weight_per_img):
         num_sample = reconstruction.shape[1]
         log_p_x_given_h = ailoc.syncloc.compute_log_p_x_given_h(data=real_data[:, None].expand(-1, num_sample, -1, -1),
                                                                 model=reconstruction)
@@ -118,8 +124,35 @@ class SyncLoc(ailoc.common.XXLoc):
             importance = log_p_x_given_h - log_q_h_given_x
             importance_norm = torch.exp(importance - importance.logsumexp(dim=-1, keepdim=True))
 
-        total_loss = - torch.mean(torch.sum(importance_norm * (log_p_x_given_h + log_q_h_given_x), dim=-1, keepdim=True))
-        # total_loss = - torch.mean(torch.sum(importance_norm * log_p_x_given_h, dim=-1, keepdim=True))
+        # elbo = torch.sum(importance_norm * (log_p_x_given_h + log_q_h_given_x), dim=-1, keepdim=True)
+        elbo = torch.sum(importance_norm * log_p_x_given_h, dim=-1, keepdim=True)
+        if weight_per_img is not None:
+            total_loss = - torch.mean(elbo * weight_per_img[:, None])
+        else:
+            total_loss = - torch.mean(elbo)
+
+        return total_loss
+
+    def wake_loss_v2(self, real_data, xyzph_pred, xyzph_sig_pred, reconstruction,
+                  delta_map_sample, xyzph_map_sample, weight_per_img):
+        num_sample = reconstruction.shape[1]
+        log_p_x_given_h = ailoc.syncloc.compute_log_p_x_given_h(data=real_data[:, None].expand(-1, num_sample, -1, -1),
+                                                                model=reconstruction)
+        log_q_h_given_x = ailoc.syncloc.compute_log_q_h_given_x(xyzph_pred,
+                                                                xyzph_sig_pred,
+                                                                delta_map_sample,
+                                                                xyzph_map_sample)
+
+        with torch.no_grad():
+            importance = log_p_x_given_h - log_q_h_given_x
+            importance_norm = torch.exp(importance - importance.logsumexp(dim=-1, keepdim=True))
+
+        # elbo = torch.sum(importance_norm * (log_p_x_given_h + log_q_h_given_x), dim=-1, keepdim=True)
+        elbo = torch.sum(importance_norm * log_p_x_given_h, dim=-1, keepdim=True)
+        if weight_per_img is not None:
+            total_loss = - torch.mean(elbo * weight_per_img[:, None])
+        else:
+            total_loss = - torch.mean(elbo)
 
         return total_loss
 
@@ -215,30 +248,11 @@ class SyncLoc(ailoc.common.XXLoc):
 
         return loss.detach().cpu().numpy()
 
-    def wake_train_v3(self, real_dataset, batch_size, num_sample=50, max_recon_psfs=1000):
+    def wake_train_v3(self, real_data, batch_size, num_sample=50, max_recon_psfs=1000):
         """
         as the number of psfs in real data is unknown, we limit the number of reconstructed PSF to be max_recon_psfs,
         the non-uniform z distribution of the emitters in real data is also considered
         """
-        # todo: maybe we can calculate a z distribution of the emitters in real data every user-defined iterations,
-        #  and use it to weight the reconstruction loss, so that the learned psf will relieve the z bias of the real data
-        #
-
-        # sample the real data and analyze to find enough emitters at different z positions, then crop the patches,
-        # the cropped patches are used for the wake phase training
-        with torch.no_grad():
-            real_data_tmp = real_dataset.sample_random_images(num_images=batch_size*10,
-                                                              image_size=self.data_simulator.mol_sampler.train_size*2)
-            p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(real_data_tmp,
-                                                                         self.data_simulator.camera)
-            delta_tmp = ailoc.common.gpu(ailoc.common.sample_prob(ailoc.common.cpu(p_pred), batch_size))
-            if len(delta_tmp.nonzero()) > 0.0075 * p_pred.shape[0] * p_pred.shape[1] * p_pred.shape[2] * num_sample:
-                print('too many non-zero elements in delta_map_sample, the network probably diverges, '
-                      'consider decreasing the PSF learning rate to make the network more stable')
-            real_data, z_dist = self.crop_patches_resample(real_data_tmp,
-                                                           delta_tmp,
-                                                           xyzph_pred,
-                                                           self.data_simulator.mol_sampler.train_size)
 
         p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(real_data,
                                                                      self.data_simulator.camera)
@@ -261,14 +275,16 @@ class SyncLoc(ailoc.common.XXLoc):
         xyzph_map_sample_crop, \
         bg_sample_crop, \
         xyzph_pred_crop, \
-        xyzph_sig_pred_crop = self.crop_patches(delta_map_sample,
-                                                real_data,
-                                                xyzph_map_sample,
-                                                bg_sample,
-                                                xyzph_pred,
-                                                xyzph_sig_pred,
-                                                crop_size=self.data_simulator.mol_sampler.train_size,
-                                                max_psfs=max_recon_psfs)
+        xyzph_sig_pred_crop, \
+        z_weight_crop = self.crop_patches(delta_map_sample,
+                                          real_data,
+                                          xyzph_map_sample,
+                                          bg_sample,
+                                          xyzph_pred,
+                                          xyzph_sig_pred,
+                                          crop_size=self.data_simulator.mol_sampler.train_size,
+                                          max_psfs=max_recon_psfs,
+                                          z_weight=self.real_data_z_weight)
 
         if real_data_crop is None:
             return np.nan
@@ -286,7 +302,75 @@ class SyncLoc(ailoc.common.XXLoc):
                               xyzph_sig_pred_crop,
                               reconstruction,
                               delta_map_sample_crop,
-                              xyzph_map_sample_crop)
+                              xyzph_map_sample_crop,
+                              z_weight_crop)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=0.03, norm_type=2)
+        self.optimizer_net.step()
+        self.scheduler_net.step()
+        self.optimizer_psf.step()
+
+        self.data_simulator.psf_model.zernike_coef = self.learned_psf.zernike_coef.detach().cpu().numpy()
+        # print(self.learned_psf.zernike_coef.detach().cpu().numpy())
+
+        return loss.detach().cpu().numpy()
+
+    def wake_train_v4(self, real_data, batch_size, num_sample, max_recon_psfs):
+        """
+        for each wake training iteration, using the current q network to localization enough signals, and then
+        use this signals and posterior samples to update the PSF model
+        """
+
+        p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(real_data,
+                                                                     self.data_simulator.camera)
+
+        delta_map_sample, xyzph_map_sample, bg_sample = self.sample_posterior(p_pred,
+                                                                              xyzph_pred,
+                                                                              xyzph_sig_pred,
+                                                                              bg_pred,
+                                                                              num_sample)
+
+        if len(delta_map_sample.nonzero()) > 0.0075 * p_pred.shape[0] * p_pred.shape[1] * p_pred.shape[
+            2] * num_sample:
+            print('too many non-zero elements in delta_map_sample, the network probably diverges, '
+                  'consider decreasing the PSF learning rate to make the network more stable')
+
+        real_data = self.data_simulator.camera.backward(real_data)
+
+        real_data_crop, \
+        delta_map_sample_crop, \
+        xyzph_map_sample_crop, \
+        bg_sample_crop, \
+        xyzph_pred_crop, \
+        xyzph_sig_pred_crop, \
+        z_weight_crop = self.crop_patches(delta_map_sample,
+                                          real_data,
+                                          xyzph_map_sample,
+                                          bg_sample,
+                                          xyzph_pred,
+                                          xyzph_sig_pred,
+                                          crop_size=self.data_simulator.mol_sampler.train_size,
+                                          max_psfs=max_recon_psfs,
+                                          z_weight=self.real_data_z_weight)
+
+        if real_data_crop is None:
+            return np.nan
+
+        self.learned_psf._pre_compute()
+        reconstruction = self.data_simulator.reconstruct_posterior(self.learned_psf,
+                                                                   delta_map_sample_crop,
+                                                                   xyzph_map_sample_crop,
+                                                                   bg_sample_crop, )
+
+        self.optimizer_net.zero_grad()
+        self.optimizer_psf.zero_grad()
+        loss = self.wake_loss_v2(real_data_crop,
+                                 xyzph_pred_crop,
+                                 xyzph_sig_pred_crop,
+                                 reconstruction,
+                                 delta_map_sample_crop,
+                                 xyzph_map_sample_crop,
+                                 z_weight_crop)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=0.03, norm_type=2)
         self.optimizer_net.step()
@@ -348,6 +432,59 @@ class SyncLoc(ailoc.common.XXLoc):
 
         return real_data_sample.astype(np.float32)
 
+    def get_real_data_z_prior(self, real_data, batch_size):
+        print('Using the current network to estimate the z prior of the real data...')
+        with torch.no_grad():
+            n, h, w = real_data.shape
+            fov_xy = (0, w-1, 0, h-1)
+            sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list = ailoc.common.split_fov(data=real_data,
+                                                                                                  fov_xy=fov_xy,
+                                                                                                  sub_fov_size=256,
+                                                                                                  over_cut=8)
+            sub_fov_molecule_list = []
+            for i_fov in range(len(sub_fov_xy_list)):
+                print_message_tmp = f'\rProcessing sub-FOV: {i_fov + 1}/{len(sub_fov_xy_list)}, {sub_fov_xy_list[i_fov]}, ' \
+                                    f'keep molecules in: {original_sub_fov_xy_list[i_fov]}, ' \
+                                    f'loc model: {type(self)}'
+                if self.data_simulator.psf_model.zernike_coef_map is not None:
+                    print_message_tmp += f', aberration map size: {self.data_simulator.psf_model.zernike_coef_map.shape}'
+                print(print_message_tmp, end='')
+
+                with autocast():
+                    molecule_list_tmp, inference_dict_tmp = ailoc.common.data_analyze(loc_model=self,
+                                                                                      data=sub_fov_data_list[i_fov],
+                                                                                      sub_fov_xy=sub_fov_xy_list[i_fov],
+                                                                                      camera=self.data_simulator.camera,
+                                                                                      batch_size=batch_size,
+                                                                                      retain_infer_map=False)
+                sub_fov_molecule_list.append(molecule_list_tmp)
+
+            # merge the localizations in each sub-FOV to whole FOV, filter repeated localizations in over cut region
+            molecule_list_block = ailoc.common.SmlmDataAnalyzer.filter_over_cut(sub_fov_molecule_list,
+                                                                                sub_fov_xy_list,
+                                                                                original_sub_fov_xy_list,
+                                                                                self.data_simulator.psf_model.pixel_size_xy)
+            molecule_list_block = np.array(molecule_list_block)
+
+            z_pdf = list(np.histogram(molecule_list_block[:, 3],
+                                      range=self.data_simulator.mol_sampler.z_range,
+                                      bins=5, density=True))
+            z_pdf[0] *= (self.data_simulator.mol_sampler.z_range[1]-self.data_simulator.mol_sampler.z_range[0])/5
+            z_pdf[0] = np.clip(z_pdf[0], a_min=1e-3, a_max=None)
+            z_weight = copy.deepcopy(z_pdf)
+            z_weight[0] = (1/z_weight[0])/np.sum(1/z_weight[0])
+            z_weight[1] = z_weight[1]/self.data_simulator.mol_sampler.z_scale
+            z_weight[1][0] = -np.inf
+            z_weight[1][-1] = np.inf
+            print(f'\nEstimation done, the z distribution of {molecule_list_block.shape[0]} '
+                  f'molecules in real data is:')
+            print(z_pdf[1])
+            print(z_pdf[0])
+            print('The corresponding z weight is:')
+            print(z_weight[0])
+
+            return z_weight
+
     def online_train(self, batch_size=16, max_iterations=50000, eval_freq=500, file_name=None, real_data=None,
                      num_sample=50, max_recon_psfs=1000, online_build_eval_set=False):
         """
@@ -387,19 +524,16 @@ class SyncLoc(ailoc.common.XXLoc):
             for i in range(eval_freq):
                 loss_sleep = self.sleep_train(batch_size=batch_size)
                 total_loss_sleep.append(loss_sleep)
-
-                # todo: maybe need a warmup phase to train detection channel despite the psf shape to
-                #  avoid too many detections in the beginning
-
                 if self._iter_sleep > self.warmup:
-                    # todo: maybe can set an interleave step for wake phase, and at the start of each wake phase,
-                    #  calculate the z distribution of the real data based on the current learned psf and network,
-                    #  use the z distribution to weight the real data samples or loss
+                    if self._iter_sleep % 1000 == 1:
+                        # calculate the z weight due to non-uniform z distribution
+                        self.real_data_z_weight = self.get_real_data_z_prior(real_data, batch_size)
 
-                    real_data_sample = ailoc.common.gpu(self.sample_real_data(real_data, batch_size))
+                    # real_data_sample = ailoc.common.gpu(self.sample_real_data(real_data, batch_size))
                     # loss_wake = self.wake_train_v1(real_data_sample, num_sample)
                     # loss_wake = self.wake_train_v2(real_data_sample, num_sample, max_recon_psfs)
-                    loss_wake = self.wake_train_v3(real_data_sample, batch_size, num_sample, max_recon_psfs)
+                    # loss_wake = self.wake_train_v3(real_data_sample, batch_size, num_sample, max_recon_psfs)
+                    loss_wake = self.wake_train_v4(real_data, batch_size, num_sample, max_recon_psfs)
                     total_loss_wake.append(loss_wake) if loss_wake is not np.nan else None
 
                 if self._iter_sleep % 100 == 0:
@@ -635,7 +769,7 @@ class SyncLoc(ailoc.common.XXLoc):
 
     @staticmethod
     def crop_patches(delta_map_sample, real_data, xyzph_map_sample, bg_sample, xyzph_pred, xyzph_sig_pred,
-                     crop_size, max_psfs):
+                     crop_size, max_psfs, z_weight=None):
         """
         Crop the psf_patches on the canvas according to the delta map,
         the max_num is the maximum number of psfs to be used for wake training.
@@ -657,6 +791,7 @@ class SyncLoc(ailoc.common.XXLoc):
         bg_sample_crop = []
         xyzph_pred_crop = []
         xyzph_sig_pred_crop = []
+        z_weight_crop = []
 
         delta_idx_list = list(range(len(delta_inds[0])))
         photon_delta_list = xyzph_pred[:, 3][tuple(delta_inds)]
@@ -668,24 +803,24 @@ class SyncLoc(ailoc.common.XXLoc):
             if num_psfs >= max_psfs:
                 break
 
-            # # random select a delta
-            # random_idx = random.sample(delta_idx_list, 1)[0]
-            # delta_idx_list.remove(random_idx)
+            # random select a delta
+            random_idx = random.sample(delta_idx_list, 1)[0]
+            delta_idx_list.remove(random_idx)
 
-            # pop the brightest delta
-            random_idx = delta_idx_list.pop()
+            # # pop the brightest delta
+            # random_idx = delta_idx_list.pop()
 
             frame_num, center_h, center_w = delta_inds[:, random_idx]
 
             # set the crop center, considering the margin area
             if center_h < crop_size // 2:
                 center_h = crop_size // 2
-            elif center_h > real_data.shape[1] - crop_size // 2 - 1:
-                center_h = real_data.shape[1] - crop_size // 2 - 1
+            elif center_h > real_data.shape[1] - 1 - (crop_size-crop_size // 2-1):
+                center_h = real_data.shape[1] - 1 - (crop_size-crop_size // 2-1)
             if center_w < crop_size // 2:
                 center_w = crop_size // 2
-            elif center_w > real_data.shape[2] - crop_size // 2 - 1:
-                center_w = real_data.shape[2] - crop_size // 2 - 1
+            elif center_w > real_data.shape[2] - 1 - (crop_size-crop_size // 2-1):
+                center_w = real_data.shape[2] - 1 - (crop_size-crop_size // 2-1)
             # set the crop range,
             h_range_tmp = (center_h - crop_size // 2, center_h - crop_size // 2 + crop_size)
             w_range_tmp = (center_w - crop_size // 2, center_w - crop_size // 2 + crop_size)
@@ -723,11 +858,23 @@ class SyncLoc(ailoc.common.XXLoc):
 
             num_psfs += len(delta_map_sample_crop[-1].nonzero())
 
+            if z_weight is not None:
+                with torch.no_grad():
+                    delta_inds_for_z = tuple(delta_map_sample_crop[-1][0].nonzero().transpose(1, 0))
+                    z_avg_crop = xyzph_pred_crop[-1][2][delta_inds_for_z].mean()
+                    def find_weight(intervals, number):
+                        for i in range(len(intervals) - 1):
+                            if intervals[i] <= number < intervals[i + 1]:
+                                return i  # returning the interval index (0-based)
+                    z_weight_tmp = z_weight[0][find_weight(z_weight[1], z_avg_crop)]
+                    z_weight_crop.append(ailoc.common.gpu(z_weight_tmp))
+
         return torch.stack(real_data_crop), torch.stack(delta_map_sample_crop), \
                torch.permute(torch.stack(xyzph_map_sample_crop), dims=(1, 0, 2, 3, 4)), \
                torch.stack(bg_sample_crop), \
                torch.stack(xyzph_pred_crop), \
-               torch.stack(xyzph_sig_pred_crop)
+               torch.stack(xyzph_sig_pred_crop), \
+               torch.stack(z_weight_crop) if z_weight is not None else None
 
     def print_recoder(self, max_iterations):
         try:

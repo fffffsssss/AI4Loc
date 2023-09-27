@@ -11,7 +11,7 @@ import imageio
 import ailoc.syncloc
 import ailoc.common
 import ailoc.simulation
-ailoc.common.setup_seed(42)
+ailoc.common.setup_seed(25)
 
 
 def syncloc_train():
@@ -46,8 +46,8 @@ def syncloc_train():
     camera_calib = ailoc.simulation.SCMOS(camera_params_dict)
     # camera_calib = ailoc.simulation.IdeaCamera()
 
-    experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 2)
-    experimental_images_photon = ailoc.common.cpu(camera_calib.backward(torch.tensor(experimental_images.astype(np.float32))))
+    experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 4)
+    experimental_images_photon = ailoc.common.cpu(camera_calib.backward(torch.tensor(experimental_images[:2000].astype(np.float32))))
     bg_range = ailoc.common.get_bg_stats_gauss(experimental_images_photon, percentile=10, plot=True)
 
     # # TODO: maybe we can use single molecule data to estimate the photon range and zernike aberrations
@@ -60,8 +60,8 @@ def syncloc_train():
     # ailoc.common.viewdata_napari(molecule_images)
 
     # manually set psf parameters
-    zernike_aber = np.array([2, -2, 70, 2, 2, 0, 3, -1, 0, 3, 1, 0, 4, 0, 0, 3, -3, 0, 3, 3, 0,
-                             4, -2, 0, 4, 2, 0, 5, -1, 0, 5, 1, 0, 6, 0, 0, 4, -4, 0, 4, 4, 0,
+    zernike_aber = np.array([2, -2, 60, 2, 2, 0, 3, -1, 0, 3, 1, 0, 4, 0, 0, 3, -3, 0, 3, 3, 0,
+                             4, -2, -60, 4, 2, 0, 5, -1, 0, 5, 1, 0, 6, 0, 0, 4, -4, 0, 4, 4, 0,
                              5, -3, 0, 5, 3, 0, 6, -2, 0, 6, 2, 0, 7, 1, 0, 7, -1, 0, 8, 0, 0],
                             dtype=np.float32).reshape([21, 3])
     psf_params_dict = {'na': 1.5,
@@ -129,12 +129,12 @@ def syncloc_train():
     file_name = '../../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H') + 'SyncLoc.pt'
     # torch.autograd.set_detect_anomaly(True)
     syncloc_model.online_train(batch_size=10,
-                               max_iterations=30000,
+                               max_iterations=15000,
                                eval_freq=500,
                                file_name=file_name,
                                real_data=experimental_images,
                                num_sample=50,
-                               max_recon_psfs=1000,
+                               max_recon_psfs=2000,
                                online_build_eval_set=True,)
 
     # plot evaluation performance during the training
@@ -163,24 +163,24 @@ def syncloc_train():
 
 
 def syncloc_ckpoint_train():
-    model_name = '../../results/2023-09-23-15SyncLoc.pt'
+    model_name = '../../results/2023-09-27-08SyncLoc.pt'
     with open(model_name, 'rb') as f:
         syncloc_model = torch.load(f)
 
     experiment_file = '../../datasets/npc_DMO1.2__5/npc_DMO1.2__6_MMStack_Default_1.ome.tif'
     # gt_csv = '../../datasets/mismatch_data2/activations.csv'
-    # experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 2)
+    experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 2)
     # syncloc_model.evaluation_dataset['data'] = ailoc.common.cpu(experimental_images)[0:2000, None, :, :]
     # molecule_list_gt = sorted(ailoc.common.read_csv_array(gt_csv), key=lambda x: x[0])
     # end_idx = ailoc.common.find_frame(molecule_list_gt, frame_nbr=2000)
     # syncloc_model.evaluation_dataset['molecule_list_gt'] = np.array(molecule_list_gt[:end_idx])
 
     syncloc_model.online_train(batch_size=10,
-                               max_iterations=32000,
+                               max_iterations=15000,
                                eval_freq=500,
                                file_name=model_name,
-                               real_data=experiment_file,
-                               num_sample=100,
+                               real_data=experimental_images,
+                               num_sample=50,
                                max_recon_psfs=1000,
                                online_build_eval_set=True,)
 
@@ -191,7 +191,24 @@ def syncloc_ckpoint_train():
                     phase_record,
                     duration=200)
 
+    # analyze the experimental data
+    image_path = os.path.dirname(experiment_file)  # can be a tiff file path or a folder path
+    save_path = '../../results/' + \
+                os.path.split(model_name)[-1].split('.')[0] + \
+                '_' + os.path.split(image_path)[-1].split('.')[0] + '_predictions.csv'
+    print(save_path)
+    syncloc_analyzer = ailoc.common.SmlmDataAnalyzer(loc_model=syncloc_model,
+                                                     tiff_path=image_path,
+                                                     output_path=save_path,
+                                                     time_block_gb=1,
+                                                     batch_size=16,
+                                                     sub_fov_size=256,
+                                                     over_cut=8,
+                                                     num_workers=0)
+    syncloc_analyzer.check_single_frame_output(frame_num=3)
+    preds_array, preds_rescale_array = syncloc_analyzer.divide_and_conquer()
+
 
 if __name__ == '__main__':
-    # syncloc_train()
-    syncloc_ckpoint_train()
+    syncloc_train()
+    # syncloc_ckpoint_train()

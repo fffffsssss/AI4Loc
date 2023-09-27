@@ -10,8 +10,8 @@ import ailoc.common
 
 def syncloc_analyze():
 
-    loc_model_path = '../../results/2023-09-22-10SyncLoc.pt'
-    image_path = '../../datasets/sw_npc_20211028/NUP96_SNP647_3D_512_20ms_hama_mm_1800mW_3/'   # can be a tiff file path or a folder path
+    loc_model_path = '../../results/2023-09-25-11SyncLoc.pt'
+    image_path = '../../datasets/npc_DMO1.2__5/'   # can be a tiff file path or a folder path
     save_path = '../../results/' + \
                 os.path.split(loc_model_path)[-1].split('.')[0] + \
                 '_'+os.path.split(image_path)[-1].split('.')[0]+'_predictions.csv'
