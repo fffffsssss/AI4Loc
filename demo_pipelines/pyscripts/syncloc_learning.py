@@ -18,7 +18,7 @@ def syncloc_train():
     # set the file paths, calibration file is necessary,
     # experiment file is optional for photon range and bg range estimation
     # calib_file = '../../'
-    experiment_file = '../../datasets/npc_DMO1.2__5/npc_DMO1.2__6_MMStack_Default_1.ome.tif'
+    experiment_file = '../../datasets/fy_npc6um_1/NPC_NUP96_SNAP647_DMO_6um_defoucs_0_20ms_3/NPC_NUP96_SNAP647_DMO_6um_defoucs_0_20ms_3_MMStack_Pos0.ome.tif'
 
     # calib_dict = torch.load(calib_file)
     # psf_torch_calib = calib_dict['psf_torch_fitted']
@@ -35,11 +35,11 @@ def syncloc_train():
     #                       'baseline': 100.0,
     #                       }
     camera_params_dict = {'camera_type': 'scmos',
-                          'qe': 0.81,
+                          'qe': 0.95,
                           'spurious_charge': 0.002,
-                          'read_noise_sigma': 1.61,
+                          'read_noise_sigma': 1.535,
                           'read_noise_map': None,
-                          'e_per_adu': 0.47,
+                          'e_per_adu': 0.7471,
                           'baseline': 100.0,
                           }
     # camera_params_dict = calib_dict['calib_params_dict']['camera_params_dict']
@@ -60,23 +60,41 @@ def syncloc_train():
     # ailoc.common.viewdata_napari(molecule_images)
 
     # manually set psf parameters
-    zernike_aber = np.array([2, -2, 60, 2, 2, 0, 3, -1, 0, 3, 1, 0, 4, 0, 0, 3, -3, 0, 3, 3, 0,
-                             4, -2, -60, 4, 2, 0, 5, -1, 0, 5, 1, 0, 6, 0, 0, 4, -4, 0, 4, 4, 0,
-                             5, -3, 0, 5, 3, 0, 6, -2, 0, 6, 2, 0, 7, 1, 0, 7, -1, 0, 8, 0, 0],
+    zernike_aber = np.array([2, -2, 83,
+                             2, 2, 0,
+                             3, -1, 0,
+                             3, 1, 0,
+                             4, 0, 0,
+                             3, -3, 0,
+                             3, 3, 0,
+                             4, -2, -251,
+                             4, 2, 0,
+                             5, -1, 0,
+                             5, 1, 0,
+                             6, 0, 0,
+                             4, -4, 0,
+                             4, 4, 0,
+                             5, -3, 0,
+                             5, 3, 0,
+                             6, -2, 0,
+                             6, 2, 0,
+                             7, 1, 0,
+                             7, -1, 0,
+                             8, 0, 0],
                             dtype=np.float32).reshape([21, 3])
-    psf_params_dict = {'na': 1.5,
+    psf_params_dict = {'na': 1.35,
                        'wavelength': 670,  # unit: nm
-                       'refmed': 1.518,
-                       'refcov': 1.518,
-                       'refimm': 1.518,
+                       'refmed': 1.406,
+                       'refcov': 1.524,
+                       'refimm': 1.406,
                        'zernike_mode': zernike_aber[:, 0:2],
                        'zernike_coef': zernike_aber[:, 2],
                        'zernike_coef_map': None,
                        'pixel_size_xy': (108, 108),
                        'otf_rescale_xy': (0.5, 0.5),
                        'npupil': 64,
-                       'psf_size': 25,
-                       'objstage0': -0,  # initial objective position, relative to focus at coverslip, minus is closer
+                       'psf_size': 61,
+                       'objstage0': -2500,  # initial objective position, relative to focus at coverslip, minus is closer
                        # 'zemit0': 0,
                        }
 
@@ -101,9 +119,10 @@ def syncloc_train():
                            'num_em_avg': 10,
                            'num_evaluation_data': 1000,
                            'photon_range': (1000, 10000),
-                           'z_range': (-700, 700),
+                           'z_range': (-3000, 3000),
                            'bg_range': bg_range if 'bg_range' in locals().keys() else (40, 60),
                            'bg_perlin': True,
+                           'warm_up': 5000,
                            }
 
     # print learning parameters
@@ -112,29 +131,30 @@ def syncloc_train():
             params = params_dict[keys].transpose() if keys == 'zernike_mode' else params_dict[keys]
             print(f"{keys}: {params}")
 
-    syncloc_model = ailoc.syncloc.SyncLoc(psf_params_dict, camera_params_dict, sampler_params_dict, warmup=5000)
+    syncloc_model = ailoc.syncloc.SyncLoc(psf_params_dict, camera_params_dict, sampler_params_dict)
 
     syncloc_model.check_training_psf()
 
     syncloc_model.check_training_data()
 
-    # syncloc_model.build_evaluation_dataset(napari_plot=True)
+    # # syncloc_model.build_evaluation_dataset(napari_plot=True)
     # gt_csv = '../../datasets/mismatch_data2/activations.csv'
     # syncloc_model.evaluation_dataset['data'] = ailoc.common.cpu(experimental_images)[0:2000, None, :, :]
     # molecule_list_gt = sorted(ailoc.common.read_csv_array(gt_csv), key=lambda x: x[0])
     # end_idx = ailoc.common.find_frame(molecule_list_gt, frame_nbr=2000)
     # syncloc_model.evaluation_dataset['molecule_list_gt'] = np.array(molecule_list_gt[:end_idx])
-    # ailoc.common.viewdata_napari(syncloc_model.evaluation_dataset['data'])
+    # # ailoc.common.viewdata_napari(syncloc_model.evaluation_dataset['data'])
 
     file_name = '../../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H') + 'SyncLoc.pt'
     # torch.autograd.set_detect_anomaly(True)
     syncloc_model.online_train(batch_size=10,
-                               max_iterations=15000,
+                               max_iterations=30000,
                                eval_freq=500,
                                file_name=file_name,
                                real_data=experimental_images,
                                num_sample=50,
-                               max_recon_psfs=2000,
+                               wake_interval=2,
+                               max_recon_psfs=5000,
                                online_build_eval_set=True,)
 
     # plot evaluation performance during the training
@@ -163,7 +183,7 @@ def syncloc_train():
 
 
 def syncloc_ckpoint_train():
-    model_name = '../../results/2023-09-27-08SyncLoc.pt'
+    model_name = '../../results/2023-10-11-00SyncLoc.pt'
     with open(model_name, 'rb') as f:
         syncloc_model = torch.load(f)
 
@@ -175,13 +195,15 @@ def syncloc_ckpoint_train():
     # end_idx = ailoc.common.find_frame(molecule_list_gt, frame_nbr=2000)
     # syncloc_model.evaluation_dataset['molecule_list_gt'] = np.array(molecule_list_gt[:end_idx])
 
+    # torch.autograd.set_detect_anomaly(True)
     syncloc_model.online_train(batch_size=10,
-                               max_iterations=15000,
+                               max_iterations=30000,
                                eval_freq=500,
                                file_name=model_name,
                                real_data=experimental_images,
                                num_sample=50,
-                               max_recon_psfs=1000,
+                               wake_interval=2,
+                               max_recon_psfs=5000,
                                online_build_eval_set=True,)
 
     # plot evaluation performance during the training

@@ -236,15 +236,15 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
             print('photons or bg <= 0, using torch.clamp and regularization')
             indices_photons = torch.nonzero(photons_fitted <= 0)
             indices_bg = torch.nonzero(bg_fitted <= 0)
-            # model = torch.distributions.Poisson(mu)
-            # loss = -model.log_prob(data_stacked).sum() - \
-            #        lambda_reg*(photons_fitted[indices_photons].sum() + bg_fitted[indices_bg].sum())
-            loss = torch.sum(2*((mu-data_stacked)-data_stacked*torch.log(mu/data_stacked))) - \
+            model = torch.distributions.Poisson(mu)
+            loss = -model.log_prob(data_stacked).sum() - \
                    lambda_reg*(photons_fitted[indices_photons].sum() + bg_fitted[indices_bg].sum())
+            # loss = torch.sum(2*((mu-data_stacked)-data_stacked*torch.log(mu/data_stacked))) - \
+            #        lambda_reg*(photons_fitted[indices_photons].sum() + bg_fitted[indices_bg].sum())
         else:
-            # model = torch.distributions.Poisson(mu)
-            # loss = -model.log_prob(data_stacked).sum()
-            loss = torch.sum(2 * ((mu - data_stacked) - data_stacked * torch.log(mu / data_stacked)))
+            model = torch.distributions.Poisson(mu)
+            loss = -model.log_prob(data_stacked).sum()
+            # loss = torch.sum(2 * ((mu - data_stacked) - data_stacked * torch.log(mu / data_stacked)))
 
         optimizer.zero_grad()
         loss.backward()
