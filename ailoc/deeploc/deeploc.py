@@ -365,3 +365,7 @@ class DeepLoc(ailoc.common.XXLoc):
             ax[1].scatter(pix_gt[:, 1], pix_gt[:, 0], s=10, c='m', marker='x')
             ax[1].set_title('ground truth \non middle frame')
             plt.show()
+
+
+def train_deeploc(params_dict):
+    pass

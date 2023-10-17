@@ -153,3 +153,20 @@ class IdeaCamera(SCMOS):
                          'read_noise_sigma': 0.0, 'read_noise_map': None,
                          'e_per_adu': 1.0, 'baseline': 0.0}
         super().__init__(camera_params)
+
+
+def instantiate_camera(camera_params_dict):
+    """
+    Instantiate a camera object.
+    """
+
+    if camera_params_dict['camera_type'].upper() == 'EMCCD':
+        camera = ailoc.simulation.EMCCD(camera_params_dict)
+    elif camera_params_dict['camera_type'].upper() == 'SCMOS':
+        camera = ailoc.simulation.SCMOS(camera_params_dict)
+    elif camera_params_dict['camera_type'].upper() == 'IDEA':
+        camera = ailoc.simulation.IdeaCamera()
+    else:
+        raise NotImplementedError('Camera type not supported.')
+    return camera
+

@@ -1,4 +1,6 @@
 import csv
+
+import deprecated
 import numpy as np
 from ipywidgets import widgets
 from tkinter import Tk, filedialog
@@ -8,8 +10,9 @@ from IPython.display import display
 import scipy.io as scio
 import torch
 import os
+import copy
 
-import ailoc.common.beads_calibration.main_calibration
+import ailoc.common
 
 
 # gui for jupyter notebook
@@ -159,25 +162,22 @@ class SaveFilesButton(widgets.Button):
             b.style.button_color = "Salmon"
 
 
-class SelectFilesButtonShow(widgets.GridspecLayout):
+class SelectFilesButtonShow:
     """A file widget that leverages tkinter.filedialog."""
 
     def __init__(self, nofile_description='Select files'):
-        super(SelectFilesButtonShow, self).__init__(5, 1)
-
         self.nofile_description = nofile_description
 
         self.button = widgets.Button(description=self.nofile_description,
                                      icon="square-o",
                                      layout=widgets.Layout(width='100%', height='80px'))
         self.button.style.button_color = "orange"
-
-        self[0, 0] = self.button
-
-        self.files = ''
-
         # Set on click behavior.
         self.button.on_click(self.select_files)
+
+        self.slice_show_widget = widgets.GridspecLayout(1, 1)
+
+        self.files = ''
 
     def select_files(self, b):
         """Generate instance of tkinter.filedialog.
@@ -201,17 +201,21 @@ class SelectFilesButtonShow(widgets.GridspecLayout):
             self.button.description = self.nofile_description
             self.button.icon = "square-o"
             self.button.style.button_color = "orange"
-            self[1:, 0] = widgets.Label(value="No images to show")
+            self.slice_show_widget[0, 0] = widgets.Label(value="No images to show")
         else:
             self.button.description = "Files selected: " + str(self.files)
             self.button.icon = "check-square-o"
             self.button.style.button_color = "Salmon"
+            self.slice_show_widget[0, 0] = stackview.slice(tifffile.imread(self.files),
+                                                           colormap='turbo',
+                                                           continuous_update=True)
 
-            self[1:, 0] = stackview.slice(tifffile.imread(self.files),
-                                           colormap='turbo',
-                                           continuous_update=True)
+    def display_notebook_gui(self):
+        display(self.button)
+        display(self.slice_show_widget)
 
 
+@deprecated.deprecated(reason="using BeadsCalibrationWidget instead")
 class ZernikeFitParamWidget(widgets.GridspecLayout):
     def __init__(self):
         super().__init__(12, 2)
@@ -334,38 +338,94 @@ class ZernikeFitParamWidget(widgets.GridspecLayout):
         self.params_dict['emgain'] = 0
         self.params_dict['use_zernike_fit'] = True
 
+        self.output.clear_output()
         with self.output:
-            self.output.clear_output()
             print(self.params_dict)
+
+
+class CalibParamWidget(widgets.GridspecLayout):
+    def __init__(self):
+        super().__init__(3, 2)
+        # create widgets
+        self.z_step_receiver = widgets.BoundedFloatText(description='Z step:',
+                                                        value=10,
+                                                        step=10,
+                                                        max=10000,
+                                                        min=1)
+        self.filter_sigma_receiver = widgets.BoundedIntText(description='Peak filter:',
+                                                            value=3,
+                                                            step=1,
+                                                            max=10,
+                                                            min=1)
+        self.threshold_receiver = widgets.BoundedFloatText(description='Cutoff:',
+                                                           value=20,
+                                                           step=1,
+                                                           max=100,
+                                                           min=0)
+        self.fit_brightest_receiver = widgets.Checkbox(description='Fit brightest',
+                                                       value=True)
+        # layout
+        self[0, :] = widgets.Label(value='Calibration parameters')
+        self[1, 0] = self.z_step_receiver
+        self[1, 1] = self.filter_sigma_receiver
+        self[2, 0] = self.threshold_receiver
+        self[2, 1] = self.fit_brightest_receiver
+
+        self.calib_params_dict = {}
+
+    def get_calib_params(self):
+        self.calib_params_dict['z_step'] = self.z_step_receiver.value
+        self.calib_params_dict['filter_sigma'] = self.filter_sigma_receiver.value
+        self.calib_params_dict['threshold_abs'] = self.threshold_receiver.value
+        self.calib_params_dict['fit_brightest'] = self.fit_brightest_receiver.value
+
+        return self.calib_params_dict
+
+    def display_notebook_gui(self):
+        display(self)
 
 
 class BeadsCalibrationWidget:
     def __init__(self):
         self.select_file_widget = SelectFilesButtonShow(nofile_description='Select the tiff file to calibrate')
-        self.set_param_widget = ZernikeFitParamWidget()
+        self.psf_param_widget = SetPSFParamWidget()
+        self.cam_param_widget = SetCamParamWidget()
+        self.calib_param_widget = CalibParamWidget()
+        self.ok_button = widgets.Button(description='Set Parameters')
+        self.ok_button.on_click(self.set_beads_calib_params)
+        self.output_widget = widgets.Output()
+
+        self.beads_calib_params_dict = {}
+
+    def set_beads_calib_params(self, b):
+        psf_params_dict = self.psf_param_widget.get_psf_params()
+        camera_params_dict = self.cam_param_widget.get_camera_params()
+        calib_params_dict = self.calib_param_widget.get_calib_params()
+
+        self.beads_calib_params_dict = {'beads_file_name': self.select_file_widget.files,
+                                        'psf_params_dict': psf_params_dict,
+                                        'camera_params_dict': camera_params_dict,
+                                        'calib_params_dict': calib_params_dict}
+        self.output_widget.clear_output()
+        with self.output_widget:
+            display(self.beads_calib_params_dict)
 
     def run(self):
-        parameters = self.set_param_widget.params_dict
-        parameters['filelist'] = [self.select_file_widget.files]
-        result = ailoc.common.beads_calibration.main_calibration.calibrate_data(parameters)
-
-        outputfile = parameters['filelist'][0] + '_' + 'calib.mat'
-        scio.savemat(outputfile, result)
+        beads_calib_params_dict = copy.deepcopy(self.beads_calib_params_dict)
+        ailoc.common.beads_psf_calibrate(beads_calib_params_dict, napari_plot=False)
 
     def display_notebook_gui(self):
-        display(self.select_file_widget)
-        display(self.set_param_widget)
-        display(self.set_param_widget.output)
+        self.select_file_widget.display_notebook_gui()
+        self.psf_param_widget.display_notebook_gui(file_receiver=False)
+        self.cam_param_widget.display_notebook_gui()
+        self.calib_param_widget.display_notebook_gui()
+        display(self.ok_button)
+        display(self.output_widget)
 
 
-class PSFCalibrationWidget:
-    # TODO: implement this for newly added PSF calibration based on pytorch model
-    pass
-
-
-class DeepLocSetPSFParamWidget(widgets.GridspecLayout):
+class SetPSFParamWidget(widgets.GridspecLayout):
     def __init__(self):
-        super().__init__(12, 2)
+        super().__init__(11, 2)
 
         # create widgets
         self.calibration_file_receiver = SelectFilesButton(nofile_description='Select the calibration file')
@@ -373,12 +433,12 @@ class DeepLocSetPSFParamWidget(widgets.GridspecLayout):
         self.load_calibration_button.on_click(self.load_calibration_params)
         self.psf_param_label = widgets.Label(value='PSF parameters', width='100%')
         self.na_receiver = widgets.BoundedFloatText(description='NA:',
-                                                    value=0,
+                                                    value=1.5,
                                                     step=0.1,
                                                     max=2,
                                                     min=0.1)
         self.wavelength_receiver = widgets.BoundedFloatText(description='Wavelength:',
-                                                            value=660,
+                                                            value=680,
                                                             step=10,
                                                             max=10000,
                                                             min=0)
@@ -392,17 +452,17 @@ class DeepLocSetPSFParamWidget(widgets.GridspecLayout):
                                                         value=1.518,
                                                         step=0.1)
         self.otf_rescale_receiver = widgets.BoundedFloatText(description='OTF rescale:',
-                                                             value=0,
+                                                             value=0.5,
                                                              step=0.1,
                                                              max=2,
                                                              min=0)
         self.pixelsizex_receiver = widgets.BoundedFloatText(description='PixelsizeX:',
-                                                            value=100,
+                                                            value=108,
                                                             step=1,
                                                             max=1000,
                                                             min=1)
         self.pixelsizey_receiver = widgets.BoundedFloatText(description='PixelsizeY:',
-                                                            value=100,
+                                                            value=108,
                                                             step=1,
                                                             max=1000,
                                                             min=1)
@@ -454,7 +514,7 @@ class DeepLocSetPSFParamWidget(widgets.GridspecLayout):
         # self.output = widgets.Output()
 
         # layout
-        self[0, :] = self.load_calibration_button
+        # self[0, :] = self.load_calibration_button
         self[1, :] = self.psf_param_label
         self[2, 0] = self.na_receiver
         self[2, 1] = self.wavelength_receiver
@@ -500,7 +560,7 @@ class DeepLocSetPSFParamWidget(widgets.GridspecLayout):
                 'calibration file does not match'
             self.zernike_mode[1, i].value = str(zernike_coef[i])
 
-    def set_psf_params(self, b):
+    def get_psf_params(self):
         self.psf_params_dict['na'] = self.na_receiver.value
         self.psf_params_dict['wavelength'] = self.wavelength_receiver.value
         self.psf_params_dict['refmed'] = self.refmed_receiver.value
@@ -528,16 +588,19 @@ class DeepLocSetPSFParamWidget(widgets.GridspecLayout):
 
         self.psf_params_dict['zernike_mode'] = np.array(zernike_mode, dtype=np.float32)
         self.psf_params_dict['zernike_coef'] = np.array(zernike_coef, dtype=np.float32)
-        self.psf_params_dict['zernike_coef_map'] = None
+        # self.psf_params_dict['zernike_coef_map'] = None
 
         # with self.output:
         #     self.output.clear_output()
         #     print(self.psf_params_dict)
 
-    def display_notebook_gui(self):
-        display(self.calibration_file_receiver)
+        return self.psf_params_dict
+
+    def display_notebook_gui(self, file_receiver=True):
+        if file_receiver:
+            display(self.calibration_file_receiver)
+            display(self.load_calibration_button)
         display(self)
-        # display(self.output)
 
 
 class sCMOSParamWidget(widgets.GridspecLayout):
@@ -624,8 +687,9 @@ class IdeaCamParamWidget(widgets.GridspecLayout):
         self[0, 0] = widgets.Label(value='No parameters to set for Idea camera')
 
 
-class DeepLocSetCamParamWidget:
+class SetCamParamWidget:
     def __init__(self):
+        self.camera_params_label = widgets.Label(value='Camera parameters')
         self.select_cam_dropdown = widgets.Dropdown(options=['Idea Camera', 'sCMOS', 'EMCCD'],
                                                     value='sCMOS',
                                                     description='Camera type:',
@@ -638,23 +702,20 @@ class DeepLocSetCamParamWidget:
         # self.ok_button.on_click(self.set_camera_params)
 
         # layout
-        self.camera_param_receiver = widgets.GridspecLayout(3, 1)
-        self.camera_param_receiver[0, 0] = widgets.Label(value='Camera parameters')
-        self.camera_param_receiver[1, 0] = self.select_cam_dropdown
-        self.camera_param_receiver[2, 0] = self.scmos_param_receiver
-        # self.camera_param_receiver[2, 0] = self.ok_button
+        self.camera_param_receiver = widgets.GridspecLayout(1, 1)
+        self.camera_param_receiver[0, 0] = self.scmos_param_receiver
 
         self.camera_params_dict = {}
 
     def select_cam(self, change):
         if change['new'] == 'Idea Camera':
-            self.camera_param_receiver[2, 0] = self.idea_param_receiver
+            self.camera_param_receiver[0, 0] = self.idea_param_receiver
         elif change['new'] == 'sCMOS':
-            self.camera_param_receiver[2, 0] = self.scmos_param_receiver
+            self.camera_param_receiver[0, 0] = self.scmos_param_receiver
         elif change['new'] == 'EMCCD':
-            self.camera_param_receiver[2, 0] = self.emccd_param_receiver
+            self.camera_param_receiver[0, 0] = self.emccd_param_receiver
 
-    def set_camera_params(self, b):
+    def get_camera_params(self):
         if self.select_cam_dropdown.value == 'Idea Camera':
             self.camera_params_dict['camera_type'] = 'idea'
         elif self.select_cam_dropdown.value == 'sCMOS':
@@ -662,7 +723,7 @@ class DeepLocSetCamParamWidget:
             self.camera_params_dict['qe'] = self.scmos_param_receiver.qe_receiver.value
             self.camera_params_dict['spurious_charge'] = self.scmos_param_receiver.spurious_charge_receiver.value
             self.camera_params_dict['read_noise_sigma'] = self.scmos_param_receiver.readout_noise_receiver.value
-            self.camera_params_dict['read_noise_map'] = None
+            # self.camera_params_dict['read_noise_map'] = None
             self.camera_params_dict['e_per_adu'] = self.scmos_param_receiver.eperadu_receiver.value
             self.camera_params_dict['baseline'] = self.scmos_param_receiver.baseline_receiver.value
         elif self.select_cam_dropdown.value == 'EMCCD':
@@ -674,7 +735,11 @@ class DeepLocSetCamParamWidget:
             self.camera_params_dict['e_per_adu'] = self.emccd_param_receiver.eperadu_receiver.value
             self.camera_params_dict['baseline'] = self.emccd_param_receiver.baseline_receiver.value
 
+        return self.camera_params_dict
+
     def display_notebook_gui(self):
+        display(self.camera_params_label)
+        display(self.select_cam_dropdown)
         display(self.camera_param_receiver)
 
 
@@ -762,8 +827,8 @@ class DeepLocSetSamplerParamWidget(widgets.GridspecLayout):
 
 class DeepLocSetLearnParamWidget:
     def __init__(self):
-        self.psf_param_widget = DeepLocSetPSFParamWidget()
-        self.cam_param_widget = DeepLocSetCamParamWidget()
+        self.psf_param_widget = SetPSFParamWidget()
+        self.cam_param_widget = SetCamParamWidget()
         self.sampler_param_widget = DeepLocSetSamplerParamWidget()
         self.ok_button = widgets.Button(description='OK')
         self.ok_button.on_click(self.set_learn_params)
@@ -780,8 +845,8 @@ class DeepLocSetLearnParamWidget:
         self.deeploc_params_dict['camera_params_dict'] = self.cam_param_widget.camera_params_dict
         self.deeploc_params_dict['sampler_params_dict'] = self.sampler_param_widget.sampler_params_dict
 
+        self.output_widget.clear_output()
         with self.output_widget:
-            self.output_widget.clear_output()
             print('DeepLoc learning parameters: ')
             print(self.deeploc_params_dict)
 
@@ -870,8 +935,8 @@ class DeepLocSetAnalyzerParamWidget:
         self.analyzer_param['over_cut'] = self.over_cut_receiver.value
         self.analyzer_param['num_workers'] = self.num_workers_receiver.value
 
+        self.output_widget.clear_output()
         with self.output_widget:
-            self.output_widget.clear_output()
             print('DeepLoc analysis parameters: ')
             print(self.analyzer_param)
             print('Plot training process: ')

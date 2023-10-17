@@ -7,7 +7,8 @@ import time
 import matplotlib.pyplot as plt
 import tifffile
 import skimage
-from torch.cuda.amp import autocast
+import os
+import scipy.io as sio
 
 import ailoc.common
 import ailoc.simulation
@@ -53,16 +54,16 @@ def segment_local_max_smlm_data(images, camera, filter_sigma, roi_size, threshol
     return np.vstack(molecule_images)
 
 
-def segment_local_max_beads(params_dict: dict) -> list:
+def segment_local_max_beads(params_dict: dict) -> dict:
     # set parameters
     raw_images = ailoc.common.gpu(params_dict['raw_images'].astype(np.float32))
-    camera_model = params_dict['camera_model']
     roi_size = params_dict['roi_size']
     filter_sigma = params_dict['filter_sigma']
     # threshold_rel = params_dict['threshold_rel']
     threshold_abs = params_dict['threshold_abs']
 
     # transform the raw images to photons
+    camera_model = ailoc.simulation.instantiate_camera(params_dict['camera_params_dict'])
     raw_images_photons = ailoc.common.cpu(camera_model.backward(raw_images))
 
     # remove the nonuniform background for better local max extraction, maybe unnecessary
@@ -71,7 +72,7 @@ def segment_local_max_beads(params_dict: dict) -> list:
 
     images_bg_filtered = skimage.filters.gaussian(np.mean(images_bg, axis=0), sigma=filter_sigma)
     peak_coords = skimage.feature.peak_local_max(images_bg_filtered,
-                                                 min_distance=roi_size//2,
+                                                 min_distance=int(roi_size*0.75),
                                                  # threshold_rel=threshold_rel,
                                                  threshold_abs=threshold_abs,
                                                  exclude_border=True)
@@ -97,8 +98,9 @@ def segment_local_max_beads(params_dict: dict) -> list:
         beads_seg.append(bead_seg)
 
     params_dict['beads_seg'] = beads_seg
+    del params_dict['raw_images']
 
-    return beads_seg
+    return params_dict
 
 
 def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
@@ -112,7 +114,7 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
     psf_params_dict = params_dict['psf_params_dict']
 
     # calibrate the segmented beads, first prepare the parameters
-    data_stacked = torch.clamp(ailoc.common.gpu(np.vstack(beads_seg)), min=1e-6)
+    data_stacked = torch.ceil(torch.clamp(ailoc.common.gpu(np.vstack(beads_seg)), min=1e-6))
     n_beads = len(beads_seg)
     n_zstack = beads_seg[0].shape[0]
     bg_estimated = data_stacked.view(n_zstack * n_beads, -1).min(dim=1).values
@@ -168,9 +170,9 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
     #     objstage_fitted,
     #     photons_fitted,
     #     bg_fitted
-    #     ], lr=5)
+    #     ], lr=10)
     #
-    # for iterations in range(1000):
+    # for iterations in range(10000):
     #     x_tmp = ailoc.common.gpu(torch.zeros(n_beads * n_zstack))
     #     y_tmp = ailoc.common.gpu(torch.zeros(n_beads * n_zstack))
     #     z_tmp = ailoc.common.gpu(torch.zeros(n_beads * n_zstack))
@@ -184,7 +186,7 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
     #     bg_tmp = torch.clamp(bg_fitted, min=0)
     #
     #     psf_torch_fitted._pre_compute()
-    #     model_fitted = psf_torch_fitted.simulate(x_tmp, y_tmp, z_tmp, photons_tmp, objstage_tmp) + bg_tmp[:, None, None]
+    #     model_fitted = psf_torch_fitted.simulate_parallel(x_tmp, y_tmp, z_tmp, photons_tmp, objstage_tmp) + bg_tmp[:, None, None]
     #     model = torch.distributions.Poisson(model_fitted)
     #     loss = -model.log_prob(data_stacked).sum()
     #     optimizer.zero_grad()
@@ -238,19 +240,18 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
             indices_bg = torch.nonzero(bg_fitted <= 0)
             model = torch.distributions.Poisson(mu)
             loss = -model.log_prob(data_stacked).sum() - \
-                   lambda_reg*(photons_fitted[indices_photons].sum() + bg_fitted[indices_bg].sum())
-            # loss = torch.sum(2*((mu-data_stacked)-data_stacked*torch.log(mu/data_stacked))) - \
+                   lambda_reg * (photons_fitted[indices_photons].sum() + bg_fitted[indices_bg].sum())
+            # loss = -torch.sum(data_stacked * torch.log(mu) - mu - torch.lgamma(data_stacked + 1)) - \
             #        lambda_reg*(photons_fitted[indices_photons].sum() + bg_fitted[indices_bg].sum())
         else:
             model = torch.distributions.Poisson(mu)
             loss = -model.log_prob(data_stacked).sum()
-            # loss = torch.sum(2 * ((mu - data_stacked) - data_stacked * torch.log(mu / data_stacked)))
+            # loss = -torch.sum(data_stacked * torch.log(mu) - mu - torch.lgamma(data_stacked + 1))
 
         optimizer.zero_grad()
         loss.backward()
         return loss.detach()
 
-    # with autocast():
     for iteration in range(75):
         loss = closure()
         print(f'iter:{iteration}, nll:{loss.item()}')
@@ -259,7 +260,7 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
         old_loss = loss.item()
         optimizer.step(closure)
 
-    # view the fitted data
+    # prepare the results
     x_tmp = ailoc.common.gpu(torch.zeros_like(photons_fitted))
     y_tmp = ailoc.common.gpu(torch.zeros_like(photons_fitted))
     z_tmp = ailoc.common.gpu(torch.zeros_like(photons_fitted))
@@ -273,61 +274,118 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
 
     mu = psf_torch_fitted.simulate_parallel(x_tmp, y_tmp, z_tmp, photons_tmp, objstage_tmp) + bg_tmp[:, None, None]
 
-    results = {'calib_params_dict': params_dict, 'psf_torch_fitted': psf_torch_fitted,
-               'data_stacked': data_stacked, 'data_fitted': mu}
+    psf_params_fitted = psf_params_dict.copy()
+    psf_params_fitted['zernike_coef'] = psf_torch_fitted.zernike_coef.detach().cpu().numpy()
 
-    # ailoc.common.cmpdata_napari(results['data_stacked'], results['data_fitted'])
+    calib_params_dict = params_dict.copy()
+
+    data_measured = ailoc.common.cpu(data_stacked)
+    data_fitted = ailoc.common.cpu(mu)
+
+    results = {'calib_params_dict': calib_params_dict, 'psf_params_fitted': psf_params_fitted,
+               'data_measured': data_measured, 'data_fitted': data_fitted}
+
+    # plot the results
+    font_size = 10
+
+    rrse = np.linalg.norm((data_fitted - data_measured).flatten(), ord=2) / \
+           np.linalg.norm(data_measured.flatten(), ord=2) * 100
+
+    nmol = n_zstack
+    if nmol <= 35:
+        ncolumns = 5
+        nrows = int(np.floor(nmol / ncolumns))
+        nidx = np.arange(nmol)
+    else:
+        ncolumns = 5
+        nrows = 7
+        nidx = np.linspace(0, nmol-1, ncolumns*nrows, dtype=int)
+
+    # plot the data, model, error
+    figure, ax = plt.subplots(nrows, ncolumns, constrained_layout=True, figsize=(10, 8))
+    i_slice = 0
+    for i in range(nrows):
+        for j in range(ncolumns):
+            beads_tmp = data_measured[nidx[i_slice]]
+            model_tmp = data_fitted[nidx[i_slice]]
+            mismatch_tmp = beads_tmp - model_tmp
+            image_tmp = np.concatenate([beads_tmp, model_tmp, mismatch_tmp], axis=1)
+            img_tmp = ax[i, j].imshow(image_tmp, cmap='turbo')
+            # plt.colorbar(mappable=img_tmp, ax=ax[i, j], fraction=0.015, pad=0.005)
+            ax[i, j].set_title(f"obj: {ailoc.common.cpu(objstage_tmp[nidx[i_slice]]):.0f} nm",
+                               fontsize=font_size)
+            i_slice += 1
+    figure.suptitle(f"data, model, error, RRSE={rrse:.2f}%")
+
+    # plot the zernike coefficients
+    figure, ax = plt.subplots(1, 1, constrained_layout=True, figsize=(10, 8))
+    aberrations_names = []
+    for i in range(psf_params_fitted['zernike_mode'].shape[0]):
+        aberrations_names.append(f"{psf_params_fitted['zernike_mode'][i, 0]:.0f}, {psf_params_fitted['zernike_mode'][i, 1]:.0f}")
+    plt.xticks(np.arange(psf_params_fitted['zernike_mode'].shape[0]),
+               labels=aberrations_names, rotation=30, fontsize=font_size)
+    bar_tmp = ax.bar(np.arange(psf_params_fitted['zernike_mode'].shape[0]), psf_params_fitted['zernike_coef'],
+                     width=1, color='orange',
+                     edgecolor='k')
+    plt.yticks(fontsize=font_size)
+    def autolabel(rects):
+        y_axis_length = rects.datavalues.max()-rects.datavalues.min()
+        for rect in rects:
+            height = rect.get_height()
+            plt.text(rect.get_x()+0.1, y_axis_length/100+height if height > 0 else height-y_axis_length/40, '%.1f' % height,
+                     fontsize=font_size-2)
+
+    autolabel(bar_tmp)
+    ax.tick_params(axis='both',
+                   direction='out'
+                   )
+    ax.set_ylabel('Zernike coefficients (nm)', fontsize=font_size)
+    ax.set_xlabel('Zernike modes', fontsize=font_size)
+
+    plt.show()
 
     return results
 
 
-def zernike_calibrate_3d_beads_stack_cuda_ext(params_dict: dict) -> dict:
-    # TODO: need to modify the cuda c zernike fit programme to provide both shared,
-    #  unshared and patially shared mechanism, then rewrite this api
+def beads_psf_calibrate(params_dict: dict, napari_plot=False):
+    # load bead stack
+    beads_file_name = params_dict['beads_file_name']
+    beads_data = tifffile.imread(beads_file_name)
 
-    # set parameters
-    raw_images = params_dict['raw_images']
-    camera_model = params_dict['camera_model']
-    roi_size = params_dict['roi_size']
-    z_step = params_dict['z_step']
-    filter_sigma = params_dict['filter_sigma']
-    threshold_rel = params_dict['threshold_rel']
     psf_params_dict = params_dict['psf_params_dict']
 
-    # pre-process the raw images
-    raw_images_photons = camera_model.backward(raw_images)
-    beads_seg = segment_local_max(raw_images_photons, roi_size, filter_sigma, threshold_rel)
+    camera_params_dict = params_dict['camera_params_dict']
 
-    # calibrate the segmented beads, first prepare the parameters
-    data_stacked = torch.clamp(ailoc.common.gpu(np.vstack(beads_seg)), min=1e-6)
-    n_beads = len(beads_seg)
-    n_zstack = beads_seg[0].shape[0]
-    objstage_prior = ailoc.common.gpu(torch.linspace(-(n_zstack // 2 * z_step), n_zstack // 2 * z_step, n_zstack))
-    psf_torch_fitted = ailoc.simulation.VectorPSFTorch(psf_params_dict, req_grad=True, data_type=torch.float32)
-    # n_beads parameters
-    x_fitted = nn.parameter.Parameter(ailoc.common.gpu(torch.zeros(n_beads)))
-    y_fitted = nn.parameter.Parameter(ailoc.common.gpu(torch.zeros(n_beads)))
-    objstage_fitted = nn.parameter.Parameter(ailoc.common.gpu(torch.zeros(n_beads)))
-    # n_zstack * n_beads parameters
-    photons_fitted = nn.parameter.Parameter(ailoc.common.gpu(torch.zeros(n_zstack * n_beads)))
-    bg_fitted = nn.parameter.Parameter(ailoc.common.gpu(torch.zeros(n_zstack * n_beads)))
+    calib_params_dict = params_dict['calib_params_dict']
+    calib_params_dict['raw_images'] = beads_data
+    calib_params_dict['camera_params_dict'] = camera_params_dict
+    calib_params_dict['roi_size'] = psf_params_dict['psf_size']
+    calib_params_dict['psf_params_dict'] = psf_params_dict
 
-    # initialize the parameters
-    x_image_linspace = ailoc.common.gpu(torch.linspace(-(roi_size - 1) * psf_params_dict['pixel_size_xy'][0] / 2,
-                                                       (roi_size - 1) * psf_params_dict['pixel_size_xy'][0] / 2,
-                                                       roi_size))
-    y_image_linspace = ailoc.common.gpu(torch.linspace(-(roi_size - 1) * psf_params_dict['pixel_size_xy'][1] / 2,
-                                                       (roi_size - 1) * psf_params_dict['pixel_size_xy'][1] / 2,
-                                                       roi_size))
-    x_mesh, y_mesh = torch.meshgrid(x_image_linspace, y_image_linspace, indexing='xy')
-    with torch.no_grad():
-        bg_fitted += data_stacked.view(n_zstack * n_beads, -1).min(dim=1).values
-        photons_fitted += torch.sum((data_stacked - bg_fitted[:, None, None]), dim=(1, 2)) / 1000
-        for i in range(n_beads):
-            slice_tmp = slice(i * n_zstack, (i + 1) * n_zstack)
-            x_fitted[i] += torch.sum(x_mesh * torch.mean(data_stacked[slice_tmp], dim=0)) / (
-                        photons_fitted.mean() * 1000)
-            y_fitted[i] += torch.sum(y_mesh * torch.mean(data_stacked[slice_tmp], dim=0)) / (
-                        photons_fitted.mean() * 1000)
-    pass
+    # preprocess the bead stack
+    calib_params_dict = ailoc.common.segment_local_max_beads(calib_params_dict)
+
+    # fit the noised beads
+    t0 = time.time()
+    results = ailoc.common.zernike_calibrate_3d_beads_stack(calib_params_dict)
+    print(f"the fitting time is: {time.time() - t0}s")
+
+    # print the fitting results
+    print(f"the relative root of squared error is: "
+          f"{np.linalg.norm((results['data_fitted'] - results['data_measured']).flatten(), ord=2) / np.linalg.norm(results['data_measured'].flatten(), ord=2) * 100}%")
+
+    np.set_printoptions(formatter={'float': '{: 0.3f}'.format})
+    for i in range(len(results['psf_params_fitted']['zernike_mode'])):
+        print(f"{ailoc.common.cpu(results['psf_params_fitted']['zernike_mode'][i])}: "
+              f"{ailoc.common.cpu(results['psf_params_fitted']['zernike_coef'][i])}")
+
+    # save the calibration results
+    save_path = os.path.dirname(beads_file_name) + '/' + os.path.basename(beads_file_name).split('.')[
+        0] + '_calib_results.mat'
+    sio.savemat(save_path, results)
+    print(f"the calibration results are saved in: {save_path}")
+
+    # using napari to visualize the calibration results
+    if napari_plot:
+        ailoc.common.cmpdata_napari(results['data_measured'], results['data_fitted'])
 

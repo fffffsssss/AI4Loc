@@ -6,6 +6,7 @@ import datetime
 import os
 import tifffile
 from IPython.display import display
+import scipy.io as sio
 
 import ailoc.deeploc
 import ailoc.common
