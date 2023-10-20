@@ -1,5 +1,4 @@
 import csv
-
 import deprecated
 import numpy as np
 from ipywidgets import widgets
@@ -7,12 +6,13 @@ from tkinter import Tk, filedialog
 import tifffile
 import stackview
 from IPython.display import display
-import scipy.io as scio
+import scipy.io as sio
 import torch
 import os
 import copy
 
 import ailoc.common
+import ailoc.simulation
 
 
 # gui for jupyter notebook
@@ -56,6 +56,7 @@ class SelectFilesButton(widgets.Button):
             self.description = self.nofile_description
             self.icon = "square-o"
             self.style.button_color = "orange"
+            self.files = None
         else:
             self.description = "Files selected: " + str(self.files)
             self.icon = "check-square-o"
@@ -101,6 +102,7 @@ class SelectFolderButton(widgets.Button):
             self.description = self.nofile_description
             self.icon = "square-o"
             self.style.button_color = "orange"
+            self.files = None
         else:
             self.description = "Folder selected: " + str(self.files)
             self.icon = "check-square-o"
@@ -156,6 +158,7 @@ class SaveFilesButton(widgets.Button):
             self.description = self.nofile_description
             self.icon = "square-o"
             self.style.button_color = "orange"
+            self.files = None
         else:
             self.description = "Save files: " + str(self.files)
             self.icon = "check-square-o"
@@ -177,7 +180,7 @@ class SelectFilesButtonShow:
 
         self.slice_show_widget = widgets.GridspecLayout(1, 1)
 
-        self.files = ''
+        self.files = None
 
     def select_files(self, b):
         """Generate instance of tkinter.filedialog.
@@ -202,6 +205,7 @@ class SelectFilesButtonShow:
             self.button.icon = "square-o"
             self.button.style.button_color = "orange"
             self.slice_show_widget[0, 0] = widgets.Label(value="No images to show")
+            self.files = None
         else:
             self.button.description = "Files selected: " + str(self.files)
             self.button.icon = "check-square-o"
@@ -365,7 +369,7 @@ class CalibParamWidget(widgets.GridspecLayout):
         self.fit_brightest_receiver = widgets.Checkbox(description='Fit brightest',
                                                        value=True)
         # layout
-        self[0, :] = widgets.Label(value='Calibration parameters')
+        self[0, :] = widgets.Label(value='Calibration parameters', style={'font_weight': 'bold'})
         self[1, 0] = self.z_step_receiver
         self[1, 1] = self.filter_sigma_receiver
         self[2, 0] = self.threshold_receiver
@@ -408,7 +412,12 @@ class BeadsCalibrationWidget:
                                         'calib_params_dict': calib_params_dict}
         self.output_widget.clear_output()
         with self.output_widget:
-            display(self.beads_calib_params_dict)
+            print('Check the parameters:')
+            # Convert the dictionary to a string and replace newline characters
+            dict_str = str(self.beads_calib_params_dict).replace('\n', '')
+            # Print the modified string
+            print(dict_str)
+            # print(self.beads_calib_params_dict)
 
     def run(self):
         beads_calib_params_dict = copy.deepcopy(self.beads_calib_params_dict)
@@ -425,13 +434,13 @@ class BeadsCalibrationWidget:
 
 class SetPSFParamWidget(widgets.GridspecLayout):
     def __init__(self):
-        super().__init__(11, 2)
+        super().__init__(9, 2)
 
         # create widgets
         self.calibration_file_receiver = SelectFilesButton(nofile_description='Select the calibration file')
         self.load_calibration_button = widgets.Button(description='Load from calib', width='100%', height='80px')
         self.load_calibration_button.on_click(self.load_calibration_params)
-        self.psf_param_label = widgets.Label(value='PSF parameters', width='100%')
+        self.psf_param_label = widgets.Label(value='PSF parameters', width='100%', style={'font_weight': 'bold'})
         self.na_receiver = widgets.BoundedFloatText(description='NA:',
                                                     value=1.5,
                                                     step=0.1,
@@ -446,7 +455,7 @@ class SetPSFParamWidget(widgets.GridspecLayout):
                                                         value=1.518,
                                                         step=0.1)
         self.refcov_receiver = widgets.BoundedFloatText(description='RI coverslip:',
-                                                        value=1.518,
+                                                        value=1.524,
                                                         step=0.1)
         self.refimm_receiver = widgets.BoundedFloatText(description='RI oil:',
                                                         value=1.518,
@@ -472,7 +481,7 @@ class SetPSFParamWidget(widgets.GridspecLayout):
                                                       max=1000,
                                                       min=1)
         self.psf_size_receiver = widgets.BoundedIntText(description='PSF size:',
-                                                        value=51,
+                                                        value=27,
                                                         step=1,
                                                         max=100,
                                                         min=17)
@@ -514,49 +523,76 @@ class SetPSFParamWidget(widgets.GridspecLayout):
         # self.output = widgets.Output()
 
         # layout
-        # self[0, :] = self.load_calibration_button
-        self[1, :] = self.psf_param_label
-        self[2, 0] = self.na_receiver
-        self[2, 1] = self.wavelength_receiver
-        self[3, 0] = self.refmed_receiver
-        self[3, 1] = self.refcov_receiver
-        self[4, 0] = self.refimm_receiver
-        self[4, 1] = self.otf_rescale_receiver
-        self[5, 0] = self.pixelsizex_receiver
-        self[5, 1] = self.pixelsizey_receiver
-        self[6, 0] = self.npupil_receiver
-        self[6, 1] = self.psf_size_receiver
-        self[7, :] = self.objstage0_receiver
+        self[0, 0] = self.na_receiver
+        self[0, 1] = self.wavelength_receiver
+        self[1, 0] = self.refmed_receiver
+        self[1, 1] = self.refcov_receiver
+        self[2, 0] = self.refimm_receiver
+        self[2, 1] = self.otf_rescale_receiver
+        self[3, 0] = self.pixelsizex_receiver
+        self[3, 1] = self.pixelsizey_receiver
+        self[4, 0] = self.npupil_receiver
+        self[4, 1] = self.psf_size_receiver
+        self[5, :] = self.objstage0_receiver
         # self[7, 1] = self.zemit0_receiver
-        self[8, :] = self.zernike_coef_label
-        self[9:11, :] = self.zernike_mode
+        self[6, :] = self.zernike_coef_label
+        self[7:9, :] = self.zernike_mode
         # self[11, :] = self.ok_button
 
         self.psf_params_dict = {}
 
     def load_calibration_params(self, b):
         try:
-            zernike_fit_results = scio.loadmat(self.calibration_file_receiver.files)['zernike_fit_results']
+            psf_params_fitted = sio.loadmat(self.calibration_file_receiver.files, simplify_cells=True)['psf_params_fitted']
         except:
             raise ValueError('Please select a valid calibration file')
-        self.na_receiver.value = zernike_fit_results['na']
-        self.wavelength_receiver.value = zernike_fit_results['wavelength']
-        self.refmed_receiver.value = zernike_fit_results['refmed']
-        self.refcov_receiver.value = zernike_fit_results['refcov']
-        self.refimm_receiver.value = zernike_fit_results['refimm']
-        self.otf_rescale_receiver.value = zernike_fit_results['otf_rescale']
-        self.pixelsizex_receiver.value = zernike_fit_results['pixelSizeX']
-        self.pixelsizey_receiver.value = zernike_fit_results['pixelSizeY']
+        self.na_receiver.value = psf_params_fitted['na']
+        self.wavelength_receiver.value = psf_params_fitted['wavelength']
+        self.refmed_receiver.value = psf_params_fitted['refmed']
+        self.refcov_receiver.value = psf_params_fitted['refcov']
+        self.refimm_receiver.value = psf_params_fitted['refimm']
+        self.otf_rescale_receiver.value = psf_params_fitted['otf_rescale_xy'][0]
+        self.pixelsizex_receiver.value = psf_params_fitted['pixel_size_xy'][0]
+        self.pixelsizey_receiver.value = psf_params_fitted['pixel_size_xy'][1]
 
-        zernike_mode = zernike_fit_results['zernike_coefficients'][0, 0][0:2, :]
-        zernike_coef = zernike_fit_results['zernike_coefficients'][0, 0][2, :]
+        zernike_mode = psf_params_fitted['zernike_mode']
+        zernike_coef = psf_params_fitted['zernike_coef']
 
         for i in range(21):
             tmp = self.zernike_mode[0, i].value
             radial_order, angular_freq = tmp.split(',')
             radial_order = int(radial_order)
             angular_freq = int(angular_freq)
-            assert radial_order == zernike_mode[0, i] and angular_freq == zernike_mode[1, i], \
+            assert radial_order == zernike_mode[i, 0] and angular_freq == zernike_mode[i, 1], \
+                'calibration file does not match'
+            self.zernike_mode[1, i].value = str(zernike_coef[i])
+
+    def set_calibration_params(self, files):
+        try:
+            psf_params_fitted = sio.loadmat(files, simplify_cells=True)['psf_params_fitted']
+        except:
+            raise ValueError('Please select a valid calibration file')
+        self.na_receiver.value = psf_params_fitted['na']
+        self.wavelength_receiver.value = psf_params_fitted['wavelength']
+        self.refmed_receiver.value = psf_params_fitted['refmed']
+        self.refcov_receiver.value = psf_params_fitted['refcov']
+        self.refimm_receiver.value = psf_params_fitted['refimm']
+        self.otf_rescale_receiver.value = psf_params_fitted['otf_rescale_xy'][0]
+        self.pixelsizex_receiver.value = psf_params_fitted['pixel_size_xy'][0]
+        self.pixelsizey_receiver.value = psf_params_fitted['pixel_size_xy'][1]
+        self.npupil_receiver.value = psf_params_fitted['npupil']
+        self.psf_size_receiver.value = psf_params_fitted['psf_size']
+        self.objstage0_receiver.children[1].value = psf_params_fitted['objstage0']
+
+        zernike_mode = psf_params_fitted['zernike_mode']
+        zernike_coef = psf_params_fitted['zernike_coef']
+
+        for i in range(21):
+            tmp = self.zernike_mode[0, i].value
+            radial_order, angular_freq = tmp.split(',')
+            radial_order = int(radial_order)
+            angular_freq = int(angular_freq)
+            assert radial_order == zernike_mode[i, 0] and angular_freq == zernike_mode[i, 1], \
                 'calibration file does not match'
             self.zernike_mode[1, i].value = str(zernike_coef[i])
 
@@ -597,6 +633,7 @@ class SetPSFParamWidget(widgets.GridspecLayout):
         return self.psf_params_dict
 
     def display_notebook_gui(self, file_receiver=True):
+        display(self.psf_param_label)
         if file_receiver:
             display(self.calibration_file_receiver)
             display(self.load_calibration_button)
@@ -608,7 +645,7 @@ class sCMOSParamWidget(widgets.GridspecLayout):
         super().__init__(3, 2)
 
         self.qe_receiver = widgets.BoundedFloatText(description='QE:',
-                                                    value=0.9,
+                                                    value=0.81,
                                                     min=0.1,
                                                     max=1,
                                                     step=0.1,)
@@ -626,7 +663,7 @@ class sCMOSParamWidget(widgets.GridspecLayout):
                                                                step=0.1,)
         self[1, 0] = self.readout_noise_receiver
         self.eperadu_receiver = widgets.BoundedFloatText(description='e-/ADU:',
-                                                            value=0.5,
+                                                            value=0.47,
                                                             min=0.001,
                                                             max=1000,
                                                             step=0.1,)
@@ -689,7 +726,7 @@ class IdeaCamParamWidget(widgets.GridspecLayout):
 
 class SetCamParamWidget:
     def __init__(self):
-        self.camera_params_label = widgets.Label(value='Camera parameters')
+        self.camera_params_label = widgets.Label(value='Camera parameters', style={'font_weight': 'bold'})
         self.select_cam_dropdown = widgets.Dropdown(options=['Idea Camera', 'sCMOS', 'EMCCD'],
                                                     value='sCMOS',
                                                     description='Camera type:',
@@ -737,15 +774,39 @@ class SetCamParamWidget:
 
         return self.camera_params_dict
 
+    def set_calibration_params(self, files):
+        try:
+            camera_params_dict = sio.loadmat(files, simplify_cells=True)['calib_params_dict']['camera_params_dict']
+        except:
+            raise ValueError('Please select a valid calibration file')
+
+        if camera_params_dict['camera_type'].upper() == 'IDEA':
+            self.select_cam_dropdown.value = 'Idea Camera'
+        elif camera_params_dict['camera_type'].upper() == 'SCMOS':
+            self.select_cam_dropdown.value = 'sCMOS'
+            self.scmos_param_receiver.qe_receiver.value = camera_params_dict['qe']
+            self.scmos_param_receiver.spurious_charge_receiver.value = camera_params_dict['spurious_charge']
+            self.scmos_param_receiver.readout_noise_receiver.value = camera_params_dict['read_noise_sigma']
+            self.scmos_param_receiver.eperadu_receiver.value = camera_params_dict['e_per_adu']
+            self.scmos_param_receiver.baseline_receiver.value = camera_params_dict['baseline']
+        elif camera_params_dict['camera_type'].upper() == 'EMCCD':
+            self.select_cam_dropdown.value = 'EMCCD'
+            self.emccd_param_receiver.qe_receiver.value = camera_params_dict['qe']
+            self.emccd_param_receiver.spurious_charge_receiver.value = camera_params_dict['spurious_charge']
+            self.emccd_param_receiver.emgain_receiver.value = camera_params_dict['em_gain']
+            self.emccd_param_receiver.readout_noise_receiver.value = camera_params_dict['read_noise_sigma']
+            self.emccd_param_receiver.eperadu_receiver.value = camera_params_dict['e_per_adu']
+            self.emccd_param_receiver.baseline_receiver.value = camera_params_dict['baseline']
+
     def display_notebook_gui(self):
         display(self.camera_params_label)
         display(self.select_cam_dropdown)
         display(self.camera_param_receiver)
 
 
-class DeepLocSetSamplerParamWidget(widgets.GridspecLayout):
+class SetSamplerParamWidget(widgets.GridspecLayout):
     def __init__(self):
-        super(DeepLocSetSamplerParamWidget, self).__init__(7, 2)
+        super(SetSamplerParamWidget, self).__init__(6, 2)
 
         self.local_context_receiver = widgets.Checkbox(description='Local context',
                                                        value=True,
@@ -754,7 +815,7 @@ class DeepLocSetSamplerParamWidget(widgets.GridspecLayout):
                                                          value=True,
                                                          indent=False,)
         self.train_size_receiver = widgets.BoundedIntText(description='Train size:',
-                                                          value=128,
+                                                          value=64,
                                                           min=32,
                                                           max=1024,
                                                           step=4,)
@@ -778,14 +839,16 @@ class DeepLocSetSamplerParamWidget(widgets.GridspecLayout):
                                                                           readout=True,
                                                                           readout_format='d',)
                                                    ])
-        self.z_range_receiver = widgets.IntRangeSlider(description='Z range:',
-                                                       value=[-700, 700],
-                                                       min=-3000,
-                                                       max=3000,
-                                                       step=50,
-                                                       orientation='horizontal',
-                                                       readout=True,
-                                                       readout_format='d',)
+        self.z_range_receiver = widgets.HBox([widgets.Label(value='Z range:'),
+                                              widgets.IntRangeSlider(
+                                                  value=[-700, 700],
+                                                  min=-3000,
+                                                  max=3000,
+                                                  step=50,
+                                                  orientation='horizontal',
+                                                  readout=True,
+                                                  readout_format='d', )
+                                              ])
         self.bg_range_receiver = widgets.IntRangeSlider(description='BG range:',
                                                         value=[50, 100],
                                                         min=0,
@@ -794,32 +857,38 @@ class DeepLocSetSamplerParamWidget(widgets.GridspecLayout):
                                                         orientation='horizontal',
                                                         readout=True,
                                                         readout_format='d',)
-        # self.ok_button = widgets.Button(description='OK')
-        # self.ok_button.on_click(self.set_sampler_params)
+        self.bg_perlin_receiver = widgets.Checkbox(description='BG perlin',
+                                                   value=True,
+                                                   indent=False, )
 
         # layout
-        self[0, :] = widgets.Label(value='Sampler parameters')
+        self[0, :] = widgets.Label(value='Sampler parameters', style={'font_weight': 'bold'})
         self[1, 0] = self.local_context_receiver
         self[1, 1] = self.robust_training_receiver
         self[2, 0] = self.train_size_receiver
         self[2, 1] = self.num_em_avg_receiver
         self[3, :] = self.num_eval_data_receiver
-        self[4, :] = self.photon_range_receiver
-        self[5, 0] = self.z_range_receiver
-        self[5, 1] = self.bg_range_receiver
+        self[4, 0] = self.photon_range_receiver
+        self[4, 1] = self.z_range_receiver
+        self[5, 0] = self.bg_range_receiver
+        self[5, 1] = self.bg_perlin_receiver
         # self[6, :] = self.ok_button
 
         self.sampler_params_dict = {}
 
-    def set_sampler_params(self, b):
+    def get_sampler_params(self):
         self.sampler_params_dict['local_context'] = self.local_context_receiver.value
         self.sampler_params_dict['robust_training'] = self.robust_training_receiver.value
         self.sampler_params_dict['train_size'] = self.train_size_receiver.value
         self.sampler_params_dict['num_em_avg'] = self.num_em_avg_receiver.value
         self.sampler_params_dict['num_evaluation_data'] = self.num_eval_data_receiver.value
         self.sampler_params_dict['photon_range'] = self.photon_range_receiver.children[1].value
-        self.sampler_params_dict['z_range'] = self.z_range_receiver.value
+        self.sampler_params_dict['z_range'] = self.z_range_receiver.children[1].value
         self.sampler_params_dict['bg_range'] = self.bg_range_receiver.value
+        self.sampler_params_dict['bg_perlin'] = self.bg_perlin_receiver.value
+
+        return self.sampler_params_dict
+
 
     def display_notebook_gui(self):
         display(self)
@@ -827,9 +896,14 @@ class DeepLocSetSamplerParamWidget(widgets.GridspecLayout):
 
 class DeepLocSetLearnParamWidget:
     def __init__(self):
+        self.exp_file_receiver = SelectFilesButton(nofile_description='Optional: select the experiment file to estimate background range')
+        self.calibration_file_receiver = SelectFilesButton(nofile_description='Select the calibration file')
+        self.load_calibration_button = widgets.Button(description='Load from calib', width='100%', height='80px')
+        self.load_calibration_button.on_click(self.load_calibration_params)
+
         self.psf_param_widget = SetPSFParamWidget()
         self.cam_param_widget = SetCamParamWidget()
-        self.sampler_param_widget = DeepLocSetSamplerParamWidget()
+        self.sampler_param_widget = SetSamplerParamWidget()
         self.ok_button = widgets.Button(description='OK')
         self.ok_button.on_click(self.set_learn_params)
         self.output_widget = widgets.Output()
@@ -837,25 +911,30 @@ class DeepLocSetLearnParamWidget:
         self.deeploc_params_dict = {}
 
     def set_learn_params(self, b):
-        self.psf_param_widget.set_psf_params(None)
-        self.cam_param_widget.set_camera_params(None)
-        self.sampler_param_widget.set_sampler_params(None)
+        psf_params_dict = self.psf_param_widget.get_psf_params()
+        camera_params_dict = self.cam_param_widget.get_camera_params()
+        sampler_params_dict = self.sampler_param_widget.get_sampler_params()
 
-        self.deeploc_params_dict['psf_params_dict'] = self.psf_param_widget.psf_params_dict
-        self.deeploc_params_dict['camera_params_dict'] = self.cam_param_widget.camera_params_dict
-        self.deeploc_params_dict['sampler_params_dict'] = self.sampler_param_widget.sampler_params_dict
+        self.deeploc_params_dict['psf_params_dict'] = psf_params_dict
+        self.deeploc_params_dict['camera_params_dict'] = camera_params_dict
+        self.deeploc_params_dict['sampler_params_dict'] = sampler_params_dict
 
         self.output_widget.clear_output()
         with self.output_widget:
-            print('DeepLoc learning parameters: ')
-            print(self.deeploc_params_dict)
+            print('Check the parameters:')
+            dict_str = str(self.deeploc_params_dict).replace('\n', '')
+            print(dict_str)
+            # print(self.deeploc_params_dict)
 
-        # self.output_widget.clear_output()
-        # self.output_widget.append_stdout('DeepLoc learning parameters: ')
-        # self.output_widget.append_stdout(str(self.deeploc_params_dict))
+    def load_calibration_params(self, b):
+        self.psf_param_widget.set_calibration_params(self.calibration_file_receiver.files)
+        self.cam_param_widget.set_calibration_params(self.calibration_file_receiver.files)
 
     def display_notebook_gui(self):
-        self.psf_param_widget.display_notebook_gui()
+        display(self.exp_file_receiver)
+        display(self.calibration_file_receiver)
+        display(self.load_calibration_button)
+        self.psf_param_widget.display_notebook_gui(file_receiver=False)
         self.cam_param_widget.display_notebook_gui()
         self.sampler_param_widget.display_notebook_gui()
         display(self.ok_button)
@@ -874,6 +953,7 @@ class DeepLocSetAnalyzerParamWidget:
 
         # self.select_data_button = SelectFolderButton(nofile_description='Select data folder')
         self.select_data_button = SelectFilesButton(nofile_description='Select tiff file')
+        self.select_data_button.observe(self.set_save_csv_button_initialdir, names='description')
 
         self.save_csv_button = SaveFilesButton(nofile_description='Save predicted CSV',
                                                initialdir='../../results/',
@@ -890,7 +970,7 @@ class DeepLocSetAnalyzerParamWidget:
                                                           min=1,
                                                           max=1024)
         self.sub_fov_size_receiver = widgets.BoundedIntText(description='Sub-FOV',
-                                                            value=128,
+                                                            value=256,
                                                             step=4,
                                                             min=32,
                                                             max=2048)
@@ -943,13 +1023,19 @@ class DeepLocSetAnalyzerParamWidget:
             ailoc.common.plot_train_record(deeploc_model)
 
     def set_save_csv_button_initialdir(self, change):
-        if change['new'] == self.select_deeploc_button.nofile_description:
+        if self.select_deeploc_button.files is None or self.select_data_button.files is None:
             self.save_csv_button.initialdir = '../../results/'
             self.save_csv_button.initialfile = 'predictions.csv'
         else:
             self.save_csv_button.initialdir = os.path.dirname(self.select_deeploc_button.files)
-            self.save_csv_button.initialfile = os.path.basename(self.select_deeploc_button.files).split('.')[0] + \
-                                               '_predictions.csv'
+            loc_model_path = self.select_deeploc_button.files
+            if self.select_folder_receiver.value:
+                image_path = os.path.dirname(self.select_data_button.files)
+            else:
+                image_path = self.select_data_button.files
+            save_path = os.path.split(loc_model_path)[-1].split('.')[0] + \
+                        '_' + os.path.split(image_path)[-1].split('.')[0] + '_predictions.csv'
+            self.save_csv_button.initialfile = save_path
 
     def display_notebook_gui(self):
         display(self.select_deeploc_button)

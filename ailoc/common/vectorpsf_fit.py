@@ -15,6 +15,8 @@ import ailoc.simulation
 
 
 def segment_local_max_smlm_data(images, camera, filter_sigma, roi_size, threshold_abs):
+    # # TODO: maybe we can use single molecule data to estimate the photon range and zernike aberrations
+    # #  training density, etc.
 
     molecule_images = []
     for i in range(images.shape[0]):
@@ -161,7 +163,7 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
             y_fitted[i] += torch.sum(y_mesh*torch.mean(data_stacked[slice_tmp], dim=0))/(photons_fitted.mean()*1000)
 
     # # AdamW
-    # tolerance = 1e-7
+    # tolerance = 1e-5
     # old_loss = 1e10
     # optimizer = torch.optim.AdamW([
     #     psf_torch_fitted.zernike_coef,
@@ -170,7 +172,7 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
     #     objstage_fitted,
     #     photons_fitted,
     #     bg_fitted
-    #     ], lr=10)
+    #     ], lr=5)
     #
     # for iterations in range(10000):
     #     x_tmp = ailoc.common.gpu(torch.zeros(n_beads * n_zstack))
@@ -208,7 +210,8 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
          photons_fitted,
          bg_fitted
          ],
-         lr=0.5,)
+         lr=0.5,
+         line_search_fn='strong_wolfe')
     # lambda_reg = 0
     lambda_reg = 1e4
 
@@ -230,6 +233,8 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
         photons_tmp = torch.clamp(photons_fitted*1000, min=0)
         bg_tmp = torch.clamp(bg_fitted, min=0)
 
+        optimizer.zero_grad()
+
         psf_torch_fitted._pre_compute()
         mu = psf_torch_fitted.simulate_parallel(x_tmp, y_tmp, z_tmp, photons_tmp, objstage_tmp) + bg_tmp[:, None, None]
 
@@ -248,7 +253,6 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
             loss = -model.log_prob(data_stacked).sum()
             # loss = -torch.sum(data_stacked * torch.log(mu) - mu - torch.lgamma(data_stacked + 1))
 
-        optimizer.zero_grad()
         loss.backward()
         return loss.detach()
 

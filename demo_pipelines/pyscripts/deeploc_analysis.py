@@ -9,8 +9,9 @@ import ailoc.common
 
 def deeploc_analyze():
 
-    loc_model_path = '../../results/2023-09-01-11DeepLoc.pt'
-    image_path = '../../datasets/mismatch_data2'   # can be a tiff file path or a folder path
+    loc_model_path = '../../results/2023-10-18-16DeepLoc.pt'
+    # can be a tiff file path or a folder path
+    image_path = '../../datasets/sw_npc_20211028/NUP96_SNP647_3D_512_20ms_hama_mm_1800mW_3/'
     save_path = '../../results/' + \
                 os.path.split(loc_model_path)[-1].split('.')[0] + \
                 '_'+os.path.split(image_path)[-1].split('.')[0]+'_predictions.csv'
@@ -34,7 +35,7 @@ def deeploc_analyze():
 
     deeploc_analyzer.check_single_frame_output(frame_num=3)
 
-    preds_rescale_array = deeploc_analyzer.divide_and_conquer()
+    preds_array, preds_rescale_array = deeploc_analyzer.divide_and_conquer()
 
     # # read the ground truth and calculate metrics
     # gt_array = ailoc.common.read_csv_array("../../datasets/match_data/activations.csv")

@@ -23,7 +23,7 @@ def beads_stack_calibrate():
     psf_params_dict = {'na': 1.5,
                        'wavelength': 680,  # unit: nm
                        'refmed': 1.518,
-                       'refcov': 1.524,
+                       'refcov': 1.518,
                        'refimm': 1.518,
                        'zernike_mode': zernike_aber[:, 0:2],
                        'zernike_coef': zernike_aber[:, 2],
@@ -31,7 +31,7 @@ def beads_stack_calibrate():
                        'pixel_size_xy': (108, 108),
                        'otf_rescale_xy': (0.5, 0.5),  # this is an empirical value, which maybe due to the pixelation
                        'npupil': 64,
-                       'psf_size': 51}
+                       'psf_size': 71}
 
     # set camera parameters
     camera_params_dict = {'camera_type': 'scmos',

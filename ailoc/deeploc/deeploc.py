@@ -253,8 +253,9 @@ class DeepLoc(ailoc.common.XXLoc):
 
                 n_per_img.append(inference_dict_tmp['prob'].sum((-2, -1)).mean())
 
-                molecule_array_tmp[:, 0] += i*batch_size
-                molecule_list_pred += molecule_array_tmp.tolist()
+                if len(molecule_array_tmp) > 0:
+                    molecule_array_tmp[:, 0] += i * batch_size
+                    molecule_list_pred += molecule_array_tmp.tolist()
 
             metric_dict, paired_array = ailoc.common.pair_localizations(prediction=np.array(molecule_list_pred),
                                                                         ground_truth=self.evaluation_dataset['molecule_list_gt'],
