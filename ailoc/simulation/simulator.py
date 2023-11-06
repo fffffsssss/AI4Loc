@@ -19,7 +19,8 @@ class Simulator:
             sampler_params (dict): parameters for the molecule sampler
         """
 
-        self.psf_model = ailoc.simulation.VectorPSFCUDA(psf_params)
+        # self.psf_model = ailoc.simulation.VectorPSFCUDA(psf_params)
+        self.psf_model = ailoc.simulation.VectorPSFTorch(psf_params)
         if camera_params['camera_type'].upper() == 'EMCCD':
             self.camera = ailoc.simulation.EMCCD(camera_params)
             self.mol_sampler = ailoc.simulation.MoleculeSampler(sampler_params,
@@ -108,8 +109,14 @@ class Simulator:
 
         x,y,z,photons = self._translate_maps(delta_map.reshape([-1, height, width]), xyzph_map.reshape([4, -1, height, width]))
 
-        psf_patches = psf_model.simulate(x, y, z, photons, zernike_coefs) \
-            if zernike_coefs is not None else psf_model.simulate(x, y, z, photons)
+        with torch.no_grad():
+            if isinstance(psf_model, ailoc.simulation.VectorPSFCUDA):
+                psf_patches = psf_model.simulate(x, y, z, photons, zernike_coefs) \
+                    if zernike_coefs is not None else psf_model.simulate(x, y, z, photons)
+            elif isinstance(psf_model, ailoc.simulation.VectorPSFTorch):
+                psf_patches = psf_model.simulate_parallel(x, y, z, photons)
+            else:
+                raise NotImplementedError('PSF model not supported.')
 
         raw_data = self.place_psfs(delta_map.reshape([-1, height, width]), psf_patches) + bg.reshape([-1, height, width])
 

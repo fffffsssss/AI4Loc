@@ -32,6 +32,7 @@ defusedxml==0.7.1
 Deprecated==1.2.14
 docstring-parser==0.15
 docutils==0.17.1
+einops==0.7.0
 exceptiongroup==1.1.3
 executing==1.2.0
 fastjsonschema==2.18.0
@@ -170,6 +171,7 @@ stackview==0.6.4
 superqt==0.5.3
 sympy==1.11.1
 terminado==0.17.1
+thop @ git+https://github.com/Lyken17/pytorch-OpCounter.git@43c064afb71383501e41eaef9e8c8407265cf77f
 tifffile==2023.8.12
 tinycss2==1.2.1
 tomli==2.0.1

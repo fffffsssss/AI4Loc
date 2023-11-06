@@ -286,6 +286,7 @@ class VectorPSFTorch(VectorPSF):
         self.zernike_mode = torch.tensor(psf_params['zernike_mode'], device='cuda', dtype=self.data_type)
         self.zernike_coef = torch.tensor(psf_params['zernike_coef'], device='cuda', dtype=self.data_type,
                                          requires_grad=req_grad)
+        self.zernike_coef_map = None
         self.objstage0 = torch.tensor(psf_params['objstage0'], device='cuda', dtype=self.data_type,
                                       requires_grad=req_grad)
         try:

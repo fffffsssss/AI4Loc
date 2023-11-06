@@ -1,6 +1,8 @@
 import numpy as np
 from scipy.spatial.distance import cdist
 
+import ailoc.common
+
 
 def find_frame(molecule_list, frame_nbr, frame_parm_pos=0):
     """
@@ -67,7 +69,9 @@ def pair_localizations(prediction, ground_truth, frame_num=None, fov_xy_nm=None,
     gt_list = gt_list[: find_frame(gt_list, frame_num)]
 
     # get the molecules in the specified FOV
-    if fov_xy_nm is not None:
+    if fov_xy_nm is not None and (len(pred_list) != 0) and (len(gt_list) != 0):
+        fov_xy_nm = [int(ailoc.common.cpu(item)) for item in fov_xy_nm]
+
         gt_array = np.array(gt_list)
         pred_array = np.array(pred_list)
 
@@ -133,7 +137,9 @@ def pair_localizations(prediction, ground_truth, frame_num=None, fov_xy_nm=None,
                 num_gt_remain -= 1
                 num_pred_remain -= 1
                 paired_list.append([i, gt_frame[row, 0], gt_frame[row, 1], gt_frame[row, 2], gt_frame[row, 3],
-                                    pred_frame[col, 0], pred_frame[col, 1], pred_frame[col, 2], pred_frame[col, 3]])
+                                    pred_frame[col, 0], pred_frame[col, 1], pred_frame[col, 2], pred_frame[col, 3],
+                                    pred_frame[col, 5], pred_frame[col, 6], pred_frame[col, 7]
+                                    ])
                 dist_lat[row, :] = np.inf
                 dist_lat[:, col] = np.inf
                 dist_vol[row, :] = np.inf

@@ -40,6 +40,8 @@ def data_analyze(loc_model, data, sub_fov_xy, camera, batch_size=32, retain_infe
         assert ((h == sub_fov_xy[3] - sub_fov_xy[2] + 1) and (w == sub_fov_xy[1] - sub_fov_xy[0] + 1)), \
             'data shape does not match sub_fov_xy'
 
+        pixel_size_xy = ailoc.common.cpu(loc_model.data_simulator.psf_model.pixel_size_xy)
+
         local_context = getattr(loc_model, 'local_context', False)
 
         # if using local context, the rolling inference strategy will be automatically applied in
@@ -65,8 +67,8 @@ def data_analyze(loc_model, data, sub_fov_xy, camera, batch_size=32, retain_infe
             # adjust the frame number and the x, y position of the molecules
             if len(molecule_array_tmp) > 0:
                 molecule_array_tmp[:, 0] += i * batch_size
-                molecule_array_tmp[:, 1] += sub_fov_xy[0] * loc_model.data_simulator.psf_model.pixel_size_xy[0]
-                molecule_array_tmp[:, 2] += sub_fov_xy[2] * loc_model.data_simulator.psf_model.pixel_size_xy[1]
+                molecule_array_tmp[:, 1] += sub_fov_xy[0] * pixel_size_xy[0]
+                molecule_array_tmp[:, 2] += sub_fov_xy[2] * pixel_size_xy[1]
             molecule_list_pred += molecule_array_tmp.tolist()
 
             inference_dict_list.append(inference_dict_tmp) if retain_infer_map else None
@@ -368,7 +370,7 @@ class SmlmDataAnalyzer:
         self.over_cut = over_cut
         self.fov_xy_start = fov_xy_start if fov_xy_start is not None else (0, 0)
         self.num_workers = num_workers
-        self.pixel_size_xy = loc_model.data_simulator.psf_model.pixel_size_xy
+        self.pixel_size_xy = ailoc.common.cpu(loc_model.data_simulator.psf_model.pixel_size_xy)
         self.ui_print_signal = ui_print_signal
 
         print_message_tmp = f'the file to save the predictions is: {self.output_path}'

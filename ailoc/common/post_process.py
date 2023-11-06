@@ -153,7 +153,7 @@ def gmm_to_localizations(inference_dict, thre_integrated, pixel_size_xy, z_scale
     """
 
     inference_dict['prob_sampled'] = sample_prob(inference_dict['prob'], batch_size, thre_integrated)
-    molecule_array = inference_map_to_localizations(inference_dict, pixel_size_xy, z_scale, photon_scale)
+    molecule_array = inference_map_to_localizations(inference_dict, ailoc.common.cpu(pixel_size_xy), z_scale, photon_scale)
     inference_dict['bg_sampled'] = inference_dict['bg'] * bg_scale
 
     return molecule_array, inference_dict

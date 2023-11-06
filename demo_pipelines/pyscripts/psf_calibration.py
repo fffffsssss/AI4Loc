@@ -13,18 +13,18 @@ def beads_stack_calibrate():
     """
 
     # load bead stack
-    beads_file_name = "../../datasets/npc_DMO1.2__5/beads_DMO1.2_+-1um_10nm_2/DMO1.2_+-1um_10nm_2_MMStack_Default.ome.tif"
+    beads_file_name = "../../datasets/NPC_DMO6_alpha30/beads-DMO6_alpha30_+-3umstep50nm_5/DMO6_alpha30_+-3umstep50nm_5_MMStack_Default.ome.tif"
 
     # set psf parameters
     zernike_aber = np.array([2, -2, 0, 2, 2, 0, 3, -1, 0, 3, 1, 0, 4, 0, 0, 3, -3, 0, 3, 3, 0,
                              4, -2, 0, 4, 2, 0, 5, -1, 0, 5, 1, 0, 6, 0, 0, 4, -4, 0, 4, 4, 0,
                              5, -3, 0, 5, 3, 0, 6, -2, 0, 6, 2, 0, 7, 1, 0, 7, -1, 0, 8, 0, 0],
                             dtype=np.float32).reshape([21, 3])
-    psf_params_dict = {'na': 1.5,
+    psf_params_dict = {'na': 1.35,
                        'wavelength': 680,  # unit: nm
-                       'refmed': 1.518,
-                       'refcov': 1.518,
-                       'refimm': 1.518,
+                       'refmed': 1.406,
+                       'refcov': 1.524,
+                       'refimm': 1.406,
                        'zernike_mode': zernike_aber[:, 0:2],
                        'zernike_coef': zernike_aber[:, 2],
                        'objstage0': 0,
@@ -42,7 +42,7 @@ def beads_stack_calibrate():
                           'baseline': 100.0}
 
     # set calibration parameters
-    calib_params_dict = {'z_step': 10,
+    calib_params_dict = {'z_step': 50,
                          'filter_sigma': 3,
                          'threshold_abs': 20,
                          'fit_brightest': True,}

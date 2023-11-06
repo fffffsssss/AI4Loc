@@ -227,6 +227,7 @@ class MoleculeSampler:
         """
 
         random_flag = np.random.rand() < 0.5
+        # random_flag = True
 
         if self.bg_perlin and random_flag:
             bg_s = np.zeros((batch_size, self.train_size, self.train_size))

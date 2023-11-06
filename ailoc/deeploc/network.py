@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import thop
 
 
 class Unet(nn.Module):
@@ -115,22 +116,26 @@ class Outnet(nn.Module):
         nn.init.zeros_(self.bg_out2.bias)
 
     def forward(self, x):
-
-        outputs = {}
+        # outputs = {}
 
         p = F.elu(self.p_out1(x))
-        outputs['p'] = self.p_out2(p)
+        # outputs['p'] = self.p_out2(p)
+        p = self.p_out2(p)
 
         xyzph = F.elu(self.xyzph_out1(x))
-        outputs['xyzph'] = self.xyzph_out2(xyzph)
+        # outputs['xyzph'] = self.xyzph_out2(xyzph)
+        xyzph = self.xyzph_out2(xyzph)
 
         xyzphs = F.elu(self.xyzphs_out1(x))
-        outputs['xyzph_sig'] = self.xyzphs_out2(xyzphs)
+        # outputs['xyzph_sig'] = self.xyzphs_out2(xyzphs)
+        xyzphs = self.xyzphs_out2(xyzphs)
 
         bg = F.elu(self.bg_out1(x))
-        outputs['bg'] = self.bg_out2(bg)
+        # outputs['bg'] = self.bg_out2(bg)
+        bg = self.bg_out2(bg)
 
-        return outputs
+        # return outputs
+        return p, xyzph, xyzphs, bg
 
 
 class DeepLocNet(nn.Module):
@@ -149,6 +154,8 @@ class DeepLocNet(nn.Module):
         self.frame_anlz_module = Unet(n_inp=1, n_filters=48, n_stages=2, pad=1, ker_size=3).cuda()
         self.temp_context_module = Unet(n_inp=self.n_features, n_filters=48, n_stages=2, pad=1, ker_size=3).cuda()
         self.out_module = Outnet(n_inp=48, pad=1, ker_size=3).cuda()
+
+        self.get_parameter_number()
 
     def forward(self, x_input):
         """
@@ -201,13 +208,16 @@ class DeepLocNet(nn.Module):
         fm_out_ln = nn.functional.layer_norm(fm_out, normalized_shape=[self.n_features, img_h, img_w])
 
         cm_out = self.temp_context_module(fm_out_ln)
-        outputs = self.out_module(cm_out)
+        p, xyzph, xyzphs, bg = self.out_module(cm_out)
+        # p, xyzph, xyzphs, bg = self.out_module(fm_out_ln)  # skip the temporal context module
 
         # todo:  may need to set an extra scale and offset for the output considering the sensitive
         #  range of the activation function sigmoid and tanh
-        p_pred = torch.sigmoid(torch.clamp(outputs['p'], min=-16, max=16))[:, 0]  # probability
+        # p_pred = torch.sigmoid(torch.clamp(outputs['p'], min=-16, max=16))[:, 0]  # probability
+        p_pred = torch.sigmoid(torch.clamp(p, min=-16, max=16))[:, 0]  # probability
 
-        xyzph_pred = outputs['xyzph']
+        # xyzph_pred = outputs['xyzph']
+        xyzph_pred = xyzph
 
         # output xy range is (-1, 1), the training sampling range is (-0.5,0.5)
         xyzph_pred[:, :2] = torch.tanh(xyzph_pred[:, :2])
@@ -218,14 +228,26 @@ class DeepLocNet(nn.Module):
         # output photon range is (0, 1), the training sampling range is in (0,1)
         xyzph_pred[:, 3] = torch.sigmoid(xyzph_pred[:, 3])
 
-        # scale the uncertainty and add epsilon, the output range becomes (0.001, 3.001),
+        # scale the uncertainty and add epsilon, the output range becomes (0.0001, 3.0001),
         # maybe can use RELU for unlimited upper range and stable gradient
-        xyzph_sig_pred = torch.sigmoid(outputs['xyzph_sig']) * 3 + 0.001
+        # xyzph_sig_pred = torch.sigmoid(outputs['xyzph_sig']) * 3 + 0.0001
+        xyzph_sig_pred = torch.sigmoid(xyzphs) * 3 + 0.0001
 
         # output bg range is (0, 1), the training sampling range is in (0,1)
-        bg_pred = torch.sigmoid(outputs['bg'])[:, 0]  # bg
+        # bg_pred = torch.sigmoid(outputs['bg'][:, 0])  # bg
+        bg_pred = torch.sigmoid(bg[:, 0])  # bg
 
         return p_pred, xyzph_pred, xyzph_sig_pred, bg_pred
+
+    def get_parameter_number(self):
+        # print(f'Total network parameters: {sum(p.numel() for p in self.parameters() if p.requires_grad)/1e6:.2f}M')
+
+        dummy_input = torch.randn(1, 3, 64, 64).cuda() if self.local_context else torch.randn(1, 1, 64, 64).cuda()
+        macs, params = thop.profile(self, inputs=(dummy_input,))
+        macs, params = thop.clever_format([macs, params], '%.3f')
+
+        print('Params:', params)
+        print(f'MACs:{macs}, (input shape: {dummy_input.shape})')
 
 
 

@@ -459,3 +459,44 @@ def plot_preds_distribution(preds, preds_final):
     plt.tight_layout()
     plt.show()
     return fig, axes
+
+
+def plot_rmse_uncertainty(paired_locs):
+    error_x = np.sqrt((paired_locs[:, 1] - paired_locs[:, 5]) ** 2)
+    error_y = np.sqrt((paired_locs[:, 2] - paired_locs[:, 6]) ** 2)
+    error_z = np.sqrt((paired_locs[:, 3] - paired_locs[:, 7]) ** 2)
+    error_vol = np.sqrt(error_x**2+error_y**2+error_z**2)
+    sigma_x = paired_locs[:, 9]
+    sigma_y = paired_locs[:, 10]
+    sigma_z = paired_locs[:, 11]
+    sigma_vol = np.sqrt(sigma_x**2+sigma_y**2+sigma_z**2)
+
+    # plot the scatter plot about the rmse and uncertainty
+    fig, axes = plt.subplots(2, 2, figsize=(8, 8), constrained_layout=True)
+
+    axes[0, 0].scatter(sigma_x, error_x, s=1)
+    axes[0, 0].set_xlabel(r'$\sigma_x$ [nm]')
+    axes[0, 0].set_ylabel(r'$RMSE_x$ [nm]')
+    axes[0, 0].set_title('RMSE_x vs. $\sigma_x$')
+
+    axes[0, 1].scatter(sigma_y, error_y, s=1)
+    axes[0, 1].set_xlabel(r'$\sigma_y$ [nm]')
+    axes[0, 1].set_ylabel(r'$RMSE_y$ [nm]')
+    axes[0, 1].set_title('RMSE_y vs. $\sigma_y$')
+
+    axes[1, 0].scatter(sigma_z, error_z, s=1)
+    axes[1, 0].set_xlabel(r'$\sigma_z$ [nm]')
+    axes[1, 0].set_ylabel(r'$RMSE_z$ [nm]')
+    axes[1, 0].set_title('RMSE_z vs. $\sigma_z$')
+
+    axes[1, 1].scatter(sigma_vol, error_vol, s=1)
+    axes[1, 1].set_xlabel(r'$\sigma_{vol}$ [nm]')
+    axes[1, 1].set_ylabel(r'$RMSE_{vol}$ [nm]')
+    axes[1, 1].set_title('RMSE_vol vs. $\sigma_{vol}$')
+
+    for ax_row in axes:
+        for ax in ax_row:
+            ax.set_xlim([0, 60])
+            ax.set_ylim([0, 60])
+    plt.show()
+
