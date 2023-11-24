@@ -35,8 +35,14 @@ class MoleculeSampler:
             MoleculeSampler: a sampler for training data simulation
         """
 
-        self.local_context = sampler_params['local_context']
-        self.robust_training = sampler_params['robust_training']
+        try:
+            self.local_context = sampler_params['local_context']
+        except KeyError:
+            self.local_context = False
+        try:
+            self.robust_training = sampler_params['robust_training']
+        except KeyError:
+            self.robust_training = False
         self.train_size = int(sampler_params['train_size'])
         self.num_em_avg = sampler_params['num_em_avg']
         self.train_prob_map = self._compute_prob_map(self.train_size, self.train_size, self.num_em_avg)
@@ -76,7 +82,54 @@ class MoleculeSampler:
 
         self.sliding_windows = self._compute_sliding_windows(self.train_size, self.fov_size)
 
-    def sample_for_train(self, batch_size, psf_model, iter_train):
+    def sample_for_train(self, batch_size, context_size, psf_model, iter_train):
+        """
+        Sample x, y, z, photon, background, sub-fov coordinate, zernike coefs for each PSF in the batch,
+        serve as ground truth. All images in the batch are sampled from the same sub-fov. All frames in a
+        batch unit with the context_size share the same background and serve as temporal context for each other.
+
+        Args:
+            batch_size (int): batch size
+            context_size (int): context size
+            psf_model (ailoc.simulation.vectorpsf.VectorPSFCUDA): a vector PSF model used for zernike sampling
+            iter_train (int): the number of training iterations, used for sequentially select the current sub-fov
+
+        Returns:
+            (torch.Tensor, torch.Tensor, torch.Tensor, list, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor):
+                1) for training simulation, one-hot 4d map for p_s
+                    (batch_size, context_size, train_size, train_size);
+                2) for training simulation, 5d map for x,y,z,photon
+                    (4 parameters, batch_size, context_size, train_size, train_size);
+                3) background map (batch_size, context_size, train_size, train_size);
+                4) current sub-fov coordinate (x_start, x_end, y_start, y_end)
+                5) zernike coefs for each PSF in the batch (num_PSFs, num_zernike),
+                    could be field-dependent with robust training;
+                6) probability map ground truth for the middle frame,
+                    (batch_size,context_size,train_size,train_size)
+                7) molecule ground truth of middle frame, 4d array for x,y,z,photon padding with 0
+                    (batch_size, context_size, max num_emitters, 4);
+                8) binary mask to indicate the valid emitters in the molecule ground truth
+                    (batch_size, context_size, max num_emitters);
+        """
+
+        curr_sub_fov_xy = self.sliding_windows[iter_train % len(self.sliding_windows)]
+
+        p_map_sample, xyzph_map_sample = self.sample_p_xyz_phot_simple_photophysics(batch_size,
+                                                                                    context_size,
+                                                                                    self.train_prob_map)
+
+        bg_map_sample = self.sample_bg(batch_size, context_size, self.train_prob_map,)
+
+        zernike_coefs = self.sample_zernike_coefs(p_map_sample, psf_model, curr_sub_fov_xy, self.robust_training)
+
+        # generate the ground truth array with valid mask for loss calculation
+        p_map_gt, xyzph_array_gt, mask_array_gt = self.generate_gt_array(xyzph_map_sample, p_map_sample)
+
+        return p_map_sample, xyzph_map_sample, bg_map_sample, curr_sub_fov_xy, zernike_coefs, \
+               p_map_gt, xyzph_array_gt, mask_array_gt
+
+    @deprecated(reason='Use sample_for_train with param batch_photophysics=True instead.')
+    def transloc_sample_for_train(self, batch_size, psf_model, iter_train):
         """
         Sample x, y, z, photon, background, sub-fov coordinate, zernike coefs for each PSF in the batch,
         and ground truth. All images in the batch are sampled from the same sub-fov.
@@ -106,27 +159,32 @@ class MoleculeSampler:
 
         curr_sub_fov_xy = self.sliding_windows[iter_train % len(self.sliding_windows)]
 
-        p_map_sample, xyzph_map_sample = self.sample_p_xyz_phot(batch_size, self.train_prob_map)
+        p_map_sample, xyzph_map_sample = self.transloc_sample_p_xyz_phot(batch_size, self.train_prob_map)
 
-        bg_map_sample = self.sample_bg(batch_size, self.train_prob_map)
+        bg_map_sample = self.transloc_sample_bg(batch_size, self.train_prob_map)
 
         zernike_coefs = self.sample_zernike_coefs(p_map_sample, psf_model, curr_sub_fov_xy, self.robust_training)
 
         # generate the ground truth array with valid mask for loss calculation
-        p_map_gt, xyzph_array_gt, mask_array_gt = self.generate_gt_array(xyzph_map_sample, p_map_sample)
+        p_map_gt, xyzph_array_gt, mask_array_gt = self.transloc_generate_gt_array(xyzph_map_sample, p_map_sample)
 
         return p_map_sample, xyzph_map_sample, bg_map_sample, curr_sub_fov_xy, zernike_coefs, \
                p_map_gt, xyzph_array_gt, mask_array_gt
 
-    def sample_for_evaluation(self, num_image, psf_model):
+    @deprecated(reason='Use data_simulator.sample_evaluation_data instead.')
+    def sample_for_evaluation(self, num_image, psf_model, batch_photophysics=False):
         """
         Sample x y z photon bg for num_image images, the difference from sample_for_train is that each image
         in the batch has different sub-fov coordinates and so zernike_coefs if field-dependent aberration is used
         """
 
-        p_map_sample, xyzph_map_sample = self.sample_p_xyz_phot(num_image, self.train_prob_map)
+        if batch_photophysics:
+            p_map_sample, xyzph_map_sample = self.sample_p_xyz_phot_batch_photophysics(num_image,
+                                                                                       self.train_prob_map)
+        else:
+            p_map_sample, xyzph_map_sample = self.sample_p_xyz_phot(num_image, self.train_prob_map)
 
-        bg_map_sample = self.sample_bg(num_image, self.train_prob_map)
+        bg_map_sample = self.sample_bg(num_image, self.train_prob_map, batch_photophysics)
 
         # generate the ground truth array with valid mask for loss calculation
         p_map_gt, xyzph_array_gt, mask_array_gt = self.generate_gt_array(xyzph_map_sample, p_map_sample)
@@ -168,6 +226,7 @@ class MoleculeSampler:
 
         return zernike_coefs
 
+    @deprecated(reason='Use sample_p_xyz_phot_simple_photophysics instead.')
     def sample_p_xyz_phot(self, batch_size, train_prob_map):
         """
         Sample x, y, z, photon for training data simulation
@@ -221,29 +280,113 @@ class MoleculeSampler:
 
         return p_s, xyzph_s
 
-    def sample_bg(self, batch_size, train_prob_map):
+    def sample_p_xyz_phot_simple_photophysics(self, batch_size, context_size, train_prob_map):
+        """
+        Sample x, y, z, photon for training data simulation, all images in a context are sampled from the same
+        markov chain
+        """
+
+        p_on = train_prob_map
+        p_on = p_on.reshape(1, 1, p_on.shape[-2], p_on.shape[-1]).expand(batch_size, -1, -1, -1)
+
+        # every pixel has a probability blink_p of existing a molecule, following binomial distribution
+        p_s_1 = ailoc.common.gpu(torch.distributions.Binomial(1, p_on).sample())
+        zeros = ailoc.common.gpu(torch.zeros_like(p_s_1))
+
+        # z position follows a uniform distribution with predefined range
+        z_s = ailoc.common.gpu(torch.distributions.Uniform(zeros + self.z_range_scaled[0], zeros + self.z_range_scaled[1]).sample()
+                               ).expand(-1, context_size, -1, -1)
+        # xy offset follow uniform distribution
+        x_s = ailoc.common.gpu(torch.distributions.Uniform(zeros - 0.5, zeros + 0.5).sample()
+                               ).expand(-1, context_size, -1, -1)
+        y_s = ailoc.common.gpu(torch.distributions.Uniform(zeros - 0.5, zeros + 0.5).sample()
+                               ).expand(-1, context_size, -1, -1)
+
+        t_on = 1
+        t_dark = 4
+        p_surv = 1 - (1-torch.exp(-torch.tensor(1/t_on)))
+        p_back = 1-torch.exp(-torch.tensor(1/t_dark))
+
+        p_s = []
+        p_s.append(p_s_1)
+        for i in range(context_size-1):
+            p_s_pre = p_s[-1]
+            # the union of all the previous frames
+            p_s_union = ailoc.common.gpu(torch.sum(torch.stack(p_s, dim=1), dim=1) > 0)
+            p_s_back = p_s_union - p_s_pre
+            weight = 1 - torch.clamp(torch.sum(p_s_pre * p_surv + p_s_back * p_back,
+                                               dim=(1, 2, 3)) / self.num_em_avg,
+                                     min=0,
+                                     max=0.9)
+            p_s_curr = ailoc.common.gpu(
+                torch.distributions.Binomial(
+                    1, weight[:, None, None, None]*(1-p_s_union)*p_on+p_s_pre*p_surv+p_s_back*p_back).sample())
+            p_s.append(p_s_curr)
+        p_s = torch.cat(p_s, dim=1)
+
+        #  photon number is sampled from a uniform distribution
+        ph_s = ailoc.common.gpu(torch.distributions.Uniform(torch.zeros_like(p_s) + self.photon_range_scaled[0],
+                                                            torch.zeros_like(p_s) + self.photon_range_scaled[1]).sample())
+        x_s = x_s.clone() * p_s
+        y_s = y_s.clone() * p_s
+        z_s = z_s.clone() * p_s
+        ph_s = ph_s.clone() * p_s
+
+        xyzph_s = torch.cat([x_s[None], y_s[None], z_s[None], ph_s[None]], 0)
+
+        return p_s, xyzph_s
+
+    def sample_bg(self, batch_size, context_size, train_prob_map,):
         """
         Sample background for training data simulation
+        """
+
+        times_sampled = batch_size
+
+        random_flag = np.random.rand() < 0.5
+        # random_flag = True
+
+        if self.bg_perlin and random_flag:
+            bg_s = np.zeros((times_sampled, self.train_size, self.train_size))
+            res = np.clip(self.train_size//64, a_min=1, a_max=None)
+            for i in range(times_sampled):
+                perlin_noise = perlin_numpy.generate_perlin_noise_2d((self.train_size, self.train_size), (res, res))
+                perlin_noise = (perlin_noise - np.min(perlin_noise)) / (np.max(perlin_noise) - np.min(perlin_noise))
+                bg_s[i] = perlin_noise*(self.bg_range_scaled[1] - self.bg_range_scaled[0]) + self.bg_range_scaled[0]
+            bg_s = ailoc.common.gpu(bg_s)
+        else:
+            ones = ailoc.common.gpu(torch.ones(times_sampled))
+            bg_s = ailoc.common.gpu(torch.distributions.Uniform(ones * self.bg_range_scaled[0],
+                                                                ones * self.bg_range_scaled[1]).sample())
+            bg_s = bg_s.reshape(times_sampled, 1, 1).expand(-1, train_prob_map.shape[-2], train_prob_map.shape[-1])
+
+        bg_s = bg_s[:, None].expand(-1, context_size, -1, -1)
+        return bg_s
+
+    @deprecated(reason="Use `sample_bg` with param batch_photophysics=True instead")
+    def transloc_sample_bg(self, batch_size, train_prob_map):
+        """
+        Sample background for training data simulation, all images in a batch share the same one
         """
 
         random_flag = np.random.rand() < 0.5
         # random_flag = True
 
         if self.bg_perlin and random_flag:
-            bg_s = np.zeros((batch_size, self.train_size, self.train_size))
+            bg_s = np.zeros((1, self.train_size, self.train_size))
             res = np.clip(self.train_size//64, a_min=1, a_max=None)
-            for i in range(batch_size):
+            for i in range(1):
                 perlin_noise = perlin_numpy.generate_perlin_noise_2d((self.train_size, self.train_size), (res, res))
                 perlin_noise = (perlin_noise - np.min(perlin_noise)) / (np.max(perlin_noise) - np.min(perlin_noise))
                 bg_s[i] = perlin_noise*(self.bg_range_scaled[1] - self.bg_range_scaled[0]) + self.bg_range_scaled[0]
             bg_s = ailoc.common.gpu(bg_s)
         else:
-            ones = ailoc.common.gpu(torch.ones(batch_size))
+            ones = ailoc.common.gpu(torch.ones(1))
             bg_s = ailoc.common.gpu(torch.distributions.Uniform(ones * self.bg_range_scaled[0],
                                                                 ones * self.bg_range_scaled[1]).sample())
-            bg_s = bg_s.reshape(batch_size, 1, 1).expand(-1, train_prob_map.shape[-2], train_prob_map.shape[-1])
+            bg_s = bg_s.reshape(1, 1, 1).expand(-1, train_prob_map.shape[-2], train_prob_map.shape[-1])
 
-        return bg_s
+        return bg_s.expand(batch_size, -1, -1)
 
     @deprecated(reason='aberration map is no longer a property of the MoleculeSampler')
     def sample_aberration(self, sub_fov_xy):
@@ -321,41 +464,40 @@ class MoleculeSampler:
         Generate the ground truth array based on the sampled maps
         """
 
-        curr_batch_size = p_map.shape[0]
-        local_context = True if p_map.shape[1] == 3 else False
+        curr_batch_size, context_size = p_map.shape[0], p_map.shape[1]
 
-        p_map_gt = p_map[:, 1] if local_context else p_map[:, 0]
-        xyzph_map_gt = xyzph_map[:, :, 1] if local_context else xyzph_map[:, :, 0]
-        xyzph_gt = ailoc.common.gpu(torch.zeros([curr_batch_size, 0, 4]))
-        mask_gt = ailoc.common.gpu(torch.zeros([curr_batch_size, 0]))
+        p_map_gt = p_map
+        xyzph_map_gt = xyzph_map
+        xyzph_gt = ailoc.common.gpu(torch.zeros([curr_batch_size, context_size, 0, 4]))
+        mask_gt = ailoc.common.gpu(torch.zeros([curr_batch_size, context_size, 0]))
 
         if p_map_gt.sum():
-            # get the emitters' pixel indices (n_emitter, 3), [image index in a batch, row, column]
+            # get the emitters' pixel indices (n_emitter, 4), [batch_idx, context_idx, row, column]
             inds = tuple(p_map_gt.nonzero().transpose(1, 0))
 
             # get corresponding xyz photons and build a gt matrix with shape (n_emitters in this batch, 4)
-            xyzph_list_gt = xyzph_map_gt[:, inds[0], inds[1], inds[2]]
-            xyzph_list_gt[0] += inds[2] + 0.5
-            xyzph_list_gt[1] += inds[1] + 0.5
+            xyzph_list_gt = xyzph_map_gt[:, inds[0], inds[1], inds[2], inds[3]]
+            xyzph_list_gt[0] += inds[3] + 0.5
+            xyzph_list_gt[1] += inds[2] + 0.5
             xyzph_list_gt = xyzph_list_gt.transpose(1, 0)
 
             # get the number of emitters in each image
-            em_num = torch.unique_consecutive(inds[0], return_counts=True)[1]
+            em_num = torch.unique_consecutive(inds[1], return_counts=True)[1]
             em_num_max = em_num.max()
 
-            # build a gt matrix with shape (batch_size, em_num, 4)
-            xyzph_arr_gt = ailoc.common.gpu(torch.zeros([curr_batch_size, em_num_max, 4]))
-            mask_arr_gt = ailoc.common.gpu(torch.zeros([curr_batch_size, em_num_max]))
+            # build a gt matrix with shape (batch_size, context_size, em_num, 4)
+            xyzph_arr_gt = ailoc.common.gpu(torch.zeros([curr_batch_size, context_size, em_num_max, 4]))
+            mask_arr_gt = ailoc.common.gpu(torch.zeros([curr_batch_size, context_size, em_num_max]))
 
             # order all emitters on their own image respectively, e.g. [0, 1, 2, 0, 1, 2, 3, 0, 1...],
             # with shape (n_emitters in this batch)
             em_inds = torch.cat([torch.arange(num_on_each) for num_on_each in em_num], dim=0)
 
             # fill the gt matrix using the image index and the order on each image
-            xyzph_arr_gt[inds[0], em_inds] = xyzph_list_gt
-            mask_arr_gt[inds[0], em_inds] = 1
+            xyzph_arr_gt[inds[0], inds[1], em_inds] = xyzph_list_gt
+            mask_arr_gt[inds[0], inds[1], em_inds] = 1
 
-            xyzph_gt = torch.cat([xyzph_gt, xyzph_arr_gt], dim=1)
-            mask_gt = torch.cat([mask_gt, mask_arr_gt], dim=1)
+            xyzph_gt = torch.cat([xyzph_gt, xyzph_arr_gt], dim=2)
+            mask_gt = torch.cat([mask_gt, mask_arr_gt], dim=2)
 
         return p_map_gt, xyzph_gt, mask_gt

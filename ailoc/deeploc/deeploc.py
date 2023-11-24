@@ -25,6 +25,7 @@ class DeepLoc(ailoc.common.XXLoc):
 
         self.local_context = self.dict_sampler_params['local_context']
         self._network = ailoc.deeploc.DeepLocNet(self.local_context)
+        self.context_size = 10+2 if self.local_context else 10
 
         self.evaluation_dataset = {}
         self.evaluation_recorder = self._init_recorder()
@@ -77,7 +78,7 @@ class DeepLoc(ailoc.common.XXLoc):
 
         return total_loss
 
-    def online_train(self, batch_size=16, max_iterations=50000, eval_freq=500, file_name=None):
+    def online_train(self, batch_size=1, max_iterations=50000, eval_freq=500, file_name=None):
         """
         Train the network.
 
@@ -95,30 +96,22 @@ class DeepLoc(ailoc.common.XXLoc):
 
         if self._iter_train > 0:
             print('training from checkpoint, the recent performance is:')
-            try:
-                print(f"Iterations: {self._iter_train}/{max_iterations} || "
-                      f"Loss: {self.evaluation_recorder['loss'][self._iter_train]:.2f} || "
-                      f"IterTime: {self.evaluation_recorder['iter_time'][self._iter_train]:.2f} ms || "
-                      f"ETA: {self.evaluation_recorder['iter_time'][self._iter_train]*(max_iterations-self._iter_train)/3600000:.2f} h || ", end='')
-
-                print(f"SumProb: {self.evaluation_recorder['n_per_img'][self._iter_train]:.2f} || "
-                      f"Eff_3D: {self.evaluation_recorder['eff_3d'][self._iter_train]:.2f} || "
-                      f"Jaccard: {self.evaluation_recorder['jaccard'][self._iter_train]:.2f} || "
-                      f"Recall: {self.evaluation_recorder['recall'][self._iter_train]:.2f} || "
-                      f"Precision: {self.evaluation_recorder['precision'][self._iter_train]:.2f} || "
-                      f"RMSE_lat: {self.evaluation_recorder['rmse_lat'][self._iter_train]:.2f} || "
-                      f"RMSE_ax: {self.evaluation_recorder['rmse_ax'][self._iter_train]:.2f}")
-
-            except KeyError:
-                print('No recent performance record found')
+            self.print_recorder(max_iterations)
 
         while self._iter_train < max_iterations:
             t0 = time.time()
             total_loss = []
             for i in range(eval_freq):
                 train_data, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt, _ = \
-                    self.data_simulator.sample_training_data(batch_size=batch_size, iter_train=self._iter_train)
-                p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(train_data, self.data_simulator.camera)
+                    self.data_simulator.sample_training_data(batch_size=batch_size,
+                                                             context_size=self.context_size,
+                                                             iter_train=self._iter_train)
+                p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt = self.unfold_target(p_map_gt,
+                                                                                        xyzph_array_gt,
+                                                                                        mask_array_gt,
+                                                                                        bg_map_gt)
+                p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(train_data,
+                                                                             self.data_simulator.camera)
                 loss = self.compute_loss(p_pred, xyzph_pred, xyzph_sig_pred, bg_pred,
                                          p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt)
                 self.optimizer.zero_grad()
@@ -138,26 +131,24 @@ class DeepLoc(ailoc.common.XXLoc):
             if self._iter_train > 1000:
                 print('----------------------------------------------------------------------------------------------')
                 self.online_evaluate(batch_size=batch_size)
-                print(f"Iterations: {self._iter_train}/{max_iterations} || "
-                      f"Loss: {self.evaluation_recorder['loss'][self._iter_train]:.2f} || "
-                      f"IterTime: {self.evaluation_recorder['iter_time'][self._iter_train]:.2f} ms || "
-                      f"ETA: {self.evaluation_recorder['iter_time'][self._iter_train]*(max_iterations-self._iter_train)/3600000:.2f} h || "
-                      f"SumProb: {self.evaluation_recorder['n_per_img'][self._iter_train]:.2f} || "
-                      f"Eff_3D: {self.evaluation_recorder['eff_3d'][self._iter_train]:.2f} || "
-                      f"Jaccard: {self.evaluation_recorder['jaccard'][self._iter_train]:.2f} || "
-                      f"Recall: {self.evaluation_recorder['recall'][self._iter_train]:.2f} || "
-                      f"Precision: {self.evaluation_recorder['precision'][self._iter_train]:.2f} || "
-                      f"RMSE_lat: {self.evaluation_recorder['rmse_lat'][self._iter_train]:.2f} || "
-                      f"RMSE_ax: {self.evaluation_recorder['rmse_ax'][self._iter_train]:.2f}")
-            else:
-                print(f"Iterations: {self._iter_train}/{max_iterations} || "
-                      f"Loss: {self.evaluation_recorder['loss'][self._iter_train]:.2f} || "
-                      f"IterTime: {self.evaluation_recorder['iter_time'][self._iter_train]:.2f} ms || "
-                      f"ETA: {self.evaluation_recorder['iter_time'][self._iter_train]*(max_iterations-self._iter_train)/3600000:.2f} h")
 
+            self.print_recorder(max_iterations)
             self.save(file_name)
 
         print('training finished!')
+
+    def unfold_target(self, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt):
+        if self.local_context:
+            p_map_gt = p_map_gt[:, 1:-1]
+            xyzph_array_gt = xyzph_array_gt[:, 1:-1]
+            mask_array_gt = mask_array_gt[:, 1:-1]
+            bg_map_gt = bg_map_gt[:, 1:-1]
+        else:
+            pass
+        return p_map_gt.flatten(start_dim=0, end_dim=1), \
+               xyzph_array_gt.flatten(start_dim=0, end_dim=1), \
+               mask_array_gt.flatten(start_dim=0, end_dim=1), \
+               bg_map_gt.flatten(start_dim=0, end_dim=1)
 
     def inference(self, data, camera):
         """
@@ -254,12 +245,12 @@ class DeepLoc(ailoc.common.XXLoc):
                 n_per_img.append(inference_dict_tmp['prob'].sum((-2, -1)).mean())
 
                 if len(molecule_array_tmp) > 0:
-                    molecule_array_tmp[:, 0] += i * batch_size
+                    molecule_array_tmp[:, 0] += i * batch_size * (self.context_size-2 if self.local_context else self.context_size)
                     molecule_list_pred += molecule_array_tmp.tolist()
 
             metric_dict, paired_array = ailoc.common.pair_localizations(prediction=np.array(molecule_list_pred),
                                                                         ground_truth=self.evaluation_dataset['molecule_list_gt'],
-                                                                        frame_num=self.evaluation_dataset['data'].shape[0],
+                                                                        frame_num=self.evaluation_dataset['data'].shape[0] * (self.context_size-2 if self.local_context else self.context_size),
                                                                         fov_xy_nm=(0, self.evaluation_dataset['data'].shape[-1]*self.data_simulator.psf_model.pixel_size_xy[0],
                                                                                    0, self.evaluation_dataset['data'].shape[-2]*self.data_simulator.psf_model.pixel_size_xy[1]))
 
@@ -281,9 +272,21 @@ class DeepLoc(ailoc.common.XXLoc):
         print("building evaluation dataset, this may take a while...")
         t0 = time.time()
         eval_data, molecule_list_gt, sub_fov_xy_list = \
-            self.data_simulator.sample_evaluation_data(num_image=self.dict_sampler_params['num_evaluation_data'])
+            self.data_simulator.sample_evaluation_data(batch_size=self.dict_sampler_params['eval_batch_size'],
+                                                       context_size=self.context_size,)
         self.evaluation_dataset['data'] = ailoc.common.cpu(eval_data)
-        self.evaluation_dataset['molecule_list_gt'] = np.array(molecule_list_gt)
+
+        molecule_list_gt = np.array(molecule_list_gt)
+        if self.local_context:
+            molecule_list_gt_corrected = []
+            for i in range(self.dict_sampler_params['eval_batch_size']):
+                curr_context_idx = np.where((molecule_list_gt[:, 0]>i*self.context_size+1)&(molecule_list_gt[:, 0]<(i+1)*self.context_size))
+                curr_molecule_list_gt = molecule_list_gt[curr_context_idx]
+                curr_molecule_list_gt[:, 0] -= (2*i+1)
+                molecule_list_gt_corrected.append(curr_molecule_list_gt)
+            molecule_list_gt = np.concatenate(molecule_list_gt_corrected, axis=0)
+
+        self.evaluation_dataset['molecule_list_gt'] = molecule_list_gt
         self.evaluation_dataset['sub_fov_xy_list'] = sub_fov_xy_list
         print(f"evaluation dataset with shape {eval_data.shape} building done! "
               f"contain {len(molecule_list_gt)} target molecules, "
@@ -329,44 +332,77 @@ class DeepLoc(ailoc.common.XXLoc):
 
         print(f"checking training data...")
         data_cam, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_sample, curr_sub_fov_xy = \
-            self.data_simulator.sample_training_data(batch_size=1, iter_train=0)
+            self.data_simulator.sample_training_data(batch_size=1,
+                                                     context_size=self.context_size,
+                                                     iter_train=0,)
 
         cmap = 'gray'
 
-        if self.data_simulator.mol_sampler.local_context:
-            fig, ax = plt.subplots(2, 2, constrained_layout=True)
-            img_tmp = ax[0, 0].imshow(ailoc.common.cpu(data_cam)[0, 0], cmap=cmap)
-            plt.colorbar(mappable=img_tmp, ax=ax[0, 0], fraction=0.046, pad=0.04)
-            ax[0, 0].set_title('last frame')
+        fig, ax_arr = plt.subplots(self.context_size//2, 2, figsize=(6, 12), constrained_layout=True)
+        ax = []
+        plts = []
+        for i in ax_arr:
+            for j in i:
+                ax.append(j)
 
-            img_tmp = ax[0, 1].imshow(ailoc.common.cpu(data_cam)[0, 1], cmap=cmap)
-            plt.colorbar(mappable=img_tmp, ax=ax[0, 1], fraction=0.046, pad=0.04)
-            ax[0, 1].set_title('middle frame')
+        for i in range(self.context_size):
+            plts.append(ax[i].imshow(ailoc.common.cpu(data_cam)[0, i], cmap=cmap))
+            ax[i].set_title(f"frame {i}")
+            plt.colorbar(mappable=plts[-1], ax=ax[i], fraction=0.046, pad=0.04)
+            pix_gt = ailoc.common.cpu(p_map_gt[0, i].nonzero())
+            ax[i].scatter(pix_gt[:, 1], pix_gt[:, 0], s=5, c='m', marker='x')
 
-            img_tmp = ax[1, 0].imshow(ailoc.common.cpu(data_cam)[0, 2], cmap=cmap)
-            plt.colorbar(mappable=img_tmp, ax=ax[1, 0], fraction=0.046, pad=0.04)
-            ax[1, 0].set_title('next frame')
+        plt.show()
 
-            img_tmp = ax[1, 1].imshow(ailoc.common.cpu(data_cam)[0, 1], cmap=cmap)
-            plt.colorbar(mappable=img_tmp, ax=ax[1, 1], fraction=0.046, pad=0.04)
-            pix_gt = ailoc.common.cpu(p_map_gt[0].nonzero())
-            ax[1, 1].scatter(pix_gt[:, 1], pix_gt[:, 0], s=10, c='m', marker='x')
-            ax[1, 1].set_title('ground truth \non middle frame')
+        # if self.data_simulator.mol_sampler.local_context:
+        #     fig, ax = plt.subplots(2, 2, constrained_layout=True)
+        #     img_tmp = ax[0, 0].imshow(ailoc.common.cpu(data_cam)[0, 0], cmap=cmap)
+        #     plt.colorbar(mappable=img_tmp, ax=ax[0, 0], fraction=0.046, pad=0.04)
+        #     ax[0, 0].set_title('last frame')
+        #
+        #     img_tmp = ax[0, 1].imshow(ailoc.common.cpu(data_cam)[0, 1], cmap=cmap)
+        #     plt.colorbar(mappable=img_tmp, ax=ax[0, 1], fraction=0.046, pad=0.04)
+        #     ax[0, 1].set_title('middle frame')
+        #
+        #     img_tmp = ax[1, 0].imshow(ailoc.common.cpu(data_cam)[0, 2], cmap=cmap)
+        #     plt.colorbar(mappable=img_tmp, ax=ax[1, 0], fraction=0.046, pad=0.04)
+        #     ax[1, 0].set_title('next frame')
+        #
+        #     img_tmp = ax[1, 1].imshow(ailoc.common.cpu(data_cam)[0, 1], cmap=cmap)
+        #     plt.colorbar(mappable=img_tmp, ax=ax[1, 1], fraction=0.046, pad=0.04)
+        #     pix_gt = ailoc.common.cpu(p_map_gt[0].nonzero())
+        #     ax[1, 1].scatter(pix_gt[:, 1], pix_gt[:, 0], s=10, c='m', marker='x')
+        #     ax[1, 1].set_title('ground truth \non middle frame')
+        #
+        #     plt.show()
+        # else:
+        #     fig, ax = plt.subplots(1, 2, constrained_layout=True)
+        #     img_tmp = ax[0].imshow(ailoc.common.cpu(data_cam)[0, 0], cmap=cmap)
+        #     plt.colorbar(mappable=img_tmp, ax=ax[0], fraction=0.046, pad=0.04)
+        #     ax[0].set_title('frame')
+        #
+        #     img_tmp = ax[1].imshow(ailoc.common.cpu(data_cam)[0, 0], cmap=cmap)
+        #     plt.colorbar(mappable=img_tmp, ax=ax[1], fraction=0.046, pad=0.04)
+        #     pix_gt = ailoc.common.cpu(p_map_gt[0].nonzero())
+        #     ax[1].scatter(pix_gt[:, 1], pix_gt[:, 0], s=10, c='m', marker='x')
+        #     ax[1].set_title('ground truth \non middle frame')
+        #     plt.show()
 
-            plt.show()
-        else:
-            fig, ax = plt.subplots(1, 2, constrained_layout=True)
-            img_tmp = ax[0].imshow(ailoc.common.cpu(data_cam)[0, 0], cmap=cmap)
-            plt.colorbar(mappable=img_tmp, ax=ax[0], fraction=0.046, pad=0.04)
-            ax[0].set_title('frame')
+    def print_recorder(self, max_iterations):
+        try:
+            print(f"Iterations: {self._iter_train}/{max_iterations} || "
+                  f"Loss: {self.evaluation_recorder['loss'][self._iter_train]:.2f} || "
+                  f"IterTime: {self.evaluation_recorder['iter_time'][self._iter_train]:.2f} ms || "
+                  f"ETA: {self.evaluation_recorder['iter_time'][self._iter_train] * (max_iterations - self._iter_train) / 3600000:.2f} h || ",
+                  end='')
 
-            img_tmp = ax[1].imshow(ailoc.common.cpu(data_cam)[0, 0], cmap=cmap)
-            plt.colorbar(mappable=img_tmp, ax=ax[1], fraction=0.046, pad=0.04)
-            pix_gt = ailoc.common.cpu(p_map_gt[0].nonzero())
-            ax[1].scatter(pix_gt[:, 1], pix_gt[:, 0], s=10, c='m', marker='x')
-            ax[1].set_title('ground truth \non middle frame')
-            plt.show()
+            print(f"SumProb: {self.evaluation_recorder['n_per_img'][self._iter_train]:.2f} || "
+                  f"Eff_3D: {self.evaluation_recorder['eff_3d'][self._iter_train]:.2f} || "
+                  f"Jaccard: {self.evaluation_recorder['jaccard'][self._iter_train]:.2f} || "
+                  f"Recall: {self.evaluation_recorder['recall'][self._iter_train]:.2f} || "
+                  f"Precision: {self.evaluation_recorder['precision'][self._iter_train]:.2f} || "
+                  f"RMSE_lat: {self.evaluation_recorder['rmse_lat'][self._iter_train]:.2f} || "
+                  f"RMSE_ax: {self.evaluation_recorder['rmse_ax'][self._iter_train]:.2f}")
 
-
-def train_deeploc(params_dict):
-    pass
+        except KeyError:
+            print('No recent performance record found')

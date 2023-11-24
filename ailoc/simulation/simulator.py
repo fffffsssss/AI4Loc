@@ -1,3 +1,4 @@
+import deprecated
 import torch
 import numpy as np
 import torch.nn as nn
@@ -37,7 +38,38 @@ class Simulator:
         else:
             raise NotImplementedError('Camera type not supported.')
 
-    def sample_training_data(self, batch_size, iter_train):
+    def sample_training_data(self, batch_size, context_size, iter_train,):
+        """
+        Sample a batch of training data. All frames in a batch unit with the context_size share the same
+            background and serve as temporal context for each other.
+
+        Args:
+            batch_size (int): batch size
+            context_size (int): the number of frames to be used as temporal context, the training data has
+                shape (batch_size, context_size, H, W)
+            iter_train (int): the number of training iterations, used for sequentially select the
+                sub-fov to simulate images
+
+        Returns:
+            (torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, tuple):
+                a batch of simulated images and corresponding ground truth
+        """
+
+        p_map_sample, xyzph_map_sample, bg_map_sample, curr_sub_fov_xy, zernike_coefs, \
+        p_map_gt, xyzph_array_gt, mask_array_gt = self.mol_sampler.sample_for_train(batch_size,
+                                                                                    context_size,
+                                                                                    self.psf_model,
+                                                                                    iter_train,)
+
+        data = self.gen_noiseless_data(self.psf_model, p_map_sample, xyzph_map_sample, bg_map_sample, zernike_coefs)
+
+        data_cam = self.camera.forward(data, curr_sub_fov_xy) \
+            if isinstance(self.camera, ailoc.simulation.SCMOS) else self.camera.forward(data)
+
+        return data_cam, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_sample, curr_sub_fov_xy
+
+    @deprecated.deprecated(reason='Use sample_training_data with param batch_photophysics=True instead.')
+    def transloc_sample_training_data(self, batch_size, iter_train):
         """
         Sample a batch of training data.
 
@@ -51,8 +83,11 @@ class Simulator:
                 a batch of simulated images and corresponding ground truth
         """
 
+        # for transformer, all sampled frames in the batch share the same bg and the molecules may
+        # survive in multiple frames
         p_map_sample, xyzph_map_sample, bg_map_sample, curr_sub_fov_xy, zernike_coefs, \
-        p_map_gt, xyzph_array_gt, mask_array_gt = self.mol_sampler.sample_for_train(batch_size, self.psf_model, iter_train)
+        p_map_gt, xyzph_array_gt, mask_array_gt = self.mol_sampler.transloc_sample_for_train(batch_size, self.psf_model,
+                                                                                             iter_train)
 
         data = self.gen_noiseless_data(self.psf_model, p_map_sample, xyzph_map_sample, bg_map_sample, zernike_coefs)
 
@@ -61,40 +96,66 @@ class Simulator:
 
         return data_cam, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_sample, curr_sub_fov_xy
 
-    def sample_evaluation_data(self, num_image):
+    def sample_evaluation_data(self, batch_size, context_size,):
         """
         sample dataset for online evaluation, the data should be generated the same as the
-        training data except robust training, and each group of images (local context) in the dataset has a sub-fov.
+        training data, and each batch in the dataset has a sub-fov.
 
         Args:
-            num_image (int): number of evaluation images to generate.
+            batch_size (int): evaluation batch size, the evaluation dataset will
+                have batch_size*context_size images.
+            context_size (int): the number of frames to be used as temporal context,
+                each batch unit has context_size images.
 
         Returns:
             (torch.Tensor, list, list):
                 evaluation images with shape (num_image, local context, train_size, train_size),
                 ground truth molecule list (frame, x, y, z, photon) and
-                sub-fov list [x_start, x_end, y_start, y_end] (each evaluation image is from a specific sub-fov).
+                sub-fov list [x_start, x_end, y_start, y_end] (each batch is from a specific sub-fov).
         """
 
-        p_map_sample, xyzph_map_sample, bg_map_sample, sub_fov_xy_list, zernike_coefs, \
-        xyzph_array_gt, mask_array_gt = self.mol_sampler.sample_for_evaluation(num_image, self.psf_model)
-
         molecule_list_gt = []
-        eval_data = self.gen_noiseless_data(self.psf_model, p_map_sample, xyzph_map_sample, bg_map_sample, zernike_coefs)
+        eval_data = []
+        sub_fov_xy_list = []
+        for k in range(batch_size):
+            data_cam, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_sample, curr_sub_fov_xy = \
+                self.sample_training_data(1, context_size, k,)
+            sub_fov_xy_list.append(curr_sub_fov_xy)
+            eval_data.append(data_cam)
+            for i in range(context_size):
+                frame_idx = k*context_size + i + 1
+                for j in range(mask_array_gt.shape[-1]):
+                    if mask_array_gt[0, i, j] == 1:
+                        molecule_list_gt.\
+                            append([frame_idx,
+                                    float(ailoc.common.cpu(xyzph_array_gt[0, i, j, 0] * self.psf_model.pixel_size_xy[0])),
+                                    float(ailoc.common.cpu(xyzph_array_gt[0, i, j, 1] * self.psf_model.pixel_size_xy[1])),
+                                    float(ailoc.common.cpu(xyzph_array_gt[0, i, j, 2] * self.mol_sampler.z_scale)),
+                                    float(ailoc.common.cpu(xyzph_array_gt[0, i, j, 3] * self.mol_sampler.photon_scale))]
+                                   )
+        eval_data = torch.cat(eval_data, dim=0)
 
-        for i in range(num_image):
-            eval_data[i] = self.camera.forward(eval_data[i], sub_fov_xy_list[i]) \
-                if isinstance(self.camera, ailoc.simulation.SCMOS) else self.camera.forward(eval_data[i])
-
-            for j in range(mask_array_gt.shape[1]):
-                if mask_array_gt[i, j] == 1:
-                    molecule_list_gt.\
-                        append([i+1,
-                                float(ailoc.common.cpu(xyzph_array_gt[i, j, 0] * self.psf_model.pixel_size_xy[0])),
-                                float(ailoc.common.cpu(xyzph_array_gt[i, j, 1] * self.psf_model.pixel_size_xy[1])),
-                                float(ailoc.common.cpu(xyzph_array_gt[i, j, 2] * self.mol_sampler.z_scale)),
-                                float(ailoc.common.cpu(xyzph_array_gt[i, j, 3] * self.mol_sampler.photon_scale))]
-                               )
+        # p_map_sample, xyzph_map_sample, bg_map_sample, sub_fov_xy_list, zernike_coefs, \
+        # xyzph_array_gt, mask_array_gt = self.mol_sampler.sample_for_evaluation(num_image,
+        #                                                                        self.psf_model,
+        #                                                                        batch_photophysics)
+        #
+        # molecule_list_gt = []
+        # eval_data = self.gen_noiseless_data(self.psf_model, p_map_sample, xyzph_map_sample, bg_map_sample, zernike_coefs)
+        #
+        # for i in range(num_image):
+        #     eval_data[i] = self.camera.forward(eval_data[i], sub_fov_xy_list[i]) \
+        #         if isinstance(self.camera, ailoc.simulation.SCMOS) else self.camera.forward(eval_data[i])
+        #
+        #     for j in range(mask_array_gt.shape[1]):
+        #         if mask_array_gt[i, j] == 1:
+        #             molecule_list_gt.\
+        #                 append([i+1,
+        #                         float(ailoc.common.cpu(xyzph_array_gt[i, j, 0] * self.psf_model.pixel_size_xy[0])),
+        #                         float(ailoc.common.cpu(xyzph_array_gt[i, j, 1] * self.psf_model.pixel_size_xy[1])),
+        #                         float(ailoc.common.cpu(xyzph_array_gt[i, j, 2] * self.mol_sampler.z_scale)),
+        #                         float(ailoc.common.cpu(xyzph_array_gt[i, j, 3] * self.mol_sampler.photon_scale))]
+        #                        )
 
         return eval_data, molecule_list_gt, sub_fov_xy_list
 
@@ -105,7 +166,7 @@ class Simulator:
 
         batch_size, channels, height, width = delta_map.shape[0], delta_map.shape[1], delta_map.shape[2], delta_map.shape[3]
 
-        bg = torch.reshape(bg, [batch_size, 1, height, width]).repeat(1, channels, 1, 1)*self.mol_sampler.bg_scale
+        bg = bg * self.mol_sampler.bg_scale
 
         x,y,z,photons = self._translate_maps(delta_map.reshape([-1, height, width]), xyzph_map.reshape([4, -1, height, width]))
 

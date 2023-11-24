@@ -11,8 +11,9 @@ class Residual(nn.Module):
         super().__init__()
         self.fn = fn
 
-    def forward(self, x):
-        return self.fn(x) + x
+    def forward(self, x, attn_mask=None):
+        x = x + self.fn(x, attn_mask) if isinstance(self.fn, ailoc.transloc.SelfAttention) else x + self.fn(x)
+        return x
 
 
 class MultiScaleConv2D(nn.Module):
@@ -160,7 +161,7 @@ class DownSampleBlock(nn.Sequential):
 
     def __init__(self, in_channels, out_channels, kernel_size):
         super(DownSampleBlock, self).__init__(
-            LayerNorm(in_channels, data_format="channels_first"),
+            LayerNorm(in_channels, data_format="chw", elementwise_affine=False),
             Conv2d(in_channels, in_channels, 2, 2, 0),
             ConvNextBlock(in_channels, out_channels, kernel_size),
             ConvNextBlock(out_channels, out_channels, kernel_size),
@@ -188,7 +189,7 @@ class UpSampleBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, tail=None):
         super(UpSampleBlock, self).__init__()
         self.layers = nn.ModuleList()
-        self.layers.append(LayerNorm(in_channels, data_format="channels_first"))
+        self.layers.append(LayerNorm(in_channels, data_format="chw", elementwise_affine=False))
         self.layers.append(nn.UpsamplingNearest2d(scale_factor=2))
         self.layers.append(ConvNextBlock(in_channels, out_channels, kernel_size))
         self.layers.append(ConvNextBlock(in_channels, out_channels, kernel_size))
@@ -214,13 +215,18 @@ class LayerNorm(nn.Module):
     with shape (batch_size, channels, height, width).
     """
 
-    def __init__(self, normalized_shape, eps=1e-6, data_format="channels_last"):
+    def __init__(self, normalized_shape, eps=1e-5, data_format="channels_last", elementwise_affine=True):
         super().__init__()
-        self.weight = nn.Parameter(torch.ones(normalized_shape))
-        self.bias = nn.Parameter(torch.zeros(normalized_shape))
+        self.elementwise_affine = elementwise_affine
+        if elementwise_affine:
+            self.weight = nn.Parameter(torch.ones(normalized_shape))
+            self.bias = nn.Parameter(torch.zeros(normalized_shape))
+        else:
+            self.weight = None
+            self.bias = None
         self.eps = eps
         self.data_format = data_format
-        if self.data_format not in ["channels_last", "channels_first"]:
+        if self.data_format not in ["channels_last", "channels_first", "chw"]:
             raise NotImplementedError
         self.normalized_shape = (normalized_shape,)
 
@@ -231,8 +237,13 @@ class LayerNorm(nn.Module):
             u = x.mean(1, keepdim=True)
             s = (x - u).pow(2).mean(1, keepdim=True)
             x = (x - u) / torch.sqrt(s + self.eps)
-            x = self.weight[:, None, None] * x + self.bias[:, None, None]
+            if self.weight is not None:
+                x = self.weight[:, None, None] * x + self.bias[:, None, None]
+            else:
+                x = x
             return x
+        elif self.data_format == "chw":
+            return F.layer_norm(x, normalized_shape=x.shape[1:])
 
 
 class ConvNextBlock(nn.Module):
@@ -293,7 +304,7 @@ class ConvNextBlock(nn.Module):
                              padding=kernel_size//2,
                              groups=c_in)  # depthwise conv
 
-        self.norm = LayerNorm(c_in, data_format="channels_first")
+        self.norm = LayerNorm(c_in, data_format="chw", elementwise_affine=False)
         self.pwconv1 = Conv2d(in_channels=c_in, out_channels=4*c_in, kernel_size=1, stride=1, padding=0)
         self.act = nn.GELU()
         self.pwconv2 = Conv2d(in_channels=4*c_in, out_channels=c_out, kernel_size=1, stride=1, padding=0)

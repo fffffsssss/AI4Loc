@@ -174,10 +174,18 @@ class DeepLocNet(nn.Module):
         assert img_h % 4 == 0 and img_w % 4 == 0, 'network structure requires that image size should be multiples of 4'
 
         # during training and online evaluation, the inpout should have the shape
-        # (training batch size, local context (1 or 3), height, width)
+        # (training batch size, context_size, height, width)
         if x_input.ndimension() == 4:
-            fm_out = self.frame_anlz_module(x_input.reshape([-1, 1, img_h, img_w])).\
-                reshape(-1, self.n_features, img_h, img_w)
+            batch_size, context_size = x_input.shape[:2]
+            fm_out = self.frame_anlz_module(x_input.reshape([-1, 1, img_h, img_w]))
+
+            if self.local_context:
+                fm_out = fm_out.reshape([batch_size, context_size, -1, img_h, img_w])
+                zeros = torch.zeros_like(fm_out[:, :1])
+                h_t1 = fm_out
+                h_t0 = torch.cat([zeros, fm_out[:, :-1]], dim=1)
+                h_t2 = torch.cat([fm_out[:, 1:], zeros], dim=1)
+                fm_out = torch.cat([h_t0, h_t1, h_t2], dim=2)[:, 1:-1].reshape(-1, self.n_features, img_h, img_w)
 
         # when analyzing experimental data, the input dimension is 3, (analysis batch size, height, width)
         elif x_input.ndimension() == 3:
@@ -242,7 +250,7 @@ class DeepLocNet(nn.Module):
     def get_parameter_number(self):
         # print(f'Total network parameters: {sum(p.numel() for p in self.parameters() if p.requires_grad)/1e6:.2f}M')
 
-        dummy_input = torch.randn(1, 3, 64, 64).cuda() if self.local_context else torch.randn(1, 1, 64, 64).cuda()
+        dummy_input = torch.randn(1, 12, 64, 64).cuda() if self.local_context else torch.randn(1, 10, 64, 64).cuda()
         macs, params = thop.profile(self, inputs=(dummy_input,))
         macs, params = thop.clever_format([macs, params], '%.3f')
 

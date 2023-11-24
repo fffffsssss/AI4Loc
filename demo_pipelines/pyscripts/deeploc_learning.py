@@ -82,7 +82,7 @@ def deeploc_train():
                            'robust_training': True,
                            'train_size': 64,
                            'num_em_avg': 10,
-                           'num_evaluation_data': 1000,
+                           'eval_batch_size': 100,
                            'photon_range': (1000, 10000), 
                            'z_range': (-700, 700),
                            'bg_range': bg_range if 'bg_range' in locals().keys() else (40, 60),
@@ -105,7 +105,7 @@ def deeploc_train():
     deeploc_model.build_evaluation_dataset(napari_plot=True)
 
     file_name = '../../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H') + 'DeepLoc.pt'
-    deeploc_model.online_train(batch_size=10,
+    deeploc_model.online_train(batch_size=1,
                                max_iterations=30000,
                                eval_freq=500,
                                file_name=file_name)
@@ -118,7 +118,7 @@ def deeploc_ckpoint_train():
     model_name = '../../results/2023-09-09-16DeepLoc.pt'
     with open(model_name, 'rb') as f:
         deeploc_model = torch.load(f)
-    deeploc_model.online_train(batch_size=10,
+    deeploc_model.online_train(batch_size=1,
                                max_iterations=30000,
                                eval_freq=500,
                                file_name=model_name)

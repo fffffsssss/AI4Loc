@@ -3,6 +3,7 @@ from torch import nn
 from einops import rearrange
 
 import ailoc.transloc
+import ailoc.common
 
 
 class PositionalEncoding(nn.Module):
@@ -48,7 +49,7 @@ class SelfAttention(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(dropout_rate)
 
-    def forward(self, x):
+    def forward(self, x, attn_mask):
         batch_size, seq_length, d_model = x.shape
         qkv = (
             self.qkv(x)
@@ -62,6 +63,7 @@ class SelfAttention(nn.Module):
         )
 
         attn = (k @ q.transpose(-2, -1)) * self.scale
+        attn = attn.masked_fill(attn_mask==1, -torch.finfo(attn.dtype).max)
 
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
@@ -111,102 +113,190 @@ class TransLayer(nn.Module):
             depth,
             heads,
             mlp_dim,
-            input_dropout_rate=0.0,
             attn_dropout_rate=0.1,
+            ff_dropout_rate=0.1,
     ):
         super().__init__()
         layers = []
-        # print("trans depth:", depth)
+
+        # for _ in range(depth):
+        #     layers.extend(
+        #         [
+        #             ailoc.transloc.Residual(
+        #                 PreNormDrop(
+        #                     dim=dim,
+        #                     dropout_rate=input_dropout_rate,
+        #                     fn=SelfAttention(dim=dim, heads=heads, dropout_rate=attn_dropout_rate),
+        #                 )
+        #             ),
+        #             ailoc.transloc.Residual(
+        #                 PreNorm(
+        #                     dim=dim,
+        #                     fn=FeedForward(dim=dim, hidden_dim=mlp_dim, dropout_rate=input_dropout_rate)
+        #                 )
+        #             ),
+        #         ]
+        #     )
+
+        # without norm
         for _ in range(depth):
             layers.extend(
                 [
-                    Residual(
-                        PreNormDrop(
-                            dim=dim,
-                            dropout_rate=input_dropout_rate,
-                            fn=SelfAttention(dim=dim, heads=heads, dropout_rate=attn_dropout_rate),
-                        )
+                    ailoc.transloc.Residual(
+                        fn=SelfAttention(dim=dim, heads=heads, dropout_rate=attn_dropout_rate),
                     ),
-                    Residual(
-                        PreNorm(
-                            dim=dim,
-                            fn=FeedForward(dim=dim, hidden_dim=mlp_dim, dropout_rate=input_dropout_rate)
-                        )
+                    ailoc.transloc.Residual(
+                        fn=FeedForward(dim=dim, hidden_dim=mlp_dim, dropout_rate=ff_dropout_rate)
                     ),
                 ]
             )
-            # dim = dim / 2
-        self.net = IntermediateSequential(*layers, return_intermediate=False)
+
+        # self.net = IntermediateSequential(*layers, return_intermediate=False)
+        self.net = nn.ModuleList(layers,)
+
+    def forward(self, x, attn_mask):
+        # return self.net(x, attn_mask)
+        for layer in self.net:
+            x = layer(x, attn_mask)
+        return x
+
+
+class EmbeddingLayer(nn.Module):
+    def __init__(self, seq_length, attn_length, c_input, patch_size, embedding_dim):
+        super().__init__()
+
+        self.seq_length = seq_length
+        self.attn_length = attn_length
+        self.c_input = c_input
+        self.patch_size = patch_size
+        self.embedding_dim = embedding_dim
+
+        # self.patch_embedding = nn.Conv2d(in_channels=self.c_input,
+        #                                  out_channels=self.embedding_dim,
+        #                                  kernel_size=self.patch_size,
+        #                                  stride=self.patch_size)
+
+        # self.position_embedding = PositionalEncoding(seq_length=self.seq_length,
+        #                                              embedding_dim=self.embedding_dim)
+
+        # self.reverse_embedding = nn.Conv2d(in_channels=self.embedding_dim,
+        #                                    out_channels=self.c_input*patch_size ** 2,
+        #                                    kernel_size=1,
+        #                                    stride=1)
 
     def forward(self, x):
-        return self.net(x)
+        batch_size, context_size, feature_size, height, width = x.size()
+        # assert context_size == self.seq_length, "context size is not equal to seq_length"
+        assert feature_size == self.c_input, "feature size is not equal to c_input"
+        assert height == width, "height is not equal to width"
+        assert height % self.patch_size == 0, "height is not divisible by patch_size"
+        self.patch_num_h = height // self.patch_size
+
+        # # Conv2D version
+        # x = rearrange(x, 'b c f h w -> (b c) f h w')
+        # x = self.patch_embedding(x)  # (batch_size*seq_length, embedding_dim, patch_num_h, patch_num_w)
+        # x = rearrange(x, '(b c) d ph pw -> (b ph pw) c d', b=batch_size,)
+        # # x = self.position_embedding(x)
+
+        # # simple partition, embedding dim = patch_size ** 2
+        # x = rearrange(x, 'b c f (pn1 ps1) (pn2 ps2) -> b c f (pn1 pn2) ps1 ps2',
+        #               ps1=self.patch_size, ps2=self.patch_size)
+        # x = rearrange(x, 'b c f pn ps1 ps2 -> (b f pn) c (ps1 ps2)')
+
+        # simple partition, embedding dim = patch_size ** 2 * feature_size
+        x = rearrange(x, 'b c f (pn1 ps1) (pn2 ps2) -> b c f (pn1 pn2) ps1 ps2',
+                      ps1=self.patch_size, ps2=self.patch_size)
+        x = rearrange(x, 'b c f pn ps1 ps2 -> (b pn) c (f ps1 ps2)')
+
+        # attention mask for each frame, can only see attn_length//2 frames around it
+        neighbour = self.attn_length // 2
+        attn_mask = torch.ones((context_size, context_size), device=x.device)
+        for i in range(context_size):
+            attn_mask[i, max(0, i - neighbour):min(context_size, i + neighbour + 1)] = 0
+            attn_mask[max(0, i - neighbour):min(context_size, i + neighbour + 1), i] = 0
+
+        return x, attn_mask
+
+    def backward(self, x):
+        # x = rearrange(x, '(b ph pw) c d -> (b c) d ph pw', ph=self.patch_num_h, pw=self.patch_num_h)
+        # x = self.reverse_embedding(x)  # (batch_size*seq_length, feature_size*patch_size**2, patch_num_h, patch_num_h)
+        # x = rearrange(x, '(b c) (f ps1 ps2) ph pw -> b c f (ps1 ph) (ps2 pw)', c=self.seq_length, f=self.c_input,
+        #               ps1=self.patch_size, ps2=self.patch_size)
+
+        # # simple partition, embedding dim = patch_size ** 2
+        # x = rearrange(x, '(b f pn) c (ps1 ps2) -> b c f pn ps1 ps2',
+        #               f=self.c_input, pn=self.patch_num_h**2, ps1=self.patch_size, ps2=self.patch_size)
+        # x = rearrange(x, 'b c f (pn1 pn2) ps1 ps2 -> b c f (pn1 ps1) (pn2 ps2)',
+        #               pn1=self.patch_num_h, pn2=self.patch_num_h, ps1=self.patch_size, ps2=self.patch_size)
+
+        # simple partition, embedding dim = patch_size ** 2 * feature_size
+        x = rearrange(x, '(b pn) c (f ps1 ps2) -> b c f pn ps1 ps2',
+                      f=self.c_input, pn=self.patch_num_h**2, ps1=self.patch_size, ps2=self.patch_size)
+        x = rearrange(x, 'b c f (pn1 pn2) ps1 ps2 -> b c f (pn1 ps1) (pn2 ps2)',
+                      pn1=self.patch_num_h, pn2=self.patch_num_h, ps1=self.patch_size, ps2=self.patch_size)
+
+        return x
 
 
 class TransformerBlock(nn.Module):
     """
     Transformer block, the images features are split into patches, however, the MSA is applied
-    to the feature patches along the feature channels, not the spatial dimensions.
+    to the feature patches along the context dimension, not the spatial dimensions.
     """
 
     def __init__(
             self,
-            seq_length=48,
-            hw_input=64,  # CNN feature size
-            # channel_in=144,
-            # embedding_channels=16,
-            embedding_dim=16*16,  # feature patch size
+            seq_length=10,
+            attn_length=3,
+            c_input=48,
+            patch_size=1,
+            embedding_dim=48,  # feature patch size
             num_layers=2,
             num_heads=8,
-            mlp_dim=16*16*4,  # embedding_dim * 4
-            input_dropout_rate=0,
-            attn_dropout_rate=0,
+            mlp_dim=48*4,  # embedding_dim * 4
+            dropout_rate=0.1,
+            context_dropout=0.5,
     ):
         super(TransformerBlock, self).__init__()
         self.seq_length = seq_length
-        self.hw_input = hw_input
-        # self.channel_in = channel_in
-        # self.embedding_channels = embedding_channels
+        self.attn_length = attn_length
+        self.c_input = c_input
+        self.patch_size = patch_size
         self.embedding_dim = embedding_dim
-        self.patch_size = int((embedding_dim)**0.5)
 
-        # self.embedding_conv_in = ailoc.transloc.Conv2d_ELU(channel_in, embedding_channels,1,1,0)
+        self.embedding_layer = EmbeddingLayer(self.seq_length,
+                                              self.attn_length,
+                                              self.c_input,
+                                              self.patch_size,
+                                              self.embedding_dim)
 
-        self.position_encoding = PositionalEncoding(embedding_dim, seq_length)
-        # self.pre_dropout = nn.Dropout(p=input_dropout_rate)
         self.translayer = TransLayer(
             dim=embedding_dim,
             depth=num_layers,
             heads=num_heads,
             mlp_dim=mlp_dim,
-            input_dropout_rate=input_dropout_rate,
-            attn_dropout_rate=attn_dropout_rate,
+            attn_dropout_rate=dropout_rate,
+            ff_dropout_rate=dropout_rate,
         )
-        # self.pre_head_ln = nn.LayerNorm(embedding_dim)
-        # self.embedding_conv_out = ailoc.transloc.Conv2d_ELU(embedding_channels, channel_in,1,1,0)
+
+        self.context_dropout_rate = context_dropout
+        self.context_dropout = nn.Dropout(context_dropout)
+
+        self.context_aggregation = ailoc.transloc.ConvNextBlock(c_in=self.c_input*2,
+                                                                c_out=self.c_input,
+                                                                kernel_size=3,)
+        # self.context_aggregation = nn.Conv2d(in_channels=self.c_input * 2,
+        #                                      out_channels=self.c_input,
+        #                                      kernel_size=3,
+        #                                      padding=1, )
 
     def forward(self, x):
-        # x = self.embedding_conv_in(x)
-        x = self.split_patches(x)
-        batch, channel, patch_num, height, width = x.size()
-        # x = rearrange(x, 'b c p h w -> (b p) c (h w)')  # for channel attention
-        x = rearrange(x, 'b c p h w -> (b c) p (h w)')  # for spatial attention
-        # x = rearrange(x, 'b c p h w -> b p (c h w)')  # for spatial attention, compressed channel as patch
-        x = self.position_encoding(x)
-        # x = self.pre_dropout(x)
-        x = self.translayer(x)
-        # x = self.pre_head_ln(x)
-        # x = rearrange(x, '(b p) c (h w) -> b c p h w', b=batch, h=height,)  # for channel attention
-        x = rearrange(x, '(b c) p (h w) -> b c p h w', b=batch, h=height, )  # for spatial attention
-        # x = rearrange(x, 'b p (c h w) -> b c p h w', c=self.embedding_channels, h=height, )  # for spatial attention, compressed channel as patch
-        x = self.merge_patches(x)
-        # x = self.embedding_conv_out(x)
+        input = x
+        x, attn_mask = self.embedding_layer(x)
+        x = self.translayer(x, attn_mask)
+        x = self.embedding_layer.backward(x)
+        x = x * self.context_dropout(torch.ones(input.shape[0], input.shape[1], 1, 1, 1).to(x.device)) * (1. - self.context_dropout_rate)
+        x = torch.cat([input.reshape([-1, self.c_input, input.shape[-2], input.shape[-1]]),
+                       x.reshape([-1, self.c_input, input.shape[-2], input.shape[-1]])], dim=1)
+        x = self.context_aggregation(x)
         return x
-
-    def split_patches(self, x):
-        x = rearrange(x, 'b c (h p1) (w p2) -> b c (h w) p1 p2', p1=self.patch_size, p2=self.patch_size)
-        return x
-
-    def merge_patches(self, x):
-        x = rearrange(x, 'b c (h w) p1 p2 -> b c (h p1) (w p2)', h=int(self.hw_input/self.patch_size),)
-        return x
-

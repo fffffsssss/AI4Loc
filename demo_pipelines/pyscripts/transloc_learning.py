@@ -78,16 +78,17 @@ def transloc_train():
         bg_range = ailoc.common.get_bg_stats_gauss(experimental_images_photon, percentile=10, plot=True)
 
     # manually set sampler parameters
-    sampler_params_dict = {'local_context': False,
-                           'robust_training': False,
-                           'train_size': 128,
-                           'num_em_avg': 10,
-                           'num_evaluation_data': 1000,
-                           'photon_range': (1000, 10000),
-                           'z_range': (-3000, 3000),
-                           'bg_range': bg_range if 'bg_range' in locals().keys() else (40, 60),
-                           'bg_perlin': True,
-                           }
+    sampler_params_dict = {
+        'local_context': False,
+        'robust_training': False,
+        'train_size': 128,
+        'num_em_avg': 10,
+        'eval_batch_size': 100,
+        'photon_range': (1000, 10000),
+        'z_range': (-3000, 3000),
+        'bg_range': bg_range if 'bg_range' in locals().keys() else (40, 60),
+        'bg_perlin': True,
+    }
 
     # print learning parameters
     for params_dict in [psf_params_dict, camera_params_dict, sampler_params_dict]:
@@ -105,10 +106,10 @@ def transloc_train():
     transloc_model.build_evaluation_dataset(napari_plot=False)
 
     file_name = '../../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H') + 'TransLoc.pt'
-    transloc_model.online_train(batch_size=10,
-                               max_iterations=30000,
-                               eval_freq=500,
-                               file_name=file_name)
+    transloc_model.online_train(batch_size=1,
+                                max_iterations=30000,
+                                eval_freq=500,
+                                file_name=file_name)
 
     # plot evaluation performance during the training
     ailoc.common.plot_train_record(transloc_model)

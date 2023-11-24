@@ -78,6 +78,7 @@ class Out_Head(nn.Module):
 
     def __init__(self, c_input, kernel_size=3):
         super().__init__()
+        self.norm = ailoc.transloc.LayerNorm(c_input, data_format="chw", elementwise_affine=False)
 
         self.p_out = nn.Sequential(ailoc.transloc.Conv2d_GELU(in_channels=c_input,
                                                               out_channels=c_input,
@@ -128,6 +129,7 @@ class Out_Head(nn.Module):
         nn.init.zeros_(self.bg_out[1][0].bias)
 
     def forward(self, x):
+        x = self.norm(x)
         p = self.p_out(x)
         xyzph = self.xyzph_out(x)
         xyzphs = self.xyzphs_out(x)
@@ -464,35 +466,44 @@ class FAMUnet(nn.Module):
 
 class TransLocNet(nn.Module):
     """
-    DeepLocNet model, refer to DECODE network
-    1. Speiser, A. et al. Deep learning enables fast and dense single-molecule localization
-        with high accuracy. Nat Methods 18, 1082–1090 (2021).
+    The TransLocNet consists of a U-NeXt based feature extraction module(FEM),
+    an optional temporal Transformer module(TTM) and an output head. The output representation is inspired by
+    the DECODE.
     """
 
-    def __init__(self, local_context=True, hw_intput=64):
+    def __init__(self, temporal_attn=True, attn_length=3, train_context_size=12):
         super().__init__()
 
-        self.local_context = local_context
-        self.n_features = 48 * 3 if self.local_context else 48
+        self.temporal_attn = temporal_attn
+        self.attn_length = attn_length
+        self.train_context_size = train_context_size
+        self.n_features = 48
 
-        self.frame_anlz_module = U_NeXt(c_input=1,
-                                        c_output=self.n_features,
-                                        n_stages=2,
-                                        kernel_size=5).cuda()
+        self.fem = U_NeXt(c_input=1,
+                          c_output=48,
+                          n_stages=2,
+                          kernel_size=5).cuda()
+        if self.temporal_attn:
+            # temporal transformer module
+            patch_size = 1
+            self.ttm = ailoc.transloc.TransformerBlock(seq_length=train_context_size,
+                                                       attn_length=attn_length,
+                                                       c_input=self.n_features,
+                                                       patch_size=patch_size,
+                                                       embedding_dim=(patch_size**2)*self.n_features,
+                                                       num_layers=2,
+                                                       num_heads=8,
+                                                       mlp_dim=(patch_size**2)*4*self.n_features,
+                                                       dropout_rate=0.0,
+                                                       context_dropout=0.0).cuda()
 
-        # self.frame_anlz_module = MultiScaleTransUnet(c_input=1,
-        #                                              c_output=self.n_features,
-        #                                              hw_input=hw_intput,
-        #                                              n_stages=1,
-        #                                              kernel_list=(3, 5, 7),
-        #                                              parallel_stages=0,).cuda()
-        # self.frame_anlz_module = Unet(n_input=1, n_filters=48, n_stages=2, pad=1, ker_size=3).cuda()
-        # self.temp_context_module = Unet(n_input=self.n_features,
-        #                                 n_filters=self.n_features,
-        #                                 n_stages=2,
-        #                                 pad=1,
-        #                                 ker_size=3).cuda()
-        self.out_module = Out_Head(c_input=self.n_features, kernel_size=3).cuda()
+            # # Unext based temporal context module
+            # self.ttm = U_NeXt(c_input=self.n_features,
+            #                   c_output=48,
+            #                   n_stages=2,
+            #                   kernel_size=5).cuda()
+
+        self.om = Out_Head(c_input=48, kernel_size=3).cuda()
 
         self.get_parameter_number()
 
@@ -513,67 +524,65 @@ class TransLocNet(nn.Module):
         assert img_h % 4 == 0 and img_w % 4 == 0, 'network structure requires that image size should be multiples of 4'
 
         # during training and online evaluation, the inpout should have the shape
-        # (training batch size, local context (1 or 3), height, width)
+        # (training batch size, context_size, height, width)
         if x_input.ndimension() == 4:
-            fm_out = self.frame_anlz_module(x_input.reshape([-1, 1, img_h, img_w])).\
-                reshape(-1, self.n_features, img_h, img_w)
+            batch_size, context_size = x_input.shape[:2]
+            fem_out = self.fem(x_input.reshape([-1, 1, img_h, img_w]))
+            if self.temporal_attn:
+                # transformer based ttm
+                fem_out = fem_out.reshape([batch_size, context_size, self.n_features, img_h, img_w])
 
-        # when analyzing experimental data, the input dimension is 3, (analysis batch size, height, width)
+                # # Unext based ttm
+                # fem_out = fem_out.reshape([batch_size, context_size, -1, img_h, img_w])
+                # zeros = torch.zeros_like(fem_out[:, :1])
+                # h_t1 = fem_out
+                # h_t0 = torch.cat([zeros, fem_out[:, :-1]], dim=1)
+                # h_t2 = torch.cat([fem_out[:, 1:], zeros], dim=1)
+                # fem_out = torch.cat([h_t0, h_t1, h_t2], dim=2)[:, 1:-1].reshape(-1, self.n_features, img_h, img_w)
+
+        # when analyzing experimental data, the input dimension is 3, (anlz_batch_size, height, width)
         elif x_input.ndimension() == 3:
-            x_input = x_input[:, None]
-            fm_out = self.frame_anlz_module(x_input)  # (analysis batch size, 48, height, width)
+            anlz_batch_size = x_input.shape[0]
+            fem_out = self.fem(x_input[:, None])
+            if self.temporal_attn:
+                # transformer based ttm
+                fem_out = fem_out.reshape([1, anlz_batch_size, self.n_features, img_h, img_w])
 
-            # if using local context, the ailoc.common.analyze.data_analyze() function will apply
-            # the rolling inference strategy, the input will be padded with two neighbouring frames at
-            # the head and tail to provide local context for target frames, so after context feature
-            # concatenation, the head and tail output in the batch could be discarded
-            if self.local_context:
-                # create a zero output with the shape (1, 48, height, width) to pad the head and tail
-                zeros = torch.zeros_like(fm_out[:1])
-                # the fm_out has the shape (analysis batch size+2, 48, height, width)
-                h_t1 = fm_out
-                # pad zero to the head and discard the tail frame output of the batch
-                h_t0 = torch.cat([zeros, fm_out], 0)[:-1]
-                # pad zero to the tail and discard the head frame output of the batch
-                h_t2 = torch.cat([fm_out, zeros], 0)[1:]
-                # reuse the features of each frame to build the local context with the shape
-                # (analysis batch size+2, 144, height, width), discard the head and tail
-                fm_out = torch.cat([h_t0, h_t1, h_t2], 1)[1:-1]
-
+                # # Unext based ttm
+                # # create a zero output with the shape (1, 48, height, width) to pad the head and tail
+                # zeros = torch.zeros_like(fem_out[:1])
+                # # the fm_out has the shape (analysis batch size+2, 48, height, width)
+                # h_t1 = fem_out
+                # # pad zero to the head and discard the tail frame output of the batch
+                # h_t0 = torch.cat([zeros, fem_out], 0)[:-1]
+                # # pad zero to the tail and discard the head frame output of the batch
+                # h_t2 = torch.cat([fem_out, zeros], 0)[1:]
+                # # reuse the features of each frame to build the local context with the shape
+                # # (analysis batch size+2, 144, height, width), discard the head and tail
+                # fem_out = torch.cat([h_t0, h_t1, h_t2], 1)[1:-1]
         else:
             raise ValueError('The input dimension is not supported.')
 
-        # layer normalization
-        fm_out_ln = nn.functional.layer_norm(fm_out, normalized_shape=[self.n_features, img_h, img_w])
+        if self.temporal_attn:
+            # ttm_out = self.ttm(fem_out).reshape([-1, 48, img_h, img_w])
+            ttm_out = self.ttm(fem_out)[self.attn_length//2: -(self.attn_length//2)]
 
-        # cm_out = self.temp_context_module(fm_out_ln)
-        # outputs = self.out_module(cm_out)
-        p, xyzph, xyzphs, bg = self.out_module(fm_out_ln)  # skip the temporal context module
+            p, xyzph, xyzphs, bg = self.om(ttm_out)
+        else:
+            p, xyzph, xyzphs, bg = self.om(fem_out)
 
-        # todo:  may need to set an extra scale and offset for the output considering the sensitive
-        #  range of the activation function sigmoid and tanh
-        # p_pred = torch.sigmoid(torch.clamp(outputs['p'], min=-16, max=16))[:, 0]  # probability
         p_pred = torch.sigmoid(torch.clamp(p, min=-16, max=16))[:, 0]  # probability
-
-        # xyzph_pred = outputs['xyzph']
         xyzph_pred = xyzph
-
         # output xy range is (-1, 1), the training sampling range is (-0.5,0.5)
         xyzph_pred[:, :2] = torch.tanh(xyzph_pred[:, :2])
-
         # output z range is (-2, 2), the training sampling range is in (-1,1)
         xyzph_pred[:, 2] = torch.tanh(xyzph_pred[:, 2]) * 2
-
         # output photon range is (0, 1), the training sampling range is in (0,1)
         xyzph_pred[:, 3] = torch.sigmoid(xyzph_pred[:, 3])
-
         # scale the uncertainty and add epsilon, the output range becomes (0.0001, 3.0001),
         # maybe can use RELU for unlimited upper range and stable gradient
-        # xyzph_sig_pred = torch.sigmoid(outputs['xyzph_sig']) * 3 + 0.0001
         xyzph_sig_pred = torch.sigmoid(xyzphs) * 3 + 0.0001
-
         # output bg range is (0, 1), the training sampling range is in (0,1)
-        # bg_pred = torch.sigmoid(outputs['bg'][:, 0])  # bg
         bg_pred = torch.sigmoid(bg[:, 0])  # bg
 
         return p_pred, xyzph_pred, xyzph_sig_pred, bg_pred
@@ -581,9 +590,9 @@ class TransLocNet(nn.Module):
     def get_parameter_number(self):
         # print(f'Total network parameters: {sum(p.numel() for p in self.parameters() if p.requires_grad)/1e6:.2f}M')
 
-        dummy_input = torch.randn(1, 1, 64, 64).cuda()
+        dummy_input = torch.randn(1, self.train_context_size, 64, 64).cuda()
         macs, params = thop.profile(self, inputs=(dummy_input,))
         macs, params = thop.clever_format([macs, params], '%.3f')
 
-        print('Params:',params)
+        print('Params:', params)
         print(f'MACs:{macs}, (input shape: {dummy_input.shape})')

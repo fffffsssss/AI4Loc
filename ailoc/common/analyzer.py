@@ -42,27 +42,42 @@ def data_analyze(loc_model, data, sub_fov_xy, camera, batch_size=32, retain_infe
 
         pixel_size_xy = ailoc.common.cpu(loc_model.data_simulator.psf_model.pixel_size_xy)
 
-        local_context = getattr(loc_model, 'local_context', False)
+        local_context = getattr(loc_model, 'local_context', False)  # for DeepLoc model
+        temporal_attn = getattr(loc_model, 'temporal_attn', False)  # for TransLoc model
+        assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
 
-        # if using local context, the rolling inference strategy will be automatically applied in
-        # the network.forward() as it is dependent on the data shape and local_context flag
-        rolling_inference = True if local_context else False
+        # if using local context or temporal attention, the rolling inference strategy will be
+        # automatically applied in the network.forward()
+        rolling_inference = True if local_context or temporal_attn else False
+        if local_context:
+            extra_length = 1
+        elif temporal_attn:
+            extra_length = loc_model.attn_length // 2
 
         # rolling inference strategy needs to pad the whole data with two more images at the beginning and end
         # to provide the context for the first and last image
         if rolling_inference:
-            data = np.concatenate([data[1:2], data, data[-2:-1]], 0) \
-                if num_img > 1 else np.concatenate([data, data, data], 0)
+            if num_img > extra_length:
+                data = np.concatenate([data[extra_length:0:-1], data, data[-2:-2-extra_length:-1]], 0)
+            else:
+                data_nopad = data.copy()
+                for i in range(extra_length):
+                    data = np.concatenate([data_nopad[(i+1) % num_img: (i+1) % num_img+1],
+                                           data,
+                                           data_nopad[num_img-1 - ((i+1) % num_img): num_img-1 - ((i+1) % num_img)+1],
+                                           ], 0)
 
         molecule_list_pred = []
         inference_dict_list = []
         # for each batch, rolling inference needs to take 2 more images at the beginning and end, but only needs
         # to return the molecule list for the middle images
         for i in range(int(np.ceil(num_img / batch_size))):
-            molecule_array_tmp, inference_dict_tmp = \
-                loc_model.analyze(ailoc.common.gpu(data[i * batch_size: (i + 1) * batch_size + 2]), camera, sub_fov_xy) \
-                    if rolling_inference else \
-                    loc_model.analyze(ailoc.common.gpu(data[i * batch_size: (i + 1) * batch_size]), camera, sub_fov_xy)
+            if rolling_inference:
+                molecule_array_tmp, inference_dict_tmp = loc_model.analyze(
+                    ailoc.common.gpu(data[i * batch_size: (i + 1) * batch_size + 2*extra_length]), camera, sub_fov_xy)
+            else:
+                molecule_array_tmp, inference_dict_tmp = loc_model.analyze(
+                    ailoc.common.gpu(data[i * batch_size: (i + 1) * batch_size]), camera, sub_fov_xy)
 
             # adjust the frame number and the x, y position of the molecules
             if len(molecule_array_tmp) > 0:
@@ -546,10 +561,18 @@ class SmlmDataAnalyzer:
         assert self.tiff_dataset.sum_file_length > frame_num >= 0, \
             f'frame_num {frame_num} is not in the valid range: [0-{self.tiff_dataset.sum_file_length-1}]'
 
-        local_context = getattr(self.loc_model, 'local_context', False)
+        local_context = getattr(self.loc_model, 'local_context', False)  # for DeepLoc model
+        temporal_attn = getattr(self.loc_model, 'temporal_attn', False)  # for TransLoc model
+        assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
+
         if local_context:
-            idx1, idx2, idx3 = self.get_context_index(self.tiff_dataset.sum_file_length, frame_num)
-            data_block = self.tiff_dataset.get_specific_frame(frame_num_list=[idx1, idx2, idx3])
+            extra_length = 1
+        elif temporal_attn:
+            extra_length = self.loc_model.attn_length // 2
+
+        if local_context or temporal_attn:
+            idx_list = self.get_context_index(self.tiff_dataset.sum_file_length, frame_num, extra_length)
+            data_block = self.tiff_dataset.get_specific_frame(frame_num_list=idx_list)
         else:
             data_block = self.tiff_dataset.get_specific_frame(frame_num_list=[frame_num])
 
@@ -584,10 +607,14 @@ class SmlmDataAnalyzer:
         molecule_list_array = np.array(self.filter_over_cut(sub_fov_molecule_list, sub_fov_xy_list,
                                                             original_sub_fov_xy_list, self.pixel_size_xy))
 
-        merge_inference_dict = self.merge_sub_fov_inference(sub_fov_inference_list, sub_fov_xy_list,
-                                                            original_sub_fov_xy_list, self.sub_fov_size,
-                                                            local_context, self.tiff_dataset.tiff_shape)
-        merge_inference_dict['raw_image'] = data_block[1 if local_context else 0]
+        merge_inference_dict = self.merge_sub_fov_inference(sub_fov_inference_list,
+                                                            sub_fov_xy_list,
+                                                            original_sub_fov_xy_list,
+                                                            self.sub_fov_size,
+                                                            local_context or temporal_attn,
+                                                            extra_length,
+                                                            self.tiff_dataset.tiff_shape)
+        merge_inference_dict['raw_image'] = data_block[extra_length if local_context or temporal_attn else 0]
 
         ailoc.common.plot_single_frame_inference(merge_inference_dict)
 
@@ -635,8 +662,13 @@ class SmlmDataAnalyzer:
         return sorted(molecule_list, key=lambda x: x[0])
 
     @staticmethod
-    def merge_sub_fov_inference(sub_fov_inference_list, sub_fov_xy_list, original_sub_fov_xy_list, sub_fov_size,
-                                local_context, tiff_shape):
+    def merge_sub_fov_inference(sub_fov_inference_list,
+                                sub_fov_xy_list,
+                                original_sub_fov_xy_list,
+                                sub_fov_size,
+                                local_context,
+                                extra_length,
+                                tiff_shape):
 
         h, w = tiff_shape[-2:]
         row_sub_fov = int(np.ceil(h / sub_fov_size))
@@ -654,7 +686,7 @@ class SmlmDataAnalyzer:
 
             for k in infs_dict.keys():
                 original_sub_fov_inference_list[i_fov][k] = copy.deepcopy(infs_dict[k]
-                                                                          [1 if local_context else 0,
+                                                                          [extra_length if local_context else 0,
                                                                           row_index: row_index + sub_fov_size,
                                                                           col_index: col_index + sub_fov_size])
 
@@ -673,31 +705,40 @@ class SmlmDataAnalyzer:
         return merge_inference
 
     @staticmethod
-    def get_context_index(stack_length, target_image_number):
+    def get_context_index(stack_length, target_image_number, extra_length):
         """
-        Get the indices of the target image and its neighbors in the image stack. If the stack length is 5
+        Get the indices of the target image and its neighbors in the image stack. Assuming the stack length is 5
         and the target image is the first image, the indices of the target image and its neighbors are (1, 0, 1).
         If the target image is the last image, the indices are (3, 4, 3).
 
         Args:
             stack_length: total number of images in the stack
             target_image_number: the image that want to check, start from 0
+            extra_length: the extra length before and after the target image to provide context
 
         Returns:
-            (int, int, int): indices of the target image and its neighbors in the image stack, start from 0
+            list: indices of the target image and its neighbors in the image stack, start from 0
         """
 
-        target_index = target_image_number  # Convert image number to 0-based index
+        assert target_image_number < stack_length, "frame_number should be smaller than the whole length"
+        idx_list = [target_image_number]
+        for i in range(extra_length):
+            idx_list = [max(0, target_image_number-i-1)] + idx_list
+            idx_list.append(min(stack_length-1, target_image_number+i+1))
 
-        # Calculate the range of indices for the target image and its neighbors
-        pre_index = max(0, target_index - 1)
-        next_index = min(stack_length - 1, target_index + 1)
+        return idx_list
 
-        # Check if the target image is at the beginning or end of the stack
-        if pre_index == 0 and target_index == pre_index:
-            pre_index = next_index
-        elif next_index == stack_length - 1 and target_index == next_index:
-            next_index = pre_index
-        return pre_index, target_index, next_index
+        # target_index = target_image_number  # Convert image number to 0-based index
+        #
+        # # Calculate the range of indices for the target image and its neighbors
+        # pre_index = max(0, target_index - 1)
+        # next_index = min(stack_length - 1, target_index + 1)
+        #
+        # # Check if the target image is at the beginning or end of the stack
+        # if pre_index == 0 and target_index == pre_index:
+        #     pre_index = next_index
+        # elif next_index == stack_length - 1 and target_index == next_index:
+        #     next_index = pre_index
+        # return pre_index, target_index, next_index
 
 
