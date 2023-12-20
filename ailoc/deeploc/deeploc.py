@@ -90,7 +90,7 @@ class DeepLoc(ailoc.common.XXLoc):
             file_name (str): the name of the file to save the network
         """
 
-        file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H') + 'DeepLoc.pt' if file_name is None else file_name
+        file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'DeepLoc.pt' if file_name is None else file_name
 
         print('Start training...')
 

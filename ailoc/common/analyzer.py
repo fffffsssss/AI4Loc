@@ -348,7 +348,7 @@ class SmlmDataAnalyzer:
     """
 
     def __init__(self, loc_model, tiff_path, output_path, time_block_gb=1, batch_size=16,
-                 sub_fov_size=128, over_cut=8, num_workers=0, camera=None, fov_xy_start=None,
+                 sub_fov_size=256, over_cut=8, num_workers=0, camera=None, fov_xy_start=None,
                  ui_print_signal=None):
         """
         Args:
@@ -495,9 +495,10 @@ class SmlmDataAnalyzer:
                                                        original_sub_fov_xy_list, self.pixel_size_xy)
 
             molecule_list_block = np.array(molecule_list_block)
-            molecule_list_block[:, 0] += self.tiff_dataset.frame_slice[block_num].start
-            ailoc.common.write_csv_array(input_array=molecule_list_block, filename=self.output_path,
-                                         write_mode='append localizations')
+            if len(molecule_list_block) > 0:
+                molecule_list_block[:, 0] += self.tiff_dataset.frame_slice[block_num].start
+                ailoc.common.write_csv_array(input_array=molecule_list_block, filename=self.output_path,
+                                             write_mode='append localizations')
 
         # # histogram equalization for grid artifacts removal
         # time_start = time.time()
@@ -526,7 +527,7 @@ class SmlmDataAnalyzer:
         # resampling the localizations with large uncertainty to avoid the grid artifacts
         time_start = time.time()
 
-        print_message_tmp = 'resample the xy offsets to avoid grid artifacts ' \
+        print_message_tmp = 'resample the xy offsets to reduce grid artifacts ' \
                             'in the difficult conditions (low SNR, high density, etc.) ' \
                             'replace the original xnm and ynm with x_rescale and y_rescale'
         print(print_message_tmp)
@@ -544,7 +545,7 @@ class SmlmDataAnalyzer:
         print(print_message_tmp)
         self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
-        print_message_tmp = f'the file to save the predictions is: {tmp_path}'
+        print_message_tmp = f'the file to save the resampled predictions is: {tmp_path}'
         print(print_message_tmp)
         self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
@@ -569,12 +570,11 @@ class SmlmDataAnalyzer:
             extra_length = 1
         elif temporal_attn:
             extra_length = self.loc_model.attn_length // 2
-
-        if local_context or temporal_attn:
-            idx_list = self.get_context_index(self.tiff_dataset.sum_file_length, frame_num, extra_length)
-            data_block = self.tiff_dataset.get_specific_frame(frame_num_list=idx_list)
         else:
-            data_block = self.tiff_dataset.get_specific_frame(frame_num_list=[frame_num])
+            extra_length = 0
+
+        idx_list = self.get_context_index(self.tiff_dataset.sum_file_length, frame_num, extra_length)
+        data_block = self.tiff_dataset.get_specific_frame(frame_num_list=idx_list)
 
         fov_xy = (self.fov_xy_start[0], self.fov_xy_start[0] + self.tiff_dataset.tiff_shape[-1] - 1,
                   self.fov_xy_start[1], self.fov_xy_start[1] + self.tiff_dataset.tiff_shape[-2] - 1)
@@ -614,7 +614,7 @@ class SmlmDataAnalyzer:
                                                             local_context or temporal_attn,
                                                             extra_length,
                                                             self.tiff_dataset.tiff_shape)
-        merge_inference_dict['raw_image'] = data_block[extra_length if local_context or temporal_attn else 0]
+        merge_inference_dict['raw_image'] = data_block[extra_length]
 
         ailoc.common.plot_single_frame_inference(merge_inference_dict)
 
@@ -686,7 +686,7 @@ class SmlmDataAnalyzer:
 
             for k in infs_dict.keys():
                 original_sub_fov_inference_list[i_fov][k] = copy.deepcopy(infs_dict[k]
-                                                                          [extra_length if local_context else 0,
+                                                                          [extra_length,
                                                                           row_index: row_index + sub_fov_size,
                                                                           col_index: col_index + sub_fov_size])
 

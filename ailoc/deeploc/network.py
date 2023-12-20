@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import thop
+import time
 
 
 class Unet(nn.Module):
@@ -149,11 +150,21 @@ class DeepLocNet(nn.Module):
         super().__init__()
 
         self.local_context = local_context
-        self.n_features = 48 * 3 if self.local_context else 48
+        self.n_features = 48
 
-        self.frame_anlz_module = Unet(n_inp=1, n_filters=48, n_stages=2, pad=1, ker_size=3).cuda()
-        self.temp_context_module = Unet(n_inp=self.n_features, n_filters=48, n_stages=2, pad=1, ker_size=3).cuda()
-        self.out_module = Outnet(n_inp=48, pad=1, ker_size=3).cuda()
+        self.frame_anlz_module = Unet(n_inp=1,
+                                      n_filters=self.n_features,
+                                      n_stages=2,
+                                      pad=1,
+                                      ker_size=3).cuda()
+        self.temp_context_module = Unet(n_inp=self.n_features*3 if self.local_context else self.n_features,
+                                        n_filters=self.n_features,
+                                        n_stages=2,
+                                        pad=1,
+                                        ker_size=3).cuda()
+        self.out_module = Outnet(n_inp=self.n_features,
+                                 pad=1,
+                                 ker_size=3).cuda()
 
         self.get_parameter_number()
 
@@ -185,7 +196,7 @@ class DeepLocNet(nn.Module):
                 h_t1 = fm_out
                 h_t0 = torch.cat([zeros, fm_out[:, :-1]], dim=1)
                 h_t2 = torch.cat([fm_out[:, 1:], zeros], dim=1)
-                fm_out = torch.cat([h_t0, h_t1, h_t2], dim=2)[:, 1:-1].reshape(-1, self.n_features, img_h, img_w)
+                fm_out = torch.cat([h_t0, h_t1, h_t2], dim=2)[:, 1:-1].reshape(-1, self.n_features*3, img_h, img_w)
 
         # when analyzing experimental data, the input dimension is 3, (analysis batch size, height, width)
         elif x_input.ndimension() == 3:
@@ -213,7 +224,7 @@ class DeepLocNet(nn.Module):
             raise ValueError('The input dimension is not supported.')
 
         # layer normalization
-        fm_out_ln = nn.functional.layer_norm(fm_out, normalized_shape=[self.n_features, img_h, img_w])
+        fm_out_ln = nn.functional.layer_norm(fm_out, normalized_shape=fm_out.shape[1:])
 
         cm_out = self.temp_context_module(fm_out_ln)
         p, xyzph, xyzphs, bg = self.out_module(cm_out)
@@ -251,12 +262,12 @@ class DeepLocNet(nn.Module):
         # print(f'Total network parameters: {sum(p.numel() for p in self.parameters() if p.requires_grad)/1e6:.2f}M')
 
         dummy_input = torch.randn(1, 12, 64, 64).cuda() if self.local_context else torch.randn(1, 10, 64, 64).cuda()
+
         macs, params = thop.profile(self, inputs=(dummy_input,))
         macs, params = thop.clever_format([macs, params], '%.3f')
+        print(f'Params:{params}, MACs:{macs}, (input shape:{dummy_input.shape})')
 
-        print('Params:', params)
-        print(f'MACs:{macs}, (input shape: {dummy_input.shape})')
-
-
-
-
+        t0 = time.time()
+        for i in range(200):
+            self.forward(dummy_input)
+        print(f'Average forward time: {(time.time() - t0) / 200:.4f} s')

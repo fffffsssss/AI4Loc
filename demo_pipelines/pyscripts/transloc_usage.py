@@ -12,32 +12,34 @@ import ailoc.transloc
 import ailoc.common
 import ailoc.simulation
 ailoc.common.setup_seed(42)
+torch.backends.cudnn.benchmark = True
 
 
 def transloc_train():
     # set the file paths, calibration file is necessary,
     # experiment file is optional for background range estimation
-    calib_file = '../../datasets/NPC_DMO6_alpha30/beads-DMO6_alpha30_+-3umstep50nm_5/DMO6_alpha30_+-3umstep50nm_5_MMStack_Default_calib_results.mat'
-    experiment_file = '../../datasets/NPC_DMO6_alpha30/NPC_DMO6_alpha30_2_MMStack_Default.ome.tif'
+    calib_file = '../../datasets/fy_npc6um_1/DMO_6um_Crimson_645_beads_defoucs_0_step_100nm_1/DMO_6um_Crimson_645_beads_defoucs_0_step_100nm_1_MMStack_Pos0_calib_results.mat'
+    experiment_file = '../../datasets/fy_npc6um_1/NPC_NUP96_SNAP647_DMO_6um_defoucs_0_20ms_3/NPC_NUP96_SNAP647_DMO_6um_defoucs_0_20ms_3_MMStack_Pos0.ome.tif'
 
     if calib_file is not None:
         # using the same psf parameters and camera parameters as beads calibration
         calib_dict = sio.loadmat(calib_file, simplify_cells=True)
         psf_params_dict = calib_dict['psf_params_fitted']
         psf_params_dict['wavelength'] = 670  # wavelength of sample may be different from beads, unit: nm
-        psf_params_dict['objstage0'] = -3000  # the objective stage position is different from beads calibration, unit: nm
+        psf_params_dict['refmed'] = 1.406  # refractive index of sample medium may be different from beads
+        psf_params_dict['objstage0'] = -0  # the objective stage position is different from beads calibration, unit: nm
 
         camera_params_dict = calib_dict['calib_params_dict']['camera_params_dict']
 
     else:
         # manually set psf parameters
-        zernike_aber = np.array([2, -2, 0, 2, 2, 70, 3, -1, -20, 3, 1, 10, 4, 0, -15, 3, -3, 0, 3, 3, 0,
-                                 4, -2, 0, 4, 2, 0, 5, -1, 0, 5, 1, 0, 6, 0, 0, 4, -4, 0, 4, 4, 0,
-                                 5, -3, 0, 5, 3, 0, 6, -2, 0, 6, 2, 0, 7, 1, 0, 7, -1, 0, 8, 0, 0],
+        zernike_aber = np.array([2, -2, 0, 2, 2, 60, 3, -1, -8.6, 3, 1, 11.3, 4, 0, -22.8, 3, -3, 0, 3, 3, -3,
+                                 4, -2, 0, 4, 2, 0, 5, -1, -4, 5, 1, 0, 6, 0, 0, 4, -4, 0, 4, 4, 0,
+                                 5, -3, 0, 5, 3, 0, 6, -2, 0, 6, 2, 0, 7, 1, 0, 7, -1, 0, 8, 0, 7.4],
                                 dtype=np.float32).reshape([21, 3])
         psf_params_dict = {'na': 1.5,
                            'wavelength': 670,  # unit: nm
-                           'refmed': 1.406,
+                           'refmed': 1.518,
                            'refcov': 1.524,
                            'refimm': 1.518,
                            'zernike_mode': zernike_aber[:, 0:2],
@@ -46,7 +48,7 @@ def transloc_train():
                            'otf_rescale_xy': (0.5, 0.5),
                            'npupil': 64,
                            'psf_size': 25,
-                           'objstage0': -1000,
+                           'objstage0': -0,
                            # 'zemit0': 0,
                            }
 
@@ -79,8 +81,9 @@ def transloc_train():
 
     # manually set sampler parameters
     sampler_params_dict = {
-        'local_context': False,
-        'robust_training': False,
+        'temporal_attn': True,
+        'robust_training': True,  # if True, the training data will be added with some random Zernike aberrations
+        'context_size': 10,  # for each batch unit, simulate several frames share the same photophysics and bg to train
         'train_size': 128,
         'num_em_avg': 10,
         'eval_batch_size': 100,
@@ -105,7 +108,7 @@ def transloc_train():
 
     transloc_model.build_evaluation_dataset(napari_plot=False)
 
-    file_name = '../../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H') + 'TransLoc.pt'
+    file_name = '../../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'TransLoc.pt'
     transloc_model.online_train(batch_size=1,
                                 max_iterations=30000,
                                 eval_freq=500,
@@ -120,29 +123,75 @@ def transloc_train():
     save_path = '../../results/' + \
                 os.path.split(file_name)[-1].split('.')[0] + \
                 '_' + os.path.basename(image_path) + '_predictions.csv'
-    print(save_path)
     transloc_analyzer = ailoc.common.SmlmDataAnalyzer(loc_model=transloc_model,
-                                                     tiff_path=image_path,
-                                                     output_path=save_path,
-                                                     time_block_gb=1,
-                                                     batch_size=16,
-                                                     sub_fov_size=256,
-                                                     over_cut=8,
-                                                     num_workers=0)
+                                                      tiff_path=image_path,
+                                                      output_path=save_path,
+                                                      time_block_gb=1,
+                                                      batch_size=32,
+                                                      sub_fov_size=256,
+                                                      over_cut=8,
+                                                      num_workers=0)
     transloc_analyzer.check_single_frame_output(frame_num=3)
     preds_array, preds_rescale_array = transloc_analyzer.divide_and_conquer()
 
 
 def transloc_ckpoint_train():
-    model_name = '../../results/2023-09-09-16DeepLoc.pt'
-    with open(model_name, 'rb') as f:
+    file_name = '../../results/.pt'
+    with open(file_name, 'rb') as f:
         transloc_model = torch.load(f)
-    transloc_model.online_train(batch_size=10,
+    transloc_model.online_train(batch_size=1,
                                 max_iterations=30000,
                                 eval_freq=500,
-                                file_name=model_name)
+                                file_name=file_name)
+
+
+def transloc_analyze():
+    loc_model_path = '../../results/2023-12-05-15-47TransLoc.pt'
+    # can be a tiff file path or a folder path
+    image_path = '../../datasets/sw_npc_20211028/NUP96_SNP647_3D_512_20ms_hama_mm_1800mW_3'
+    save_path = '../../results/' + \
+                os.path.split(loc_model_path)[-1].split('.')[0] + \
+                '_' + os.path.basename(image_path) + '_predictions.csv'
+
+    # load the completely trained model
+    with open(loc_model_path, 'rb') as f:
+        transloc_model = torch.load(f)
+
+    # plot evaluation performance during the training
+    ailoc.common.plot_train_record(transloc_model)
+
+    # compile the network
+    # transloc_model.network = torch.compile(transloc_model.network)
+
+    transloc_analyzer = ailoc.common.SmlmDataAnalyzer(loc_model=transloc_model,
+                                                      tiff_path=image_path,
+                                                      output_path=save_path,
+                                                      time_block_gb=1,
+                                                      batch_size=32,
+                                                      sub_fov_size=256,
+                                                      over_cut=8,
+                                                      num_workers=0)
+
+    transloc_analyzer.check_single_frame_output(frame_num=3)
+
+    preds_array, preds_rescale_array = transloc_analyzer.divide_and_conquer()
+
+    # # read the ground truth and calculate metrics
+    # gt_array = ailoc.common.read_csv_array("../../datasets/match_data/activations.csv")
+    #
+    # metric_dict, paired_array = ailoc.common.pair_localizations(prediction=preds_array,
+    #                                                             ground_truth=gt_array,
+    #                                                             frame_num=transloc_analyzer.tiff_dataset.end_frame_num,
+    #                                                             fov_xy_nm=transloc_analyzer.fov_xy_nm,
+    #                                                             print_info=True)
+    # # write the paired localizations to csv file
+    # save_paried_path = '../../results/'+os.path.split(save_path)[-1].split('.')[0]+'_paired.csv'
+    # ailoc.common.write_csv_array(input_array=paired_array,
+    #                              filename=save_paried_path,
+    #                              write_mode='write paired localizations')
 
 
 if __name__ == '__main__':
     transloc_train()
-    # deeploc_ckpoint_train()
+    # transloc_ckpoint_train()
+    # transloc_analyze()

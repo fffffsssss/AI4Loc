@@ -104,11 +104,18 @@ def pair_localizations(prediction, ground_truth, frame_num=None, fov_xy_nm=None,
     mse_ax = 0
     mse_vol = 0
 
+    gt_array_filtered = np.array(gt_list)
+    pred_array_filtered = np.array(pred_list)
+
     paired_list = []
 
     for i in range(1, frame_num+1):
-        gt_frame = np.array([gt for gt in gt_list if gt[0] == i])
-        pred_frame = np.array([pred for pred in pred_list if pred[0] == i])
+        # gt_frame = np.array([gt for gt in gt_list if gt[0] == i])
+        # pred_frame = np.array([pred for pred in pred_list if pred[0] == i])
+
+        # much faster than the above code
+        gt_frame = gt_array_filtered[gt_array_filtered[:, 0] == i]
+        pred_frame = pred_array_filtered[pred_array_filtered[:, 0] == i]
 
         if len(gt_frame) == 0:
             fp += len(pred_frame)

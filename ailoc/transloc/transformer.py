@@ -1,19 +1,38 @@
 import torch
 from torch import nn
 from einops import rearrange
+import math
 
 import ailoc.transloc
 import ailoc.common
 
 
 class PositionalEncoding(nn.Module):
-    def __init__(self, embedding_dim, seq_length):
+    def __init__(self, d_model, seq_length, learnable=False):
         super(PositionalEncoding, self).__init__()
-        self.position_embeddings = nn.Parameter(torch.zeros(1, seq_length, embedding_dim))  # 1x
+        self.d_model = d_model
+        self.seq_length = seq_length
+        self.learnable = learnable
+
+        # learnable positional encoding
+        if self.learnable:
+            self.position_embeddings = nn.Parameter(torch.zeros(1, seq_length, d_model))
 
     def forward(self, x):
-        position_embeddings = self.position_embeddings
-        return x + position_embeddings
+        if self.learnable:
+            # learnable positional encoding
+            position_embeddings = self.position_embeddings
+        else:
+            # sinusoidal positional encoding
+            seq_length = x.shape[-2]
+            d_model = x.shape[-1]
+            position_embeddings = torch.zeros(seq_length, d_model, device=x.device)
+            position = torch.arange(0, seq_length, dtype=torch.float32).unsqueeze(1)
+            div_term = torch.exp(torch.arange(0, d_model, 2).float() * -(math.log(10000.0) / d_model))
+            position_embeddings[:, 0::2] = torch.sin(position * div_term)
+            position_embeddings[:, 1::2] = torch.cos(position * div_term)
+        outputs = x + position_embeddings[None, :, :]
+        return outputs
 
 
 class PreNorm(nn.Module):
@@ -171,32 +190,26 @@ class EmbeddingLayer(nn.Module):
         self.patch_size = patch_size
         self.embedding_dim = embedding_dim
 
-        # self.patch_embedding = nn.Conv2d(in_channels=self.c_input,
-        #                                  out_channels=self.embedding_dim,
-        #                                  kernel_size=self.patch_size,
-        #                                  stride=self.patch_size)
+        # self.position_encoding = PositionalEncoding(seq_length=self.seq_length,
+        #                                             d_model=self.embedding_dim,
+        #                                             learnable=False)
 
-        # self.position_embedding = PositionalEncoding(seq_length=self.seq_length,
-        #                                              embedding_dim=self.embedding_dim)
-
-        # self.reverse_embedding = nn.Conv2d(in_channels=self.embedding_dim,
-        #                                    out_channels=self.c_input*patch_size ** 2,
-        #                                    kernel_size=1,
-        #                                    stride=1)
+        # attention mask for each frame, can only see attn_length//2 frames around it
+        neighbour = self.attn_length // 2
+        self.attn_mask = torch.ones((seq_length, seq_length)).cuda()
+        for i in range(seq_length):
+            self.attn_mask[i, max(0, i - neighbour):min(seq_length, i + neighbour + 1)] = 0
+            self.attn_mask[max(0, i - neighbour):min(seq_length, i + neighbour + 1), i] = 0
 
     def forward(self, x):
         batch_size, context_size, feature_size, height, width = x.size()
         # assert context_size == self.seq_length, "context size is not equal to seq_length"
         assert feature_size == self.c_input, "feature size is not equal to c_input"
-        assert height == width, "height is not equal to width"
+        # assert height == width, "height is not equal to width"
         assert height % self.patch_size == 0, "height is not divisible by patch_size"
+        assert width % self.patch_size == 0, "width is not divisible by patch_size"
         self.patch_num_h = height // self.patch_size
-
-        # # Conv2D version
-        # x = rearrange(x, 'b c f h w -> (b c) f h w')
-        # x = self.patch_embedding(x)  # (batch_size*seq_length, embedding_dim, patch_num_h, patch_num_w)
-        # x = rearrange(x, '(b c) d ph pw -> (b ph pw) c d', b=batch_size,)
-        # # x = self.position_embedding(x)
+        self.patch_num_w = width // self.patch_size
 
         # # simple partition, embedding dim = patch_size ** 2
         # x = rearrange(x, 'b c f (pn1 ps1) (pn2 ps2) -> b c f (pn1 pn2) ps1 ps2',
@@ -208,21 +221,26 @@ class EmbeddingLayer(nn.Module):
                       ps1=self.patch_size, ps2=self.patch_size)
         x = rearrange(x, 'b c f pn ps1 ps2 -> (b pn) c (f ps1 ps2)')
 
+        # # simple partition, embedding dim = feature_size
+        # x = rearrange(x, 'b c f pn1 pn2 -> (b pn1 pn2) c f')
+
+        # # position encoding
+        # x = self.position_encoding(x)
+
         # attention mask for each frame, can only see attn_length//2 frames around it
-        neighbour = self.attn_length // 2
-        attn_mask = torch.ones((context_size, context_size), device=x.device)
-        for i in range(context_size):
-            attn_mask[i, max(0, i - neighbour):min(context_size, i + neighbour + 1)] = 0
-            attn_mask[max(0, i - neighbour):min(context_size, i + neighbour + 1), i] = 0
+        if self.attn_mask.shape[0] == context_size:
+            attn_mask = self.attn_mask
+        else:
+            neighbour = self.attn_length // 2
+            self.attn_mask = torch.ones((context_size, context_size), device=x.device)
+            for i in range(context_size):
+                self.attn_mask[i, max(0, i - neighbour):min(context_size, i + neighbour + 1)] = 0
+                self.attn_mask[max(0, i - neighbour):min(context_size, i + neighbour + 1), i] = 0
+            attn_mask = self.attn_mask
 
         return x, attn_mask
 
     def backward(self, x):
-        # x = rearrange(x, '(b ph pw) c d -> (b c) d ph pw', ph=self.patch_num_h, pw=self.patch_num_h)
-        # x = self.reverse_embedding(x)  # (batch_size*seq_length, feature_size*patch_size**2, patch_num_h, patch_num_h)
-        # x = rearrange(x, '(b c) (f ps1 ps2) ph pw -> b c f (ps1 ph) (ps2 pw)', c=self.seq_length, f=self.c_input,
-        #               ps1=self.patch_size, ps2=self.patch_size)
-
         # # simple partition, embedding dim = patch_size ** 2
         # x = rearrange(x, '(b f pn) c (ps1 ps2) -> b c f pn ps1 ps2',
         #               f=self.c_input, pn=self.patch_num_h**2, ps1=self.patch_size, ps2=self.patch_size)
@@ -231,9 +249,12 @@ class EmbeddingLayer(nn.Module):
 
         # simple partition, embedding dim = patch_size ** 2 * feature_size
         x = rearrange(x, '(b pn) c (f ps1 ps2) -> b c f pn ps1 ps2',
-                      f=self.c_input, pn=self.patch_num_h**2, ps1=self.patch_size, ps2=self.patch_size)
+                      f=self.c_input, pn=self.patch_num_h*self.patch_num_w, ps1=self.patch_size, ps2=self.patch_size)
         x = rearrange(x, 'b c f (pn1 pn2) ps1 ps2 -> b c f (pn1 ps1) (pn2 ps2)',
-                      pn1=self.patch_num_h, pn2=self.patch_num_h, ps1=self.patch_size, ps2=self.patch_size)
+                      pn1=self.patch_num_h, pn2=self.patch_num_w, ps1=self.patch_size, ps2=self.patch_size)
+
+        # # simple partition, embedding dim = feature_size
+        # x = rearrange(x, '(b pn1 pn2) c f -> b c f pn1 pn2', pn1=self.patch_num_h, pn2=self.patch_num_w)
 
         return x
 
@@ -254,8 +275,8 @@ class TransformerBlock(nn.Module):
             num_layers=2,
             num_heads=8,
             mlp_dim=48*4,  # embedding_dim * 4
-            dropout_rate=0.1,
-            context_dropout=0.5,
+            dropout_rate=0.0,
+            context_dropout=0.0,
     ):
         super(TransformerBlock, self).__init__()
         self.seq_length = seq_length
@@ -285,18 +306,15 @@ class TransformerBlock(nn.Module):
         self.context_aggregation = ailoc.transloc.ConvNextBlock(c_in=self.c_input*2,
                                                                 c_out=self.c_input,
                                                                 kernel_size=3,)
-        # self.context_aggregation = nn.Conv2d(in_channels=self.c_input * 2,
-        #                                      out_channels=self.c_input,
-        #                                      kernel_size=3,
-        #                                      padding=1, )
 
     def forward(self, x):
         input = x
         x, attn_mask = self.embedding_layer(x)
         x = self.translayer(x, attn_mask)
         x = self.embedding_layer.backward(x)
-        x = x * self.context_dropout(torch.ones(input.shape[0], input.shape[1], 1, 1, 1).to(x.device)) * (1. - self.context_dropout_rate)
+        x = x * self.context_dropout(torch.ones(input.shape[0], input.shape[1], 1, 1, 1).to(x.device))
+        x = x * (1. - self.context_dropout_rate) if self.context_dropout.training else x
         x = torch.cat([input.reshape([-1, self.c_input, input.shape[-2], input.shape[-1]]),
                        x.reshape([-1, self.c_input, input.shape[-2], input.shape[-1]])], dim=1)
         x = self.context_aggregation(x)
-        return x
+        return x.reshape(input.shape)

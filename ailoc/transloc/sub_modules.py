@@ -164,7 +164,8 @@ class DownSampleBlock(nn.Sequential):
             LayerNorm(in_channels, data_format="chw", elementwise_affine=False),
             Conv2d(in_channels, in_channels, 2, 2, 0),
             ConvNextBlock(in_channels, out_channels, kernel_size),
-            ConvNextBlock(out_channels, out_channels, kernel_size),
+            # ConvNextBlock(out_channels, out_channels, kernel_size),
+            # InceptionNextBlock(in_channels, out_channels, band_kernel_size=kernel_size),
         )
 
 
@@ -191,9 +192,12 @@ class UpSampleBlock(nn.Module):
         self.layers = nn.ModuleList()
         self.layers.append(LayerNorm(in_channels, data_format="chw", elementwise_affine=False))
         self.layers.append(nn.UpsamplingNearest2d(scale_factor=2))
+        # self.layers.append(nn.UpsamplingBilinear2d(scale_factor=2))
         self.layers.append(ConvNextBlock(in_channels, out_channels, kernel_size))
         self.layers.append(ConvNextBlock(in_channels, out_channels, kernel_size))
-        self.layers.append(ConvNextBlock(out_channels, out_channels, kernel_size))
+        # self.layers.append(ConvNextBlock(out_channels, out_channels, kernel_size))
+        # self.layers.append(InceptionNextBlock(in_channels, out_channels, band_kernel_size=kernel_size))
+        # self.layers.append(InceptionNextBlock(in_channels, out_channels, band_kernel_size=kernel_size))
         self.tail = tail
 
     def forward(self, x, x_skip):
@@ -202,7 +206,7 @@ class UpSampleBlock(nn.Module):
         x = self.layers[2](x)  # ConvNextBlock
         x = torch.cat([x, x_skip], dim=1)
         x = self.layers[3](x)
-        x = self.layers[4](x)
+        # x = self.layers[4](x)
         if self.tail is not None:
             x = self.tail(x)
         return x
@@ -257,42 +261,6 @@ class ConvNextBlock(nn.Module):
         layer_scale_init_value (float): Init value for Layer Scale. Default: 1e-6.
     """
 
-    # def __init__(self, c_in, c_out, kernel_size=7, layer_scale_init_value=0):
-    #     super().__init__()
-    #     self.c_in = c_in
-    #     self.c_out = c_out
-    #     self.dwconv = Conv2d(in_channels=c_in,
-    #                          out_channels=c_in,
-    #                          kernel_size=kernel_size,
-    #                          stride=1,
-    #                          padding=kernel_size//2,
-    #                          groups=c_in)  # depthwise conv
-    #
-    #     self.norm = LayerNorm(c_in, eps=1e-6, data_format="channels_last")
-    #     self.pwconv1 = nn.Linear(c_in, 4 * c_in)  # pointwise/1x1 convs, implemented with linear layers
-    #     self.act = nn.GELU()
-    #     self.pwconv2 = nn.Linear(4 * c_in, c_out)
-    #     self.gamma = nn.Parameter(layer_scale_init_value * torch.ones((c_out)),
-    #                               requires_grad=True) if layer_scale_init_value > 0 else None
-    #
-    # def forward(self, x):
-    #     input = x
-    #     x = self.dwconv(x)
-    #     # x = x.permute(0, 2, 3, 1)  # (N, C, H, W) -> (N, H, W, C)
-    #     x = rearrange(x, 'b c h w -> b h w c')
-    #     # x = self.norm(x)
-    #     x = self.pwconv1(x)
-    #     x = self.act(x)
-    #     x = self.pwconv2(x)
-    #     if self.gamma is not None:
-    #         x = self.gamma * x
-    #     # x = x.permute(0, 3, 1, 2)  # (N, H, W, C) -> (N, C, H, W)
-    #     x = rearrange(x, 'b h w c -> b c h w')
-    #
-    #     if self.c_in == self.c_out:
-    #         x = input + x
-    #     return x
-
     def __init__(self, c_in, c_out, kernel_size=7, layer_scale_init_value=0):
         super().__init__()
         self.c_in = c_in
@@ -304,22 +272,172 @@ class ConvNextBlock(nn.Module):
                              padding=kernel_size//2,
                              groups=c_in)  # depthwise conv
 
-        self.norm = LayerNorm(c_in, data_format="chw", elementwise_affine=False)
-        self.pwconv1 = Conv2d(in_channels=c_in, out_channels=4*c_in, kernel_size=1, stride=1, padding=0)
+        # self.norm = LayerNorm(c_in, eps=1e-6, data_format="channels_last")
+        # self.norm = LayerNorm(c_in, data_format="chw", elementwise_affine=False)
+        self.pwconv1 = nn.Linear(c_in, 4 * c_in)  # pointwise/1x1 convs, implemented with linear layers
         self.act = nn.GELU()
-        self.pwconv2 = Conv2d(in_channels=4*c_in, out_channels=c_out, kernel_size=1, stride=1, padding=0)
+        self.pwconv2 = nn.Linear(4 * c_in, c_out)
         self.gamma = nn.Parameter(layer_scale_init_value * torch.ones((c_out)),
                                   requires_grad=True) if layer_scale_init_value > 0 else None
 
     def forward(self, x):
         input = x
         x = self.dwconv(x)
-        x = self.norm(x)
+        x = x.permute(0, 2, 3, 1)
+        # x = rearrange(x, 'b c h w -> b h w c')
+        # x = self.norm(x)
         x = self.pwconv1(x)
         x = self.act(x)
         x = self.pwconv2(x)
         if self.gamma is not None:
             x = self.gamma * x
+        x = x.permute(0, 3, 1, 2)
+        # x = rearrange(x, 'b h w c -> b c h w')
         if self.c_in == self.c_out:
             x = input + x
+        return x
+
+    # def __init__(self, c_in, c_out, kernel_size=7, layer_scale_init_value=0):
+    #     super().__init__()
+    #     self.c_in = c_in
+    #     self.c_out = c_out
+    #     self.dwconv = Conv2d(in_channels=c_in,
+    #                          out_channels=c_in,
+    #                          kernel_size=kernel_size,
+    #                          stride=1,
+    #                          padding=kernel_size//2,
+    #                          groups=c_in)  # depthwise conv
+    #
+    #     # self.norm = LayerNorm(c_in, data_format="chw", elementwise_affine=False)
+    #     self.pwconv1 = Conv2d(in_channels=c_in, out_channels=4*c_in, kernel_size=1, stride=1, padding=0)
+    #     self.act = nn.GELU()
+    #     self.pwconv2 = Conv2d(in_channels=4*c_in, out_channels=c_out, kernel_size=1, stride=1, padding=0)
+    #     self.gamma = nn.Parameter(layer_scale_init_value * torch.ones((c_out)),
+    #                               requires_grad=True) if layer_scale_init_value > 0 else None
+    #
+    # def forward(self, x):
+    #     input = x
+    #     x = self.dwconv(x)
+    #     # x = self.norm(x)
+    #     x = self.pwconv1(x)
+    #     x = self.act(x)
+    #     x = self.pwconv2(x)
+    #     if self.gamma is not None:
+    #         x = self.gamma * x
+    #     if self.c_in == self.c_out:
+    #         x = input + x
+    #     return x
+
+    # def __init__(self, c_in, c_out, kernel_size=7, layer_scale_init_value=0):
+    #     super().__init__()
+    #     self.c_in = c_in
+    #     self.c_out = c_out
+    #     self.dwconv = Conv2d(in_channels=c_in,
+    #                          out_channels=c_in,
+    #                          kernel_size=kernel_size,
+    #                          stride=1,
+    #                          padding=kernel_size//2,
+    #                          groups=c_in)  # depthwise conv
+    #
+    #     self.conv1 = Conv2d(c_in, c_out, 3, 1, 1)
+    #     self.act = nn.GELU()
+    #
+    # def forward(self, x):
+    #     input = x
+    #     x = self.dwconv(x)
+    #     x = self.conv1(x)
+    #     x = self.act(x)
+    #     if self.c_in == self.c_out:
+    #         x = input + x
+    #     return x
+
+
+class InceptionNextBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, square_kernel_size=3, band_kernel_size=11, branch_ratio=0.125):
+        super().__init__()
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.square_kernel_size = square_kernel_size
+        self.band_kernel_size = band_kernel_size
+        self.branch_ratio = branch_ratio
+
+        self.gc = int(in_channels * branch_ratio)  # channel numbers of a convolution branch
+        self.dwconv_hw = nn.Conv2d(self.gc,
+                                   self.gc,
+                                   square_kernel_size,
+                                   padding=square_kernel_size // 2,
+                                   groups=self.gc)
+        self.dwconv_w = nn.Conv2d(self.gc,
+                                  self.gc,
+                                  kernel_size=(1, band_kernel_size),
+                                  padding=(0, band_kernel_size // 2),
+                                  groups=self.gc)
+        self.dwconv_h = nn.Conv2d(self.gc,
+                                  self.gc,
+                                  kernel_size=(band_kernel_size, 1),
+                                  padding=(band_kernel_size // 2, 0),
+                                  groups=self.gc)
+        self.split_indexes = (in_channels - 3 * self.gc, self.gc, self.gc, self.gc)
+        self.pwconv1 = nn.Linear(in_channels, 4 * in_channels)  # pointwise/1x1 convs, implemented with linear layers
+        # self.pwconv1 = nn.Conv2d(in_channels, 4 * in_channels, kernel_size=1, stride=1, padding=0)
+        self.act = nn.GELU()
+        self.pwconv2 = nn.Linear(4 * in_channels, out_channels)
+        # self.pwconv2 = nn.Conv2d(4 * in_channels, out_channels, kernel_size=1, stride=1, padding=0)
+
+    def forward(self, x):
+        input = x
+        x_id, x_hw, x_w, x_h = torch.split(x, self.split_indexes, dim=1)
+        x = torch.cat((x_id, self.dwconv_hw(x_hw), self.dwconv_w(x_w), self.dwconv_h(x_h)), dim=1,)
+        x = x.permute(0, 2, 3, 1).contiguous()
+        x = self.pwconv1(x)
+        x = self.act(x)
+        x = self.pwconv2(x)
+        x = x.permute(0, 3, 1, 2).contiguous()
+        if self.in_channels == self.out_channels:
+            x = input + x
+        return x
+
+
+class DownSampleBlock_v2(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size):
+        super().__init__()
+        self.norm = LayerNorm(in_channels, data_format="chw", elementwise_affine=False)
+        self.downconv = Conv2d(in_channels, in_channels, 2, 2, 0)
+        self.dwconv = Conv2d(in_channels, in_channels, kernel_size, 1, kernel_size//2, groups=in_channels)
+        self.pwconv1 = nn.Linear(in_channels, 4 * in_channels)
+        self.act = nn.GELU()
+        self.pwconv2 = nn.Linear(4 * in_channels, out_channels)
+
+    def forward(self, x):
+        x = self.norm(x)
+        x = self.downconv(x)
+        x = self.dwconv(x)
+        x = rearrange(x, 'b c h w -> b h w c')
+        x = self.pwconv1(x)
+        x = self.act(x)
+        x = self.pwconv2(x)
+        x = rearrange(x, 'b h w c -> b c h w')
+        return x
+
+
+class UpSampleBlock_v2(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size):
+        super().__init__()
+        self.norm = LayerNorm(in_channels, data_format="chw", elementwise_affine=False)
+        self.upconv = nn.UpsamplingNearest2d(scale_factor=2)
+        self.dwconv = Conv2d(in_channels, in_channels, kernel_size, 1, kernel_size // 2, groups=in_channels)
+        self.pwconv1 = nn.Linear(in_channels, 4 * out_channels)
+        self.act = nn.GELU()
+        self.pwconv2 = nn.Linear(4 * out_channels, out_channels)
+
+    def forward(self, x, x_skip):
+        x = self.norm(x)
+        x = self.upconv(x)
+        x = self.dwconv(x)
+        x = rearrange(x, 'b c h w -> b h w c')
+        x = self.pwconv1(x)
+        x = self.act(x)
+        x = self.pwconv2(x)
+        x = rearrange(x, 'b h w c -> b c h w')
+        x += x_skip
         return x

@@ -12,6 +12,7 @@ import ailoc.deeploc
 import ailoc.common
 import ailoc.simulation
 ailoc.common.setup_seed(42)
+torch.backends.cudnn.benchmark = True
 
 
 def deeploc_train():
@@ -25,7 +26,8 @@ def deeploc_train():
         calib_dict = sio.loadmat(calib_file, simplify_cells=True)
         psf_params_dict = calib_dict['psf_params_fitted']
         psf_params_dict['wavelength'] = 670  # wavelength of sample may be different from beads, unit: nm
-        psf_params_dict['objstage0'] = -700  # the objective stage position is different from beads calibration, unit: nm
+        psf_params_dict['refmed'] = 1.518  # refractive index of sample medium may be different from beads
+        psf_params_dict['objstage0'] = -0  # the objective stage position is different from beads calibration, unit: nm
 
         camera_params_dict = calib_dict['calib_params_dict']['camera_params_dict']
 
@@ -102,9 +104,9 @@ def deeploc_train():
 
     deeploc_model.check_training_data()
 
-    deeploc_model.build_evaluation_dataset(napari_plot=True)
+    deeploc_model.build_evaluation_dataset(napari_plot=False)
 
-    file_name = '../../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H') + 'DeepLoc.pt'
+    file_name = '../../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'DeepLoc.pt'
     deeploc_model.online_train(batch_size=1,
                                max_iterations=30000,
                                eval_freq=500,
@@ -112,6 +114,23 @@ def deeploc_train():
 
     # plot evaluation performance during the training
     ailoc.common.plot_train_record(deeploc_model)
+
+
+    # analyze the experimental data
+    image_path = os.path.dirname(experiment_file)
+    save_path = '../../results/' + \
+                os.path.split(file_name)[-1].split('.')[0] + \
+                '_' + os.path.basename(image_path) + '_predictions.csv'
+    deeploc_analyzer = ailoc.common.SmlmDataAnalyzer(loc_model=deeploc_model,
+                                                     tiff_path=image_path,
+                                                     output_path=save_path,
+                                                     time_block_gb=1,
+                                                     batch_size=32,
+                                                     sub_fov_size=256,
+                                                     over_cut=8,
+                                                     num_workers=0)
+    deeploc_analyzer.check_single_frame_output(frame_num=3)
+    preds_array, preds_rescale_array = deeploc_analyzer.divide_and_conquer()
 
 
 def deeploc_ckpoint_train():
@@ -124,6 +143,51 @@ def deeploc_ckpoint_train():
                                file_name=model_name)
 
 
+def deeploc_analyze():
+    loc_model_path = '../../results/2023-12-05-20-02DeepLoc.pt'
+    # can be a tiff file path or a folder path
+    image_path = '../../datasets/sw_npc_20211028/NUP96_SNP647_3D_512_20ms_hama_mm_1800mW_3/'
+    save_path = '../../results/' + \
+                os.path.split(loc_model_path)[-1].split('.')[0] + \
+                '_'+os.path.basename(image_path)+'_predictions.csv'
+
+    # load the completely trained model
+    with open(loc_model_path, 'rb') as f:
+        deeploc_model = torch.load(f)
+
+    # plot evaluation performance during the training
+    ailoc.common.plot_train_record(deeploc_model)
+
+    deeploc_analyzer = ailoc.common.SmlmDataAnalyzer(loc_model=deeploc_model,
+                                                     tiff_path=image_path,
+                                                     output_path=save_path,
+                                                     time_block_gb=1,
+                                                     batch_size=32,
+                                                     sub_fov_size=256,
+                                                     over_cut=8,
+                                                     num_workers=0)
+
+    deeploc_analyzer.check_single_frame_output(frame_num=3)
+
+    preds_array, preds_rescale_array = deeploc_analyzer.divide_and_conquer()
+
+    # # read the ground truth and calculate metrics
+    # gt_array = ailoc.common.read_csv_array("../../datasets/match_data/activations.csv")
+    #
+    # metric_dict, paired_array = ailoc.common.pair_localizations(prediction=preds_rescale_array,
+    #                                                             ground_truth=gt_array,
+    #                                                             frame_num=deeploc_analyzer.tiff_dataset.end_frame_num,
+    #                                                             fov_xy_nm=deeploc_analyzer.fov_xy_nm,
+    #                                                             print_info=True)
+    # # write the paired localizations to csv file
+    # save_paried_path = '../../results/'+os.path.split(save_path)[-1].split('.')[0]+'_paired.csv'
+    # ailoc.common.write_csv_array(input_array=paired_array,
+    #                              filename=save_paried_path,
+    #                              write_mode='write paired localizations')
+
+
+
 if __name__ == '__main__':
-    deeploc_train()
+    # deeploc_train()
     # deeploc_ckpoint_train()
+    deeploc_analyze()

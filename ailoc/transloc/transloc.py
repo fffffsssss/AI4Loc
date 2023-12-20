@@ -28,10 +28,10 @@ class TransLoc(ailoc.common.XXLoc):
         except KeyError:
             self.temporal_attn = False
         # should be odd, using the same number of frames before and after the target frame
-        self.attn_length = 9
+        self.attn_length = 5
         assert self.attn_length % 2 == 1, 'attn_length should be odd'
         # add frames at the beginning and end to provide context
-        self.context_size = sampler_params_dict['context_size'] + 2*(self.attn_length//2)
+        self.context_size = sampler_params_dict['context_size'] + 2*(self.attn_length//2) if self.temporal_attn else sampler_params_dict['context_size']
         self._network = ailoc.transloc.TransLocNet(self.temporal_attn,
                                                    self.attn_length,
                                                    self.context_size,)
@@ -42,9 +42,6 @@ class TransLoc(ailoc.common.XXLoc):
         self._iter_train = 0
 
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
-        # self.optimizer = torch.optim.AdamW(self.network.parameters(), lr=6e-4, weight_decay=0.1)
-        # self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=1000, gamma=0.9)
 
         self.optimizer = torch.optim.AdamW(self.network.parameters(), lr=6e-4, weight_decay=0.05)
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=30000)
@@ -87,7 +84,6 @@ class TransLoc(ailoc.common.XXLoc):
         bg_loss = torch.mean(ailoc.transloc.bg_loss(bg_pred, bg_gt))
 
         total_loss = count_loss + loc_loss + sample_loss + bg_loss
-        # total_loss = count_loss + loc_loss + bg_loss
 
         return total_loss
 
@@ -103,14 +99,17 @@ class TransLoc(ailoc.common.XXLoc):
             file_name (str): the name of the file to save the network
         """
 
-        file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H') + 'TransLoc.pt' if file_name is None else file_name
+        file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'TransLoc.pt' if file_name is None else file_name
         self.scheduler.T_max = max_iterations
-
         print('Start training...')
 
         if self._iter_train > 0:
             print('training from checkpoint, the recent performance is:')
             self.print_recorder(max_iterations)
+
+            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer,
+                                                                        T_max=max_iterations,
+                                                                        last_epoch=self._iter_train)
 
         while self._iter_train < max_iterations:
             t0 = time.time()
@@ -130,7 +129,6 @@ class TransLoc(ailoc.common.XXLoc):
                                          p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt)
                 self.optimizer.zero_grad()
                 loss.backward()
-                # torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=0.03, norm_type=2)
                 self.optimizer.step()
                 self.scheduler.step()
                 self._iter_train += 1
@@ -241,7 +239,7 @@ class TransLoc(ailoc.common.XXLoc):
 
         return molecule_array, inference_dict
 
-    def online_evaluate(self, batch_size):
+    def online_evaluate(self, batch_size, print_info=False):
         """
         Evaluate the network during training using the validation dataset.
         """
@@ -261,14 +259,15 @@ class TransLoc(ailoc.common.XXLoc):
                 n_per_img.append(inference_dict_tmp['prob'].sum((-2, -1)).mean())
 
                 if len(molecule_array_tmp) > 0:
-                    molecule_array_tmp[:, 0] += i * batch_size * (self.context_size-2*(self.attn_length//2))
+                    molecule_array_tmp[:, 0] += i * batch_size * (self.context_size-2*(self.attn_length//2) if self.temporal_attn else self.context_size)
                     molecule_list_pred += molecule_array_tmp.tolist()
 
             metric_dict, paired_array = ailoc.common.pair_localizations(prediction=np.array(molecule_list_pred),
                                                                         ground_truth=self.evaluation_dataset['molecule_list_gt'],
-                                                                        frame_num=self.evaluation_dataset['data'].shape[0]*(self.context_size-2*(self.attn_length//2)),
+                                                                        frame_num=self.evaluation_dataset['data'].shape[0]*(self.context_size-2*(self.attn_length//2) if self.temporal_attn else self.context_size),
                                                                         fov_xy_nm=(0, self.evaluation_dataset['data'].shape[-1]*self.data_simulator.psf_model.pixel_size_xy[0],
-                                                                                   0, self.evaluation_dataset['data'].shape[-2]*self.data_simulator.psf_model.pixel_size_xy[1]))
+                                                                                   0, self.evaluation_dataset['data'].shape[-2]*self.data_simulator.psf_model.pixel_size_xy[1]),
+                                                                        print_info=print_info,)
 
             for k in self.evaluation_recorder.keys():
                 if k in metric_dict.keys():

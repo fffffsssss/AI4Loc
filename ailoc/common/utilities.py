@@ -259,15 +259,6 @@ def get_pixel_truth(eval_csv, ind, field_size, pixel_size):
     return truth_map
 
 
-def setup_seed(seed):
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
-
-
 def read_first_size_gb_tiff(image_path, size_gb=4):
     # with ailoc.common.local_tifffile.TiffFile(image_path, is_ome=False) as tif:
     with tifffile.TiffFile(image_path, is_ome=False) as tif:
