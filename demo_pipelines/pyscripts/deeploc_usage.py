@@ -80,16 +80,18 @@ def deeploc_train():
         bg_range = ailoc.common.get_bg_stats_gauss(experimental_images, percentile=10, plot=True)
 
     # manually set sampler parameters
-    sampler_params_dict = {'local_context': True,
-                           'robust_training': True,
-                           'train_size': 64,
-                           'num_em_avg': 10,
-                           'eval_batch_size': 100,
-                           'photon_range': (1000, 10000), 
-                           'z_range': (-700, 700),
-                           'bg_range': bg_range if 'bg_range' in locals().keys() else (40, 60),
-                           'bg_perlin': True,
-                           }
+    sampler_params_dict = {
+        'local_context': True,
+        'robust_training': True,
+        'context_size': 10,  # for each batch unit, simulate several frames share the same photophysics and bg to train
+        'train_size': 64,
+        'num_em_avg': 10,
+        'eval_batch_size': 100,
+        'photon_range': (1000, 10000),
+        'z_range': (-700, 700),
+        'bg_range': bg_range if 'bg_range' in locals().keys() else (40, 60),
+        'bg_perlin': True,
+    }
 
     # print learning parameters
     for params_dict in [psf_params_dict, camera_params_dict, sampler_params_dict]:

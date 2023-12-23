@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import thop
+import time
 
 
 class Unet(nn.Module):
@@ -115,22 +117,20 @@ class Outnet(nn.Module):
         nn.init.zeros_(self.bg_out2.bias)
 
     def forward(self, x):
-
-        outputs = {}
-
         p = F.elu(self.p_out1(x))
-        outputs['p'] = self.p_out2(p)
+        p = self.p_out2(p)
 
         xyzph = F.elu(self.xyzph_out1(x))
-        outputs['xyzph'] = self.xyzph_out2(xyzph)
+        xyzph = self.xyzph_out2(xyzph)
 
         xyzphs = F.elu(self.xyzphs_out1(x))
-        outputs['xyzph_sig'] = self.xyzphs_out2(xyzphs)
+        xyzphs = self.xyzphs_out2(xyzphs)
 
         bg = F.elu(self.bg_out1(x))
-        outputs['bg'] = self.bg_out2(bg)
+        bg = self.bg_out2(bg)
 
-        return outputs
+        # return outputs
+        return p, xyzph, xyzphs, bg
 
 
 class SyncLocNet(nn.Module):
@@ -144,11 +144,23 @@ class SyncLocNet(nn.Module):
         super().__init__()
 
         self.local_context = local_context
-        self.n_features = 48 * 3 if self.local_context else 48
+        self.n_features = 48
 
-        self.frame_anlz_module = Unet(n_inp=1, n_filters=48, n_stages=2, pad=1, ker_size=3).cuda()
-        self.temp_context_module = Unet(n_inp=self.n_features, n_filters=48, n_stages=2, pad=1, ker_size=3).cuda()
-        self.out_module = Outnet(n_inp=48, pad=1, ker_size=3).cuda()
+        self.frame_anlz_module = Unet(n_inp=1,
+                                      n_filters=self.n_features,
+                                      n_stages=2,
+                                      pad=1,
+                                      ker_size=3).cuda()
+        self.temp_context_module = Unet(n_inp=self.n_features * 3 if self.local_context else self.n_features,
+                                        n_filters=self.n_features,
+                                        n_stages=2,
+                                        pad=1,
+                                        ker_size=3).cuda()
+        self.out_module = Outnet(n_inp=self.n_features,
+                                 pad=1,
+                                 ker_size=3).cuda()
+
+        self.get_parameter_number()
 
     def forward(self, x_input):
         """
@@ -167,10 +179,18 @@ class SyncLocNet(nn.Module):
         assert img_h % 4 == 0 and img_w % 4 == 0, 'network structure requires that image size should be multiples of 4'
 
         # during training and online evaluation, the inpout should have the shape
-        # (training batch size, local context (1 or 3), height, width)
+        # (training batch size, context_size, height, width)
         if x_input.ndimension() == 4:
-            fm_out = self.frame_anlz_module(x_input.reshape([-1, 1, img_h, img_w])).\
-                reshape(-1, self.n_features, img_h, img_w)
+            batch_size, context_size = x_input.shape[:2]
+            fm_out = self.frame_anlz_module(x_input.reshape([-1, 1, img_h, img_w]))
+
+            if self.local_context:
+                fm_out = fm_out.reshape([batch_size, context_size, -1, img_h, img_w])
+                zeros = torch.zeros_like(fm_out[:, :1])
+                h_t1 = fm_out
+                h_t0 = torch.cat([zeros, fm_out[:, :-1]], dim=1)
+                h_t2 = torch.cat([fm_out[:, 1:], zeros], dim=1)
+                fm_out = torch.cat([h_t0, h_t1, h_t2], dim=2)[:, 1:-1].reshape(-1, self.n_features*3, img_h, img_w)
 
         # when analyzing experimental data, the input dimension is 3, (analysis batch size, height, width)
         elif x_input.ndimension() == 3:
@@ -198,16 +218,17 @@ class SyncLocNet(nn.Module):
             raise ValueError('The input dimension is not supported.')
 
         # layer normalization
-        fm_out_ln = nn.functional.layer_norm(fm_out, normalized_shape=[self.n_features, img_h, img_w])
+        fm_out_ln = nn.functional.layer_norm(fm_out, normalized_shape=fm_out.shape[1:])
 
         cm_out = self.temp_context_module(fm_out_ln)
-        outputs = self.out_module(cm_out)
+        p, xyzph, xyzphs, bg = self.out_module(cm_out)
+        # p, xyzph, xyzphs, bg = self.out_module(fm_out_ln)  # skip the temporal context module
 
         # todo:  may need to set an extra scale and offset for the output considering the sensitive
         #  range of the activation function sigmoid and tanh
-        p_pred = torch.sigmoid(torch.clamp(outputs['p'], min=-16, max=16))[:, 0]  # probability
+        p_pred = torch.sigmoid(torch.clamp(p, min=-16, max=16))[:, 0]  # probability
 
-        xyzph_pred = outputs['xyzph']
+        xyzph_pred = xyzph
 
         # output xy range is (-1, 1), the training sampling range is (-0.5,0.5)
         xyzph_pred[:, :2] = torch.tanh(xyzph_pred[:, :2])
@@ -215,17 +236,31 @@ class SyncLocNet(nn.Module):
         # output z range is (-2, 2), the training sampling range is in (-1,1)
         xyzph_pred[:, 2] = torch.tanh(xyzph_pred[:, 2]) * 2
 
-        # output photon range is (0, 2), the training sampling range is in (0,1)
-        xyzph_pred[:, 3] = torch.sigmoid(xyzph_pred[:, 3]) * 2
+        # output photon range is (0, 1), the training sampling range is in (0,1)
+        xyzph_pred[:, 3] = torch.sigmoid(xyzph_pred[:, 3])
 
-        # scale the uncertainty and add epsilon, the output range becomes (0.001, 3.001),
+        # scale the uncertainty and add epsilon, the output range becomes (0.0001, 3.0001),
         # maybe can use RELU for unlimited upper range and stable gradient
-        xyzph_sig_pred = torch.sigmoid(outputs['xyzph_sig']) * 3 + 1e-5
+        xyzph_sig_pred = torch.sigmoid(xyzphs) * 3 + 0.0001
 
-        # output bg range is (0, 2), the training sampling range is in (0,1)
-        bg_pred = torch.sigmoid(outputs['bg'])[:, 0] * 2 + 1e-5  # bg
+        # output bg range is (0, 1), the training sampling range is in (0,1)
+        bg_pred = torch.sigmoid(bg[:, 0])  # bg
 
         return p_pred, xyzph_pred, xyzph_sig_pred, bg_pred
+
+    def get_parameter_number(self):
+        # print(f'Total network parameters: {sum(p.numel() for p in self.parameters() if p.requires_grad)/1e6:.2f}M')
+
+        dummy_input = torch.randn(1, 12, 64, 64).cuda() if self.local_context else torch.randn(1, 10, 64, 64).cuda()
+
+        macs, params = thop.profile(self, inputs=(dummy_input,))
+        macs, params = thop.clever_format([macs, params], '%.3f')
+        print(f'Params:{params}, MACs:{macs}, (input shape:{dummy_input.shape})')
+
+        t0 = time.time()
+        for i in range(200):
+            self.forward(dummy_input)
+        print(f'Average forward time: {(time.time() - t0) / 200:.4f} s')
 
 
 

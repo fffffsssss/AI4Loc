@@ -32,12 +32,13 @@ class SyncLoc(ailoc.common.XXLoc):
 
         self.local_context = self.dict_sampler_params['local_context']
         self._network = ailoc.syncloc.SyncLocNet(self.local_context)
+        self.context_size = sampler_params_dict['context_size'] + 2 if self.local_context else sampler_params_dict['context_size']
 
         self.evaluation_dataset = {}
         self.evaluation_recorder = self._init_recorder()
 
         self._iter_sleep = 0
-        self.warmup = sampler_params_dict['warm_up']
+        self.warmup = 5000
 
         self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -84,6 +85,19 @@ class SyncLoc(ailoc.common.XXLoc):
     def compute_loss(self, *args, **kwargs):
         raise NotImplementedError
 
+    def unfold_target(self, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt):
+        if self.local_context:
+            p_map_gt = p_map_gt[:, 1:-1]
+            xyzph_array_gt = xyzph_array_gt[:, 1:-1]
+            mask_array_gt = mask_array_gt[:, 1:-1]
+            bg_map_gt = bg_map_gt[:, 1:-1]
+        else:
+            pass
+        return p_map_gt.flatten(start_dim=0, end_dim=1), \
+               xyzph_array_gt.flatten(start_dim=0, end_dim=1), \
+               mask_array_gt.flatten(start_dim=0, end_dim=1), \
+               bg_map_gt.flatten(start_dim=0, end_dim=1)
+
     def sleep_loss(self, p_pred, xyzph_pred, xyzph_sig_pred, bg_pred, p_gt, xyzph_array_gt, mask_array_gt, bg_gt):
         """
         Loss function.
@@ -100,11 +114,18 @@ class SyncLoc(ailoc.common.XXLoc):
 
     def sleep_train(self, batch_size):
         train_data, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt, _ = \
-            self.data_simulator.sample_training_data(batch_size=batch_size, iter_train=self._iter_sleep)
-        p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(train_data, self.data_simulator.camera)
-        self.optimizer_net.zero_grad()
+            self.data_simulator.sample_training_data(batch_size=batch_size,
+                                                     context_size=self.context_size,
+                                                     iter_train=self._iter_sleep)
+        p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt = self.unfold_target(p_map_gt,
+                                                                                xyzph_array_gt,
+                                                                                mask_array_gt,
+                                                                                bg_map_gt)
+        p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(train_data,
+                                                                     self.data_simulator.camera)
         loss = self.sleep_loss(p_pred, xyzph_pred, xyzph_sig_pred, bg_pred,
                                p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt)
+        self.optimizer_net.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=0.03, norm_type=2)
         self.optimizer_net.step()
@@ -324,7 +345,7 @@ class SyncLoc(ailoc.common.XXLoc):
 
         return loss.detach().cpu().numpy()
 
-    def wake_train_v4(self, real_data, batch_size, num_sample=50, max_recon_psfs=1000):
+    def wake_train_v4(self, real_data, batch_size, num_sample=50, max_recon_psfs=5000):
         """
         for each wake training iteration, using the current q network to localization enough signals, and then
         use this signals and posterior samples to update the PSF model
@@ -340,9 +361,12 @@ class SyncLoc(ailoc.common.XXLoc):
         num_psfs = 0
         infer_round = 0
         patience = 10
-        while num_psfs < max_recon_psfs and infer_round < patience:
-            real_data_sampled = ailoc.common.gpu(self.sample_real_data(real_data, batch_size))
-            with torch.no_grad():
+
+        self.network.eval()
+        with torch.no_grad():
+            while num_psfs < max_recon_psfs and infer_round < patience:
+                real_data_sampled = ailoc.common.gpu(self.sample_real_data(real_data, batch_size))
+
                 p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(real_data_sampled,
                                                                              self.data_simulator.camera)
                 delta_map_sample, xyzph_map_sample, bg_sample = self.sample_posterior(p_pred,
@@ -357,6 +381,8 @@ class SyncLoc(ailoc.common.XXLoc):
                     return np.nan
 
                 real_data_sampled = self.data_simulator.camera.backward(real_data_sampled)
+                if self.local_context:
+                    real_data_sampled = real_data_sampled[1:-1]
 
                 real_data_sampled_crop, \
                 delta_map_sample_crop, \
@@ -387,6 +413,7 @@ class SyncLoc(ailoc.common.XXLoc):
 
                 infer_round += 1
                 num_psfs += len(delta_map_sample_crop.nonzero())
+        self.network.train()
 
         real_data_sampled_crop_list = torch.cat(real_data_sampled_crop_list, dim=0)
         delta_map_sample_crop_list = torch.cat(delta_map_sample_crop_list, dim=0)
@@ -425,7 +452,6 @@ class SyncLoc(ailoc.common.XXLoc):
                                                                    xyzph_map_sample_crop_list,
                                                                    bg_sample_crop_list, )
 
-        self.optimizer_psf.zero_grad()
         loss, elbo_record = self.wake_loss_v2(real_data_sampled_crop_list,
                                               reconstruction,
                                               delta_map_sample_crop_list,
@@ -433,12 +459,17 @@ class SyncLoc(ailoc.common.XXLoc):
                                               xyzph_pred_crop_list,
                                               xyzph_sig_pred_crop_list,
                                               z_weight_crop_list)
+        self.optimizer_psf.zero_grad()
         loss.backward()
         self.optimizer_psf.step()
         self.scheduler_psf.step()
 
         # update the psf simulator
-        self.data_simulator.psf_model.zernike_coef = self.learned_psf.zernike_coef.detach().cpu().numpy()
+        if isinstance(self.data_simulator.psf_model, ailoc.simulation.VectorPSFTorch):
+            self.data_simulator.psf_model.zernike_coef = self.learned_psf.zernike_coef.detach()
+            self.data_simulator.psf_model._pre_compute()
+        elif isinstance(self.data_simulator.psf_model, ailoc.simulation.VectorPSFCUDA):
+            self.data_simulator.psf_model.zernike_coef = self.learned_psf.zernike_coef.detach().cpu().numpy()
 
         return elbo_record.detach().cpu().numpy()
 
@@ -459,41 +490,33 @@ class SyncLoc(ailoc.common.XXLoc):
 
         return delta, xyzph_sample, bg_sample
 
-    def prepare_sample_real_data(self, real_data, batch_size):
+    def prepare_sample_real_data(self, real_data,):
         n, h, w = real_data.shape
-        # assert n >= batch_size + 2 and h >= self.data_simulator.mol_sampler.train_size \
-        #        and w >= self.data_simulator.mol_sampler.train_size, 'real data is too small'
+        assert n >= self.context_size and h >= self.data_simulator.mol_sampler.train_size \
+               and w >= self.data_simulator.mol_sampler.train_size, 'real data is too small'
 
-        self.sample_window_size = min(h // 4 * 4, w // 4 * 4)
-        self.sample_window_size = min(self.sample_window_size, self.data_simulator.mol_sampler.train_size*2)
-        # self.sample_window_size = min(self.sample_window_size, 256)
+        self.sample_window_size = min(min(h // 4 * 4, w // 4 * 4), 128)
+
         self.h_sample_prob = real_data[:, :h - self.sample_window_size + 1, :].mean(axis=(0, 2)) / \
                              np.sum(real_data[:, :h - self.sample_window_size + 1, :].mean(axis=(0, 2)))
 
         self.w_sample_prob = real_data[:, :, :w - self.sample_window_size + 1].mean(axis=(0, 1)) / \
                              np.sum(real_data[:, :, :w - self.sample_window_size + 1].mean(axis=(0, 1)))
 
-    def sample_real_data(self, real_data, batch_size):
+    def sample_real_data(self, real_data, n_img):
         n, h, w = real_data.shape
 
-        n_start = np.random.randint(1, n-batch_size)
+        n_start = np.random.randint(0, n-n_img+1)
         h_start = np.random.choice(np.arange(h-self.sample_window_size+1), size=1, p=self.h_sample_prob)[0]
         w_start = np.random.choice(np.arange(w-self.sample_window_size+1), size=1, p=self.w_sample_prob)[0]
-        # h_start = np.random.randint(0, h-window_size+1)
-        # w_start = np.random.randint(0, w-window_size+1)
-        if self.local_context:
-            real_data_sample = real_data[n_start-1: n_start+batch_size+1,
-                                         h_start: h_start + self.sample_window_size,
-                                         w_start: w_start + self.sample_window_size]
-        else:
-            real_data_sample = real_data[n_start: n_start+batch_size,
-                                         h_start: h_start + self.sample_window_size,
-                                         w_start: w_start + self.sample_window_size]
-
+        real_data_sample = real_data[n_start: n_start+n_img,
+                                     h_start: h_start + self.sample_window_size,
+                                     w_start: w_start + self.sample_window_size]
         return real_data_sample.astype(np.float32)
 
     def get_real_data_z_prior(self, real_data, batch_size):
         print('Using the current network to estimate the z prior of the real data...')
+        self.network.eval()
         with torch.no_grad():
             n, h, w = real_data.shape
             fov_xy = (0, w-1, 0, h-1)
@@ -518,7 +541,7 @@ class SyncLoc(ailoc.common.XXLoc):
                 molecule_list_block = ailoc.common.SmlmDataAnalyzer.filter_over_cut(sub_fov_molecule_list,
                                                                                     sub_fov_xy_list,
                                                                                     original_sub_fov_xy_list,
-                                                                                    self.data_simulator.psf_model.pixel_size_xy)
+                                                                                    ailoc.common.cpu(self.data_simulator.psf_model.pixel_size_xy))
                 molecule_list += molecule_list_block
 
             molecule_list = np.array(molecule_list)
@@ -540,17 +563,19 @@ class SyncLoc(ailoc.common.XXLoc):
             print('The corresponding z weight is:')
             print(z_weight[0])
 
-            return z_weight
+        self.network.train()
+        return z_weight
 
-    def online_train(self, batch_size=16,
+    def online_train(self,
+                     batch_size=2,
                      max_iterations=50000,
                      eval_freq=500,
                      file_name=None,
                      real_data=None,
                      num_sample=50,
                      wake_interval=1,
-                     max_recon_psfs=1000,
-                     online_build_eval_set=False):
+                     max_recon_psfs=5000,
+                     online_build_eval_set=True):
         """
         Train the network.
 
@@ -568,13 +593,13 @@ class SyncLoc(ailoc.common.XXLoc):
                 if False, the evaluation set should be manually built before training
         """
 
-        file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H') + 'SyncLoc.pt' if file_name is None else file_name
+        file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'SyncLoc.pt' if file_name is None else file_name
 
         assert real_data is not None, 'real data is not provided'
 
         # real_dataset = ailoc.common.SmlmTiffDataset(real_data)
 
-        self.prepare_sample_real_data(real_data, batch_size)
+        self.prepare_sample_real_data(real_data)
 
         print('Start training...')
 
@@ -592,14 +617,17 @@ class SyncLoc(ailoc.common.XXLoc):
                 if self._iter_sleep > self.warmup:
                     if (self._iter_sleep-1) % 1000 == 0 and self._iter_sleep > self.warmup:
                         # calculate the z weight due to non-uniform z distribution
-                        self.real_data_z_weight = self.get_real_data_z_prior(real_data, batch_size)
+                        self.real_data_z_weight = self.get_real_data_z_prior(real_data, self.context_size*batch_size)
 
                     # real_data_sample = ailoc.common.gpu(self.sample_real_data(real_data, batch_size))
                     # loss_wake = self.wake_train_v1(real_data_sample, num_sample)
                     # loss_wake = self.wake_train_v2(real_data_sample, num_sample, max_recon_psfs)
                     # loss_wake = self.wake_train_v3(real_data_sample, batch_size, num_sample, max_recon_psfs)
                     if (self._iter_sleep-1) % wake_interval == 0:
-                        loss_wake = self.wake_train_v4(real_data, batch_size, num_sample, max_recon_psfs)
+                        loss_wake = self.wake_train_v4(real_data,
+                                                       batch_size*self.context_size,
+                                                       num_sample,
+                                                       max_recon_psfs)
                         total_loss_wake.append(loss_wake) if loss_wake is not np.nan else None
 
                 if self._iter_sleep % 100 == 0:
@@ -720,12 +748,12 @@ class SyncLoc(ailoc.common.XXLoc):
                 n_per_img.append(inference_dict_tmp['prob'].sum((-2, -1)).mean())
 
                 if len(molecule_array_tmp) > 0:
-                    molecule_array_tmp[:, 0] += i*batch_size
+                    molecule_array_tmp[:, 0] += i * batch_size * (self.context_size-2 if self.local_context else self.context_size)
                     molecule_list_pred += molecule_array_tmp.tolist()
 
             metric_dict, paired_array = ailoc.common.pair_localizations(prediction=np.array(molecule_list_pred),
                                                                         ground_truth=self.evaluation_dataset['molecule_list_gt'],
-                                                                        frame_num=self.evaluation_dataset['data'].shape[0],
+                                                                        frame_num=self.evaluation_dataset['data'].shape[0] * (self.context_size-2 if self.local_context else self.context_size),
                                                                         fov_xy_nm=(0, self.evaluation_dataset['data'].shape[-1]*self.data_simulator.psf_model.pixel_size_xy[0],
                                                                                    0, self.evaluation_dataset['data'].shape[-2]*self.data_simulator.psf_model.pixel_size_xy[1]))
 
@@ -747,9 +775,21 @@ class SyncLoc(ailoc.common.XXLoc):
         print("building evaluation dataset, this may take a while...")
         t0 = time.time()
         eval_data, molecule_list_gt, sub_fov_xy_list = \
-            self.data_simulator.sample_evaluation_data(num_image=self.dict_sampler_params['num_evaluation_data'])
+            self.data_simulator.sample_evaluation_data(batch_size=self.dict_sampler_params['eval_batch_size'],
+                                                       context_size=self.context_size,)
         self.evaluation_dataset['data'] = ailoc.common.cpu(eval_data)
-        self.evaluation_dataset['molecule_list_gt'] = np.array(molecule_list_gt)
+
+        molecule_list_gt = np.array(molecule_list_gt)
+        if self.local_context:
+            molecule_list_gt_corrected = []
+            for i in range(self.dict_sampler_params['eval_batch_size']):
+                curr_context_idx = np.where((molecule_list_gt[:, 0]>i*self.context_size+1)&(molecule_list_gt[:, 0]<(i+1)*self.context_size))
+                curr_molecule_list_gt = molecule_list_gt[curr_context_idx]
+                curr_molecule_list_gt[:, 0] -= (2*i+1)
+                molecule_list_gt_corrected.append(curr_molecule_list_gt)
+            molecule_list_gt = np.concatenate(molecule_list_gt_corrected, axis=0)
+
+        self.evaluation_dataset['molecule_list_gt'] = molecule_list_gt
         self.evaluation_dataset['sub_fov_xy_list'] = sub_fov_xy_list
         print(f"evaluation dataset with shape {eval_data.shape} building done! "
               f"contain {len(molecule_list_gt)} target molecules, "
@@ -795,43 +835,32 @@ class SyncLoc(ailoc.common.XXLoc):
 
         print(f"checking training data...")
         data_cam, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_sample, curr_sub_fov_xy = \
-            self.data_simulator.sample_training_data(batch_size=1, iter_train=0)
+            self.data_simulator.sample_training_data(batch_size=1,
+                                                     context_size=self.context_size,
+                                                     iter_train=0, )
 
         cmap = 'gray'
 
-        if self.data_simulator.mol_sampler.local_context:
-            fig, ax = plt.subplots(2, 2, constrained_layout=True)
-            img_tmp = ax[0, 0].imshow(ailoc.common.cpu(data_cam)[0, 0], cmap=cmap)
-            plt.colorbar(mappable=img_tmp, ax=ax[0, 0], fraction=0.046, pad=0.04)
-            ax[0, 0].set_title('last frame')
+        fig, ax_arr = plt.subplots(int(np.ceil(self.context_size/2)), 2,
+                                   figsize=(3*2, 2*int(np.ceil(self.context_size/2))),
+                                   constrained_layout=True)
+        ax = []
+        plts = []
+        for i in ax_arr:
+            try:
+                for j in i:
+                    ax.append(j)
+            except:
+                ax.append(i)
 
-            img_tmp = ax[0, 1].imshow(ailoc.common.cpu(data_cam)[0, 1], cmap=cmap)
-            plt.colorbar(mappable=img_tmp, ax=ax[0, 1], fraction=0.046, pad=0.04)
-            ax[0, 1].set_title('middle frame')
+        for i in range(self.context_size):
+            plts.append(ax[i].imshow(ailoc.common.cpu(data_cam)[0, i], cmap=cmap))
+            ax[i].set_title(f"frame {i}")
+            plt.colorbar(mappable=plts[-1], ax=ax[i], fraction=0.046, pad=0.04)
+            pix_gt = ailoc.common.cpu(p_map_gt[0, i].nonzero())
+            ax[i].scatter(pix_gt[:, 1], pix_gt[:, 0], s=5, c='m', marker='x')
 
-            img_tmp = ax[1, 0].imshow(ailoc.common.cpu(data_cam)[0, 2], cmap=cmap)
-            plt.colorbar(mappable=img_tmp, ax=ax[1, 0], fraction=0.046, pad=0.04)
-            ax[1, 0].set_title('next frame')
-
-            img_tmp = ax[1, 1].imshow(ailoc.common.cpu(data_cam)[0, 1], cmap=cmap)
-            plt.colorbar(mappable=img_tmp, ax=ax[1, 1], fraction=0.046, pad=0.04)
-            pix_gt = ailoc.common.cpu(p_map_gt[0].nonzero())
-            ax[1, 1].scatter(pix_gt[:, 1], pix_gt[:, 0], s=10, c='m', marker='x')
-            ax[1, 1].set_title('ground truth \non middle frame')
-
-            plt.show()
-        else:
-            fig, ax = plt.subplots(1, 2, constrained_layout=True)
-            img_tmp = ax[0].imshow(ailoc.common.cpu(data_cam)[0, 0], cmap=cmap)
-            plt.colorbar(mappable=img_tmp, ax=ax[0], fraction=0.046, pad=0.04)
-            ax[0].set_title('frame')
-
-            img_tmp = ax[1].imshow(ailoc.common.cpu(data_cam)[0, 0], cmap=cmap)
-            plt.colorbar(mappable=img_tmp, ax=ax[1], fraction=0.046, pad=0.04)
-            pix_gt = ailoc.common.cpu(p_map_gt[0].nonzero())
-            ax[1].scatter(pix_gt[:, 1], pix_gt[:, 0], s=10, c='m', marker='x')
-            ax[1].set_title('ground truth \non middle frame')
-            plt.show()
+        plt.show()
 
     @staticmethod
     def crop_patches(delta_map_sample,

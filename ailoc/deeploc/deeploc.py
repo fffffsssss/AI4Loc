@@ -25,7 +25,7 @@ class DeepLoc(ailoc.common.XXLoc):
 
         self.local_context = self.dict_sampler_params['local_context']
         self._network = ailoc.deeploc.DeepLocNet(self.local_context)
-        self.context_size = 10+2 if self.local_context else 10
+        self.context_size = sampler_params_dict['context_size'] + 2 if self.local_context else sampler_params_dict['context_size']
 
         self.evaluation_dataset = {}
         self.evaluation_recorder = self._init_recorder()
@@ -334,16 +334,21 @@ class DeepLoc(ailoc.common.XXLoc):
         data_cam, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_sample, curr_sub_fov_xy = \
             self.data_simulator.sample_training_data(batch_size=1,
                                                      context_size=self.context_size,
-                                                     iter_train=0,)
+                                                     iter_train=0, )
 
         cmap = 'gray'
 
-        fig, ax_arr = plt.subplots(self.context_size//2, 2, figsize=(6, 12), constrained_layout=True)
+        fig, ax_arr = plt.subplots(int(np.ceil(self.context_size / 2)), 2,
+                                   figsize=(3 * 2, 2 * int(np.ceil(self.context_size / 2))),
+                                   constrained_layout=True)
         ax = []
         plts = []
         for i in ax_arr:
-            for j in i:
-                ax.append(j)
+            try:
+                for j in i:
+                    ax.append(j)
+            except:
+                ax.append(i)
 
         for i in range(self.context_size):
             plts.append(ax[i].imshow(ailoc.common.cpu(data_cam)[0, i], cmap=cmap))

@@ -357,13 +357,17 @@ class TransLoc(ailoc.common.XXLoc):
 
         fig, ax_arr = plt.subplots(int(np.ceil(self.context_size / 2)),
                                    2,
-                                   figsize=(6, 12),
+                                   figsize=(3 * 2,
+                                            2 * int(np.ceil(self.context_size / 2))),
                                    constrained_layout=True)
         ax = []
         plts = []
         for i in ax_arr:
-            for j in i:
-                ax.append(j)
+            try:
+                for j in i:
+                    ax.append(j)
+            except:
+                ax.append(i)
 
         for i in range(self.context_size):
             plts.append(ax[i].imshow(ailoc.common.cpu(data_cam)[0, i], cmap=cmap))
