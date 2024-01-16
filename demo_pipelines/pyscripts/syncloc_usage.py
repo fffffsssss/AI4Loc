@@ -81,7 +81,7 @@ def syncloc_train():
 
     # manually set sampler parameters
     sampler_params_dict = {
-        'local_context': False,
+        'temporal_attn': True,
         'robust_training': False,
         'context_size': 10,  # for each batch unit, simulate several frames share the same photophysics and bg to train
         'train_size': 64,

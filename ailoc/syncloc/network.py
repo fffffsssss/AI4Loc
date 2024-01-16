@@ -4,6 +4,9 @@ import torch.nn.functional as F
 import thop
 import time
 
+import ailoc.common
+import ailoc.syncloc
+
 
 class Unet(nn.Module):
     """
@@ -261,7 +264,4 @@ class SyncLocNet(nn.Module):
         for i in range(200):
             self.forward(dummy_input)
         print(f'Average forward time: {(time.time() - t0) / 200:.4f} s')
-
-
-
 

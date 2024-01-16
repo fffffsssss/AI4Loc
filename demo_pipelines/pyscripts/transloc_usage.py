@@ -18,8 +18,8 @@ torch.backends.cudnn.benchmark = True
 def transloc_train():
     # set the file paths, calibration file is necessary,
     # experiment file is optional for background range estimation
-    calib_file = '../../datasets/fy_npc6um_1/DMO_6um_Crimson_645_beads_defoucs_0_step_100nm_1/DMO_6um_Crimson_645_beads_defoucs_0_step_100nm_1_MMStack_Pos0_calib_results.mat'
-    experiment_file = '../../datasets/fy_npc6um_1/NPC_NUP96_SNAP647_DMO_6um_defoucs_0_20ms_3/NPC_NUP96_SNAP647_DMO_6um_defoucs_0_20ms_3_MMStack_Pos0.ome.tif'
+    calib_file = '../../datasets/sw_npc_20211028/beads/astigmatism/astigmatism_beads_2um_20nm_512x512_hamm_1/astigmatism_beads_2um_20nm_512x512_hamm_1_MMStack_Default_calib_results.mat'
+    experiment_file = '../../datasets/sw_npc_20211028/NUP96_SNP647_3D_512_20ms_hama_mm_1800mW_3/NUP96_SNP647_3D_512_20ms_hama_mm_1800mW_3_MMStack_Default.ome.tif'
 
     if calib_file is not None:
         # using the same psf parameters and camera parameters as beads calibration
@@ -84,11 +84,11 @@ def transloc_train():
         'temporal_attn': True,
         'robust_training': True,  # if True, the training data will be added with some random Zernike aberrations
         'context_size': 10,  # for each batch unit, simulate several frames share the same photophysics and bg to train
-        'train_size': 128,
+        'train_size': 64,
         'num_em_avg': 10,
         'eval_batch_size': 100,
         'photon_range': (1000, 10000),
-        'z_range': (-3000, 3000),
+        'z_range': (-700, 700),
         'bg_range': bg_range if 'bg_range' in locals().keys() else (40, 60),
         'bg_perlin': True,
     }
@@ -110,7 +110,7 @@ def transloc_train():
 
     file_name = '../../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'TransLoc.pt'
     transloc_model.online_train(batch_size=1,
-                                max_iterations=30000,
+                                max_iterations=3000,
                                 eval_freq=500,
                                 file_name=file_name)
 

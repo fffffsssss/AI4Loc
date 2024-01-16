@@ -6,14 +6,15 @@ import time
 import collections
 import matplotlib.pyplot as plt
 import datetime
-from torch.cuda.amp import autocast
+# from torch.cuda.amp import autocast
 import random
-from deprecated import deprecated
+# from deprecated import deprecated
 from tqdm import tqdm
 
 import ailoc.common
 import ailoc.simulation
 import ailoc.syncloc
+import ailoc.transloc
 
 
 class SyncLoc(ailoc.common.XXLoc):
@@ -30,9 +31,18 @@ class SyncLoc(ailoc.common.XXLoc):
         self.scale_ph_offset = np.mean(self.dict_sampler_params['bg_range'])
         self.scale_ph_factor = self.dict_sampler_params['photon_range'][1]/50
 
-        self.local_context = self.dict_sampler_params['local_context']
-        self._network = ailoc.syncloc.SyncLocNet(self.local_context)
-        self.context_size = sampler_params_dict['context_size'] + 2 if self.local_context else sampler_params_dict['context_size']
+        try:
+            self.temporal_attn = self.dict_sampler_params['temporal_attn']
+        except KeyError:
+            self.temporal_attn = False
+        # should be odd, using the same number of frames before and after the target frame
+        self.attn_length = 5
+        assert self.attn_length % 2 == 1, 'attn_length should be odd'
+        # add frames at the beginning and end to provide context
+        self.context_size = sampler_params_dict['context_size'] + 2*(self.attn_length//2) if self.temporal_attn else sampler_params_dict['context_size']
+        self._network = ailoc.transloc.TransLocNet(self.temporal_attn,
+                                                   self.attn_length,
+                                                   self.context_size,)
 
         self.evaluation_dataset = {}
         self.evaluation_recorder = self._init_recorder()
@@ -44,8 +54,8 @@ class SyncLoc(ailoc.common.XXLoc):
 
         self.real_data_z_weight = [np.ones(5)*0.2, np.array([-np.inf, -0.6, -0.2, 0.2, 0.6, np.inf])]
 
-        self.optimizer_net = torch.optim.AdamW(self.network.parameters(), lr=6e-4, weight_decay=0.1)
-        self.scheduler_net = torch.optim.lr_scheduler.StepLR(self.optimizer_net, step_size=1000, gamma=0.9)
+        self.optimizer_net = torch.optim.AdamW(self.network.parameters(), lr=6e-4, weight_decay=0.05)
+        self.scheduler_net = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_net, T_max=30000)
 
         # self.optimizer_psf = torch.optim.AdamW([self.learned_psf.zernike_coef], lr=25*6e-4)
         self.optimizer_psf = torch.optim.Adam([self.learned_psf.zernike_coef], lr=0.01*5)
@@ -86,11 +96,12 @@ class SyncLoc(ailoc.common.XXLoc):
         raise NotImplementedError
 
     def unfold_target(self, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt):
-        if self.local_context:
-            p_map_gt = p_map_gt[:, 1:-1]
-            xyzph_array_gt = xyzph_array_gt[:, 1:-1]
-            mask_array_gt = mask_array_gt[:, 1:-1]
-            bg_map_gt = bg_map_gt[:, 1:-1]
+        if self.temporal_attn:
+            extra_length = self.attn_length // 2
+            p_map_gt = p_map_gt[:, extra_length:-extra_length]
+            xyzph_array_gt = xyzph_array_gt[:, extra_length:-extra_length]
+            mask_array_gt = mask_array_gt[:, extra_length:-extra_length]
+            bg_map_gt = bg_map_gt[:, extra_length:-extra_length]
         else:
             pass
         return p_map_gt.flatten(start_dim=0, end_dim=1), \
@@ -127,35 +138,11 @@ class SyncLoc(ailoc.common.XXLoc):
                                p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt)
         self.optimizer_net.zero_grad()
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=0.03, norm_type=2)
         self.optimizer_net.step()
         self.scheduler_net.step()
         self._iter_sleep += 1
 
         return loss.detach().cpu().numpy()
-
-    def wake_loss(self, real_data, xyzph_pred, xyzph_sig_pred, reconstruction,
-                  delta_map_sample, xyzph_map_sample, weight_per_img):
-        num_sample = reconstruction.shape[1]
-        log_p_x_given_h = ailoc.syncloc.compute_log_p_x_given_h(data=real_data[:, None].expand(-1, num_sample, -1, -1),
-                                                                model=reconstruction)
-        log_q_h_given_x = ailoc.syncloc.compute_log_q_h_given_x(xyzph_pred,
-                                                                xyzph_sig_pred,
-                                                                delta_map_sample,
-                                                                xyzph_map_sample)
-
-        with torch.no_grad():
-            importance = log_p_x_given_h - log_q_h_given_x
-            importance_norm = torch.exp(importance - importance.logsumexp(dim=-1, keepdim=True))
-
-        # elbo = torch.sum(importance_norm * (log_p_x_given_h + log_q_h_given_x), dim=-1, keepdim=True)
-        elbo = torch.sum(importance_norm * log_p_x_given_h, dim=-1, keepdim=True)
-        if weight_per_img is not None:
-            total_loss = - torch.mean(elbo * weight_per_img[:, None])
-        else:
-            total_loss = - torch.mean(elbo)
-
-        return total_loss
 
     def wake_loss_v2(self, real_data,
                      reconstruction,
@@ -185,165 +172,6 @@ class SyncLoc(ailoc.common.XXLoc):
             total_loss = - torch.mean(elbo)
 
         return total_loss, elbo_record
-
-    def wake_train_v1(self, real_data, num_sample):
-        p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(real_data,
-                                                                     self.data_simulator.camera)
-        delta_map_sample, xyzph_map_sample, bg_sample = self.sample_posterior(p_pred,
-                                                                              xyzph_pred,
-                                                                              xyzph_sig_pred,
-                                                                              bg_pred,
-                                                                              num_sample)
-        real_data = self.data_simulator.camera.backward(real_data)
-        self.learned_psf._pre_compute()
-        reconstruction = self.data_simulator.gen_noiseless_data(self.learned_psf,
-                                                                delta_map_sample,
-                                                                xyzph_map_sample,
-                                                                bg_sample,
-                                                                None)
-        self.optimizer_net.zero_grad()
-        self.optimizer_psf.zero_grad()
-        loss = self.wake_loss(real_data, xyzph_pred, xyzph_sig_pred, reconstruction, delta_map_sample, xyzph_map_sample)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=0.03, norm_type=2)
-        self.optimizer_net.step()
-        self.scheduler_net.step()
-        self.optimizer_psf.step()
-
-        self.data_simulator.psf_model.zernike_coef = self.learned_psf.zernike_coef.detach().cpu().numpy()
-        # print(self.learned_psf.zernike_coef.detach().cpu().numpy())
-
-        return loss.detach().cpu().numpy()
-
-    def wake_train_v2(self, real_data, num_sample, max_recon_psfs=1000):
-        """
-        as the number of psfs in real data is unknown, we limit the number of reconstructed PSF to be max_recon_psfs
-        """
-
-        p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(real_data,
-                                                                     self.data_simulator.camera)
-
-        delta_map_sample, xyzph_map_sample, bg_sample = self.sample_posterior(p_pred,
-                                                                              xyzph_pred,
-                                                                              xyzph_sig_pred,
-                                                                              bg_pred,
-                                                                              num_sample)
-
-        if len(delta_map_sample.nonzero()) > 0.0075 * p_pred.shape[0] * p_pred.shape[1] * p_pred.shape[
-            2] * num_sample:
-            print('too many non-zero elements in delta_map_sample, the network probably diverges, '
-                  'consider decreasing the PSF learning rate to make the network more stable')
-
-        real_data = self.data_simulator.camera.backward(real_data)
-
-        real_data_crop, \
-        delta_map_sample_crop, \
-        xyzph_map_sample_crop, \
-        bg_sample_crop, \
-        xyzph_pred_crop, \
-        xyzph_sig_pred_crop = self.crop_patches(delta_map_sample,
-                                                real_data,
-                                                xyzph_map_sample,
-                                                bg_sample,
-                                                xyzph_pred,
-                                                xyzph_sig_pred,
-                                                crop_size=self.data_simulator.mol_sampler.train_size,
-                                                max_psfs=max_recon_psfs)
-
-        if real_data_crop is None:
-            return np.nan
-
-        self.learned_psf._pre_compute()
-        reconstruction = self.data_simulator.reconstruct_posterior(self.learned_psf,
-                                                                   delta_map_sample_crop,
-                                                                   xyzph_map_sample_crop,
-                                                                   bg_sample_crop, )
-
-        self.optimizer_net.zero_grad()
-        self.optimizer_psf.zero_grad()
-        loss = self.wake_loss(real_data_crop,
-                              xyzph_pred_crop,
-                              xyzph_sig_pred_crop,
-                              reconstruction,
-                              delta_map_sample_crop,
-                              xyzph_map_sample_crop)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=0.03, norm_type=2)
-        self.optimizer_net.step()
-        self.scheduler_net.step()
-        self.optimizer_psf.step()
-
-        self.data_simulator.psf_model.zernike_coef = self.learned_psf.zernike_coef.detach().cpu().numpy()
-        # print(self.learned_psf.zernike_coef.detach().cpu().numpy())
-
-        return loss.detach().cpu().numpy()
-
-    def wake_train_v3(self, real_data, batch_size, num_sample=50, max_recon_psfs=1000):
-        """
-        as the number of psfs in real data is unknown, we limit the number of reconstructed PSF to be max_recon_psfs,
-        the non-uniform z distribution of the emitters in real data is also considered
-        """
-
-        p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(real_data,
-                                                                     self.data_simulator.camera)
-
-        delta_map_sample, xyzph_map_sample, bg_sample = self.sample_posterior(p_pred,
-                                                                              xyzph_pred,
-                                                                              xyzph_sig_pred,
-                                                                              bg_pred,
-                                                                              num_sample)
-
-        if len(delta_map_sample.nonzero()) > 0.0075 * p_pred.shape[0] * p_pred.shape[1] * p_pred.shape[
-            2] * num_sample:
-            print('too many non-zero elements in delta_map_sample, the network probably diverges, '
-                  'consider decreasing the PSF learning rate to make the network more stable')
-
-        real_data = self.data_simulator.camera.backward(real_data)
-
-        real_data_crop, \
-        delta_map_sample_crop, \
-        xyzph_map_sample_crop, \
-        bg_sample_crop, \
-        xyzph_pred_crop, \
-        xyzph_sig_pred_crop, \
-        z_weight_crop = self.crop_patches(delta_map_sample,
-                                          real_data,
-                                          xyzph_map_sample,
-                                          bg_sample,
-                                          xyzph_pred,
-                                          xyzph_sig_pred,
-                                          crop_size=self.data_simulator.mol_sampler.train_size,
-                                          max_psfs=max_recon_psfs,
-                                          z_weight=self.real_data_z_weight)
-
-        if real_data_crop is None:
-            return np.nan
-
-        self.learned_psf._pre_compute()
-        reconstruction = self.data_simulator.reconstruct_posterior(self.learned_psf,
-                                                                   delta_map_sample_crop,
-                                                                   xyzph_map_sample_crop,
-                                                                   bg_sample_crop, )
-
-        self.optimizer_net.zero_grad()
-        self.optimizer_psf.zero_grad()
-        loss = self.wake_loss(real_data_crop,
-                              xyzph_pred_crop,
-                              xyzph_sig_pred_crop,
-                              reconstruction,
-                              delta_map_sample_crop,
-                              xyzph_map_sample_crop,
-                              z_weight_crop)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=0.03, norm_type=2)
-        self.optimizer_net.step()
-        self.scheduler_net.step()
-        self.optimizer_psf.step()
-
-        self.data_simulator.psf_model.zernike_coef = self.learned_psf.zernike_coef.detach().cpu().numpy()
-        # print(self.learned_psf.zernike_coef.detach().cpu().numpy())
-
-        return loss.detach().cpu().numpy()
 
     def wake_train_v4(self, real_data, batch_size, num_sample=50, max_recon_psfs=5000):
         """
@@ -381,8 +209,8 @@ class SyncLoc(ailoc.common.XXLoc):
                     return np.nan
 
                 real_data_sampled = self.data_simulator.camera.backward(real_data_sampled)
-                if self.local_context:
-                    real_data_sampled = real_data_sampled[1:-1]
+                if self.temporal_attn:
+                    real_data_sampled = real_data_sampled[(self.attn_length//2): -(self.attn_length//2)]
 
                 real_data_sampled_crop, \
                 delta_map_sample_crop, \
@@ -522,19 +350,21 @@ class SyncLoc(ailoc.common.XXLoc):
             fov_xy = (0, w-1, 0, h-1)
             molecule_list = []
             for i in tqdm(range(int(np.ceil(n / batch_size)))):
-                sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list = ailoc.common.split_fov(data=real_data[i * batch_size: (i + 1) * batch_size],
-                                                                                                      fov_xy=fov_xy,
-                                                                                                      sub_fov_size=256,
-                                                                                                      over_cut=8)
+                sub_fov_data_list, \
+                sub_fov_xy_list, \
+                original_sub_fov_xy_list = ailoc.common.split_fov(data=real_data[i * batch_size: (i + 1) * batch_size],
+                                                                  fov_xy=fov_xy,
+                                                                  sub_fov_size=256,
+                                                                  over_cut=8)
                 sub_fov_molecule_list = []
                 for i_fov in range(len(sub_fov_xy_list)):
-                    with autocast():
-                        molecule_list_tmp, inference_dict_tmp = ailoc.common.data_analyze(loc_model=self,
-                                                                                          data=sub_fov_data_list[i_fov],
-                                                                                          sub_fov_xy=sub_fov_xy_list[i_fov],
-                                                                                          camera=self.data_simulator.camera,
-                                                                                          batch_size=batch_size,
-                                                                                          retain_infer_map=False)
+                    # with autocast():
+                    molecule_list_tmp, inference_dict_tmp = ailoc.common.data_analyze(loc_model=self,
+                                                                                      data=sub_fov_data_list[i_fov],
+                                                                                      sub_fov_xy=sub_fov_xy_list[i_fov],
+                                                                                      camera=self.data_simulator.camera,
+                                                                                      batch_size=batch_size,
+                                                                                      retain_infer_map=False)
                     sub_fov_molecule_list.append(molecule_list_tmp)
 
                 # merge the localizations in each sub-FOV to whole FOV, filter repeated localizations in over cut region
@@ -546,22 +376,28 @@ class SyncLoc(ailoc.common.XXLoc):
 
             molecule_list = np.array(molecule_list)
 
-            z_pdf = list(np.histogram(molecule_list[:, 3],
-                                      range=self.data_simulator.mol_sampler.z_range,
-                                      bins=5, density=True))
-            z_pdf[0] *= (self.data_simulator.mol_sampler.z_range[1]-self.data_simulator.mol_sampler.z_range[0])/5
-            z_pdf[0] = np.clip(z_pdf[0], a_min=1e-3, a_max=None)
-            z_weight = copy.deepcopy(z_pdf)
-            z_weight[0] = (1/z_weight[0])/np.sum(1/z_weight[0])
-            z_weight[1] = z_weight[1]/self.data_simulator.mol_sampler.z_scale
-            z_weight[1][0] = -np.inf
-            z_weight[1][-1] = np.inf
-            print(f'\nEstimation done, the z distribution of {molecule_list.shape[0]} '
-                  f'molecules in real data is:')
-            print(z_pdf[1])
-            print(z_pdf[0])
-            print('The corresponding z weight is:')
-            print(z_weight[0])
+            try:
+                z_pdf = list(np.histogram(molecule_list[:, 3],
+                                          range=self.data_simulator.mol_sampler.z_range,
+                                          bins=5, density=True))
+                z_pdf[0] *= (self.data_simulator.mol_sampler.z_range[1]-self.data_simulator.mol_sampler.z_range[0])/5
+                z_pdf[0] = np.clip(z_pdf[0], a_min=1e-3, a_max=None)
+                z_weight = copy.deepcopy(z_pdf)
+                z_weight[0] = (1/z_weight[0])/np.sum(1/z_weight[0])
+                z_weight[1] = z_weight[1]/self.data_simulator.mol_sampler.z_scale
+                z_weight[1][0] = -np.inf
+                z_weight[1][-1] = np.inf
+                print(f'\nEstimation done, the z distribution of {molecule_list.shape[0]} '
+                      f'molecules in real data is:')
+                print(z_pdf[1])
+                print(z_pdf[0])
+                print('The corresponding z weight is:')
+                print(z_weight[0])
+            except IndexError:
+                print('No molecule detected in the real data, please check the data or the network.')
+                z_weight = self.real_data_z_weight
+                print('Using default z weight:')
+                print(z_weight[0])
 
         self.network.train()
         return z_weight
@@ -594,6 +430,7 @@ class SyncLoc(ailoc.common.XXLoc):
         """
 
         file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'SyncLoc.pt' if file_name is None else file_name
+        self.scheduler_net.T_max = max_iterations
 
         assert real_data is not None, 'real data is not provided'
 
@@ -607,6 +444,10 @@ class SyncLoc(ailoc.common.XXLoc):
             print('training from checkpoint, the recent performance is:')
             self.print_recorder(max_iterations)
 
+            self.scheduler_net = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_net,
+                                                                            T_max=max_iterations,
+                                                                            last_epoch=self._iter_sleep)
+
         while self._iter_sleep < max_iterations:
             t0 = time.time()
             total_loss_sleep = []
@@ -619,10 +460,6 @@ class SyncLoc(ailoc.common.XXLoc):
                         # calculate the z weight due to non-uniform z distribution
                         self.real_data_z_weight = self.get_real_data_z_prior(real_data, self.context_size*batch_size)
 
-                    # real_data_sample = ailoc.common.gpu(self.sample_real_data(real_data, batch_size))
-                    # loss_wake = self.wake_train_v1(real_data_sample, num_sample)
-                    # loss_wake = self.wake_train_v2(real_data_sample, num_sample, max_recon_psfs)
-                    # loss_wake = self.wake_train_v3(real_data_sample, batch_size, num_sample, max_recon_psfs)
                     if (self._iter_sleep-1) % wake_interval == 0:
                         loss_wake = self.wake_train_v4(real_data,
                                                        batch_size*self.context_size,
@@ -728,7 +565,7 @@ class SyncLoc(ailoc.common.XXLoc):
 
         return molecule_array, inference_dict
 
-    def online_evaluate(self, batch_size):
+    def online_evaluate(self, batch_size, print_info=False):
         """
         Evaluate the network during training using the validation dataset.
         """
@@ -748,14 +585,15 @@ class SyncLoc(ailoc.common.XXLoc):
                 n_per_img.append(inference_dict_tmp['prob'].sum((-2, -1)).mean())
 
                 if len(molecule_array_tmp) > 0:
-                    molecule_array_tmp[:, 0] += i * batch_size * (self.context_size-2 if self.local_context else self.context_size)
+                    molecule_array_tmp[:, 0] += i * batch_size * (self.context_size-2*(self.attn_length//2) if self.temporal_attn else self.context_size)
                     molecule_list_pred += molecule_array_tmp.tolist()
 
             metric_dict, paired_array = ailoc.common.pair_localizations(prediction=np.array(molecule_list_pred),
                                                                         ground_truth=self.evaluation_dataset['molecule_list_gt'],
-                                                                        frame_num=self.evaluation_dataset['data'].shape[0] * (self.context_size-2 if self.local_context else self.context_size),
+                                                                        frame_num=self.evaluation_dataset['data'].shape[0]*(self.context_size-2*(self.attn_length//2) if self.temporal_attn else self.context_size),
                                                                         fov_xy_nm=(0, self.evaluation_dataset['data'].shape[-1]*self.data_simulator.psf_model.pixel_size_xy[0],
-                                                                                   0, self.evaluation_dataset['data'].shape[-2]*self.data_simulator.psf_model.pixel_size_xy[1]))
+                                                                                   0, self.evaluation_dataset['data'].shape[-2]*self.data_simulator.psf_model.pixel_size_xy[1]),
+                                                                        print_info=print_info,)
 
             for k in self.evaluation_recorder.keys():
                 if k in metric_dict.keys():
@@ -779,17 +617,19 @@ class SyncLoc(ailoc.common.XXLoc):
                                                        context_size=self.context_size,)
         self.evaluation_dataset['data'] = ailoc.common.cpu(eval_data)
 
+        # there are attn_length//2 more frames at the beginning and end
         molecule_list_gt = np.array(molecule_list_gt)
-        if self.local_context:
+        if self.temporal_attn:
             molecule_list_gt_corrected = []
             for i in range(self.dict_sampler_params['eval_batch_size']):
-                curr_context_idx = np.where((molecule_list_gt[:, 0]>i*self.context_size+1)&(molecule_list_gt[:, 0]<(i+1)*self.context_size))
+                curr_context_idx = np.where((molecule_list_gt[:, 0] > i * self.context_size + (self.attn_length//2)) &
+                                            (molecule_list_gt[:, 0] < (i + 1) * self.context_size - (self.attn_length//2)+1))
                 curr_molecule_list_gt = molecule_list_gt[curr_context_idx]
-                curr_molecule_list_gt[:, 0] -= (2*i+1)
+                curr_molecule_list_gt[:, 0] -= (2*(self.attn_length//2) * i + (self.attn_length//2))
                 molecule_list_gt_corrected.append(curr_molecule_list_gt)
             molecule_list_gt = np.concatenate(molecule_list_gt_corrected, axis=0)
 
-        self.evaluation_dataset['molecule_list_gt'] = molecule_list_gt
+        self.evaluation_dataset['molecule_list_gt'] = np.array(molecule_list_gt)
         self.evaluation_dataset['sub_fov_xy_list'] = sub_fov_xy_list
         print(f"evaluation dataset with shape {eval_data.shape} building done! "
               f"contain {len(molecule_list_gt)} target molecules, "
