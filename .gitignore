@@ -7,3 +7,4 @@ __pycache__
 !datasets/placeholder.txt
 /results/*
 !results/placeholder.txt
+/ailoc/liteloc
