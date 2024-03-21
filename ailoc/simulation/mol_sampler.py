@@ -482,7 +482,7 @@ class MoleculeSampler:
             xyzph_list_gt = xyzph_list_gt.transpose(1, 0)
 
             # get the number of emitters in each image
-            em_num = torch.unique_consecutive(inds[1], return_counts=True)[1]
+            em_num = torch.unique_consecutive(inds[1] if context_size != 1 else inds[0], return_counts=True)[1]
             em_num_max = em_num.max()
 
             # build a gt matrix with shape (batch_size, context_size, em_num, 4)

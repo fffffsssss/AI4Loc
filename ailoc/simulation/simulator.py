@@ -266,7 +266,3 @@ class Simulator:
                    canvas_col_start[i]:canvas_col_start[i] + w_cut.shape[2]] += w_cut
 
         return canvas
-
-
-
-
