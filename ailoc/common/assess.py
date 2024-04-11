@@ -1,8 +1,10 @@
 import numpy as np
+import torch
 from scipy.spatial.distance import cdist
+import matplotlib.pyplot as plt
 
 import ailoc.common
-
+import ailoc.simulation
 
 def find_frame(molecule_list, frame_nbr, frame_parm_pos=0):
     """
@@ -201,3 +203,149 @@ def pair_localizations(prediction, ground_truth, frame_num=None, fov_xy_nm=None,
               f"FN: {fn}, FP: {fp}")
 
     return metric_dict, paired_array
+
+
+def test_single_emitter_accuracy(loc_model,
+                                 psf_params,
+                                 xy_range=(-100, 100),
+                                 z_range=(-700, 700),
+                                 photon=2000,
+                                 bg=20,
+                                 num_z_step=25,
+                                 num_repeat=1000,
+                                 show_res=True):
+    """
+    Test the Loc model precision on single emitter localization. Plot with CRLB as a reference.
+
+    Args:
+        loc_model (ailoc.common.XXLoc):
+            the trained XXLoc model
+        psf_params (dict):
+            the PSF parameters to test
+        xy_range (tuple):
+            (start, end), the lateral range for random emitter positions, the center of the image is 0, unit nm
+        z_range (tuple):
+            (start, end), the axial range for random emitter positions, unit nm
+        photon (int):
+            the fixed photon number for test emitters
+        bg (int):
+            the fixed background photon number for test emitters
+        num_z_step (int):
+            the number of axial steps in the z range
+        num_repeat (int):
+            the number of repeat for each z position
+        show_res (bool):
+            whether to show the test results
+    """
+
+    local_context = getattr(loc_model, 'local_context', False)  # for DeepLoc model
+    temporal_attn = getattr(loc_model, 'temporal_attn', False)  # for TransLoc model
+    assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
+    if local_context:
+        attn_length = 3
+    elif temporal_attn:
+        attn_length = loc_model.attn_length
+
+    # initialize the PSF model and calculate the 3D average CRLB
+    psf_model = ailoc.simulation.VectorPSFTorch(psf_params)
+
+    # set emitter positions
+    x = ailoc.common.gpu(torch.ones(num_z_step) * (xy_range[0]+xy_range[1])/2)  # unit nm
+    y = ailoc.common.gpu(torch.ones(num_z_step) * (xy_range[0]+xy_range[1])/2)  # unit nm
+    z = ailoc.common.gpu(torch.linspace(z_range[0], z_range[1], num_z_step))  # unit nm
+    photons = ailoc.common.gpu(torch.ones(num_z_step) * photon)*loc_model.data_simulator.camera.qe  # unit photons
+    if isinstance(loc_model.data_simulator.camera, ailoc.simulation.SCMOS):
+        bgs = ailoc.common.gpu(torch.ones(num_z_step) * bg * loc_model.data_simulator.camera.qe +
+                               loc_model.data_simulator.camera.read_noise_sigma**2)  # unit photons
+    elif isinstance(loc_model.data_simulator.camera, ailoc.simulation.EMCCD):  # EMCCD needs test
+        bgs = ailoc.common.gpu(torch.ones(num_z_step) * bg * loc_model.data_simulator.camera.qe +
+                               loc_model.data_simulator.camera.read_noise_sigma**2)  # unit photons
+    else:
+        bgs = ailoc.common.gpu(torch.ones(num_z_step) * bg * loc_model.data_simulator.camera.qe)   # unit photons
+
+    if local_context or temporal_attn:
+        xyz_crlb, psfs = psf_model.compute_crlb_mf(x, y, z, photons, bgs, attn_length)
+    else:
+        xyz_crlb, psfs = psf_model.compute_crlb(x, y, z, photons, bgs)
+    xyz_crlb_np = ailoc.common.cpu(xyz_crlb)
+
+    # generate the test data
+    print('{}{}{}'.format('simulating ', num_z_step * num_repeat, ' single emitter images for test'))
+    if local_context or temporal_attn:
+        xemit = ailoc.common.gpu(torch.ones(num_z_step*num_repeat) * (xy_range[0]+xy_range[1])/2)  # unit nm
+        yemit = ailoc.common.gpu(torch.ones(num_z_step*num_repeat) * (xy_range[0]+xy_range[1])/2)
+        zemit = z.repeat(num_repeat)
+        z_step = (z_range[1] - z_range[0]) / (num_z_step - 1)
+    else:
+        lateral_dist = torch.distributions.Uniform(xy_range[0], xy_range[1])
+        xemit = ailoc.common.gpu(lateral_dist.sample(torch.Size([num_z_step*num_repeat])))
+        yemit = ailoc.common.gpu(lateral_dist.sample(torch.Size([num_z_step*num_repeat])))
+        zemit = z.repeat(num_repeat)
+        z_step = (z_range[1] - z_range[0]) / (num_z_step - 1)
+        # zemit += ailoc.common.gpu((torch.rand(zemit.shape)-0.5) * (z_step-1))
+    photons_emit = ailoc.common.gpu(torch.ones(num_z_step*num_repeat) * photon)
+    bgs_emit = ailoc.common.gpu(torch.ones(num_z_step*num_repeat) * bg)
+
+    test_psfs = ailoc.common.cpu(psf_model.simulate_parallel(xemit, yemit, zemit, photons_emit) +
+                                 bgs_emit[:, None, None])
+    # pad the size of test_data to be multiple of 4
+    test_psfs_padded, sub_fov_xy_list, _ = ailoc.common.split_fov(test_psfs, sub_fov_size=128)
+    # simulate the camera noise
+    test_data = ailoc.common.cpu(loc_model.data_simulator.camera.forward(ailoc.common.gpu(test_psfs_padded[0])))
+    gt_array = ailoc.common.cpu(torch.concat(
+        [ailoc.common.gpu(torch.arange(1, num_repeat * num_z_step + 1))[:, None],
+         xemit[:, None] + psf_model.psf_size / 2 * psf_model.pixel_size_xy[0],
+         yemit[:, None] + psf_model.psf_size / 2 * psf_model.pixel_size_xy[1],
+         zemit[:, None],
+         photons_emit[:, None]], dim=1))
+    print('simulation done')
+
+    if show_res:
+        print('example test images')
+        ailoc.common.plot_psf_stack(test_data[:num_z_step], zemit[:num_z_step])
+
+    print('start inferring, wait a few minutes')
+    preds_list, preds_dict = ailoc.common.data_analyze(loc_model,
+                                                       test_data,
+                                                       sub_fov_xy_list[0],
+                                                       loc_model.data_simulator.camera)
+    print('inference done')
+
+    metric_dict, paired_array = ailoc.common.pair_localizations(prediction=preds_list,
+                                                                ground_truth=gt_array,
+                                                                frame_num=num_repeat*num_z_step,
+                                                                fov_xy_nm=(0,
+                                                                           psf_model.psf_size*psf_model.pixel_size_xy[0],
+                                                                           0,
+                                                                           psf_model.psf_size*psf_model.pixel_size_xy[1],),
+                                                                print_info=True)
+
+    rmse_xyz = np.zeros([3, num_z_step])
+    for i in range(num_z_step):
+        z_tmp = ailoc.common.cpu(z[i])
+        ind = np.where(((z_tmp - z_step / 2) < paired_array[:, 3]) & (paired_array[:, 3] < (z_tmp + z_step / 2)))
+        tmp = np.squeeze(paired_array[ind, :])
+        if tmp.shape[0]:
+            rmse_xyz[0, i] = np.sqrt(np.mean(np.square(tmp[:, 1] - tmp[:, 5])))
+            rmse_xyz[1, i] = np.sqrt(np.mean(np.square(tmp[:, 2] - tmp[:, 6])))
+            rmse_xyz[2, i] = np.sqrt(np.mean(np.square(tmp[:, 3] - tmp[:, 7])))
+
+    print('average 3D CRLB is:',
+          np.sum((xyz_crlb_np[:, 0] ** 2 + xyz_crlb_np[:, 1] ** 2 + xyz_crlb_np[:, 2] ** 2)**0.5) / num_z_step)
+    print('average 3D RMSE is:',
+            np.sum((rmse_xyz[0, :] ** 2 + rmse_xyz[1, :] ** 2 + rmse_xyz[2, :] ** 2)**0.5) / num_z_step)
+
+    if show_res:
+        print('plot the RMSE of network prediction vs CRLB')
+        plt.figure(constrained_layout=True)
+        plt.plot(ailoc.common.cpu(z), xyz_crlb_np[:, 0], 'b',
+                 ailoc.common.cpu(z), xyz_crlb_np[:, 1], 'g',
+                 ailoc.common.cpu(z), xyz_crlb_np[:, 2], 'r')
+        plt.scatter(ailoc.common.cpu(z), rmse_xyz[0, :],c='b')
+        plt.scatter(ailoc.common.cpu(z), rmse_xyz[1, :],c='g')
+        plt.scatter(ailoc.common.cpu(z), rmse_xyz[2, :],c='r')
+        plt.legend(('$CRLB_x^{1/2}$', '$CRLB_y^{1/2}$', '$CRLB_z^{1/2}$', '$RMSE_x$', '$RMSE_y$', '$RMSE_z$'),
+                   ncol=2,
+                   loc='upper center')
+        plt.xlim([np.min(ailoc.common.cpu(z)), np.max(ailoc.common.cpu(z))])
+        plt.show()

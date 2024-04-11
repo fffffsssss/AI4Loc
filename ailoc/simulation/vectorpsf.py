@@ -928,6 +928,58 @@ class VectorPSFTorch(VectorPSF):
 
         return xyz_crlb, model
 
+    def compute_crlb_mf(self, x, y, z, photons, bgs, attn_length):
+        #todo: need test
+        """
+        Calculate the CRLB of this PSF model at give positions, photons and backgrounds.
+
+        Args:
+            x (torch.Tensor): x positions of the PSFs, unit nm
+            y (torch.Tensor): y positions of the PSFs, unit nm
+            z (torch.Tensor): z positions of the PSFs, unit nm
+            photons (torch.Tensor): photon counts of the PSFs, unit photons
+            bgs (torch.Tensor): background counts of the PSFs, unit photons
+            attn_length (int): attention length of the network, used to multiply the Fisher matrix
+
+        Returns:
+            (torch.Tensor,torch.Tensor): CRLB xyz (nPSFs, 3) and model PSFs, unit nm and photons
+        """
+
+        n_mol = x.shape[0]
+
+        # calculate the derivatives
+        [dudt, model] = self._compute_derivative_parallel(x, y, z, photons, bgs)
+
+        # calculate hessian matrix, here only consider not shared parameters: x, y, z, photons, background
+        num_pars = n_mol * 5
+        t2 = 1 / model
+        hessian = torch.zeros([num_pars, num_pars], device='cuda', dtype=self.data_type)
+        for p1 in range(num_pars):
+            temp1_zind = int(np.floor(p1 / 5))  # the index of data
+            temp1_pind = int(p1 % 5)  # the index of parameter type
+            temp1 = dudt[:, :, :, temp1_pind]  # the derivative of data concerning this parameter type
+            for p2 in range(p1, num_pars):
+                temp2_zind = int(np.floor(p2 / 5))
+                temp2_pind = int(p2 % 5)
+                temp2 = dudt[:, :, :, temp2_pind]
+
+                # since all parameters are not shared, only the same molecule data makes sense
+                # when multiply gradients of two parameters
+                if temp1_zind == temp2_zind:
+                    temp = t2[temp1_zind, :, :] * temp1[temp1_zind, :, :] * temp2[temp2_zind, :, :]
+                    hessian[p1, p2] = torch.sum(temp)
+                    hessian[p2, p1] = hessian[p1, p2]
+
+        # calculate local fisher matrix and crlb
+        xyz_crlb = torch.zeros([n_mol, 3], device='cuda')
+        for j in range(n_mol):
+            fisher_tmp = hessian[j * 5:j * 5 + 5, j * 5:j * 5 + 5]
+            fisher_tmp[:3, :3] *= attn_length
+            sqrt_crlb_tmp = torch.sqrt(torch.diag(torch.inverse(fisher_tmp)))
+            xyz_crlb[j] = sqrt_crlb_tmp[0:3]
+
+        return xyz_crlb, model
+
     def _compute_derivative(self, x, y, z, photons, bgs):
         """
         Calculate the analytical derivatives of the PSFs at given parameters with respect to x,y,z,photons,bg
@@ -1089,7 +1141,7 @@ class VectorPSFTorch(VectorPSF):
         z.requires_grad = True
         photons.requires_grad = True
         bgs.requires_grad = True
-        jacobian = torch.autograd.functional.jacobian(self.simulate, (x, y, z, photons))
+        jacobian = torch.autograd.functional.jacobian(self.simulate_parallel, (x, y, z, photons))
 
         ders_out = torch.zeros([x.shape[0], self.psf_size, self.psf_size, 5], device='cuda', dtype=self.data_type)
         for i in range(len(jacobian)):

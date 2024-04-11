@@ -18,8 +18,8 @@ torch.backends.cudnn.benchmark = True
 def deeploc_train():
     # set the file paths, calibration file is necessary,
     # experiment file is optional for background range estimation
-    calib_file = '../../datasets/sw_npc_20211028/beads/astigmatism/astigmatism_beads_2um_20nm_512x512_hamm_1/astigmatism_beads_2um_20nm_512x512_hamm_1_MMStack_Default_calib_results.mat'
-    experiment_file = '../../datasets/sw_npc_20211028/NUP96_SNP647_3D_512_20ms_hama_mm_1800mW_3/NUP96_SNP647_3D_512_20ms_hama_mm_1800mW_3_MMStack_Default.ome.tif'
+    calib_file = None
+    experiment_file = None
 
     if calib_file is not None:
         # using the same psf parameters and camera parameters as beads calibration
@@ -47,7 +47,7 @@ def deeploc_train():
                            'pixel_size_xy': (100, 100),
                            'otf_rescale_xy': (0, 0),
                            'npupil': 64,
-                           'psf_size': 51,
+                           'psf_size': 25,
                            'objstage0': 0,
                            'zemit0': 0,
                            }
@@ -81,16 +81,16 @@ def deeploc_train():
 
     # manually set sampler parameters
     sampler_params_dict = {
-        'local_context': True,
-        'robust_training': True,
-        'context_size': 10,  # for each batch unit, simulate several frames share the same photophysics and bg to train
+        'local_context': False,
+        'robust_training': False,
+        'context_size': 1,  # for each batch unit, simulate several frames share the same photophysics and bg to train
         'train_size': 64,
         'num_em_avg': 10,
         'eval_batch_size': 100,
-        'photon_range': (1000, 10000),
+        'photon_range': (4000, 6000),
         'z_range': (-700, 700),
         'bg_range': bg_range if 'bg_range' in locals().keys() else (40, 60),
-        'bg_perlin': True,
+        'bg_perlin': False,
     }
 
     # print learning parameters
@@ -109,14 +109,24 @@ def deeploc_train():
     deeploc_model.build_evaluation_dataset(napari_plot=False)
 
     file_name = '../../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'DeepLoc.pt'
-    deeploc_model.online_train(batch_size=1,
-                               max_iterations=30000,
+    deeploc_model.online_train(batch_size=10,
+                               max_iterations=40000,
                                eval_freq=500,
                                file_name=file_name)
 
     # plot evaluation performance during the training
     ailoc.common.plot_train_record(deeploc_model)
 
+    # test single emitter localization accuracy with CRLB
+    ailoc.common.test_single_emitter_accuracy(loc_model=deeploc_model,
+                                              psf_params=deeploc_model.dict_psf_params,
+                                              xy_range=(-50, 50),
+                                              z_range=(-700, 700),
+                                              photon=5000,
+                                              bg=50,
+                                              num_z_step=31,
+                                              num_repeat=1000,
+                                              show_res=True)
 
     # analyze the experimental data
     image_path = os.path.dirname(experiment_file)
@@ -190,6 +200,6 @@ def deeploc_analyze():
 
 
 if __name__ == '__main__':
-    # deeploc_train()
+    deeploc_train()
     # deeploc_ckpoint_train()
-    deeploc_analyze()
+    # deeploc_analyze()

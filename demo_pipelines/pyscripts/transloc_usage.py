@@ -18,8 +18,8 @@ torch.backends.cudnn.benchmark = True
 def transloc_train():
     # set the file paths, calibration file is necessary,
     # experiment file is optional for background range estimation
-    calib_file = '../../datasets/sw_npc_20211028/beads/astigmatism/astigmatism_beads_2um_20nm_512x512_hamm_1/astigmatism_beads_2um_20nm_512x512_hamm_1_MMStack_Default_calib_results.mat'
-    experiment_file = '../../datasets/sw_npc_20211028/NUP96_SNP647_3D_512_20ms_hama_mm_1800mW_3/NUP96_SNP647_3D_512_20ms_hama_mm_1800mW_3_MMStack_Default.ome.tif'
+    calib_file = None
+    experiment_file = None
 
     if calib_file is not None:
         # using the same psf parameters and camera parameters as beads calibration
@@ -33,27 +33,27 @@ def transloc_train():
 
     else:
         # manually set psf parameters
-        zernike_aber = np.array([2, -2, 0, 2, 2, 60, 3, -1, -8.6, 3, 1, 11.3, 4, 0, -22.8, 3, -3, 0, 3, 3, -3,
-                                 4, -2, 0, 4, 2, 0, 5, -1, -4, 5, 1, 0, 6, 0, 0, 4, -4, 0, 4, 4, 0,
-                                 5, -3, 0, 5, 3, 0, 6, -2, 0, 6, 2, 0, 7, 1, 0, 7, -1, 0, 8, 0, 7.4],
+        zernike_aber = np.array([2, -2, 230, 2, 2, 0, 3, -1, 0, 3, 1, 0, 4, 0, 0, 3, -3, 0, 3, 3, 0,
+                                 4, -2, -240, 4, 2, 0, 5, -1, 0, 5, 1, 0, 6, 0, 0, 4, -4, 0, 4, 4, 0,
+                                 5, -3, 0, 5, 3, 0, 6, -2, -17, 6, 2, 0, 7, 1, 0, 7, -1, 0, 8, 0, 0],
                                 dtype=np.float32).reshape([21, 3])
-        psf_params_dict = {'na': 1.5,
-                           'wavelength': 670,  # unit: nm
+        psf_params_dict = {'na': 1.49,
+                           'wavelength': 660,  # unit: nm
                            'refmed': 1.518,
-                           'refcov': 1.524,
+                           'refcov': 1.518,
                            'refimm': 1.518,
                            'zernike_mode': zernike_aber[:, 0:2],
                            'zernike_coef': zernike_aber[:, 2],
-                           'pixel_size_xy': (108, 108),
-                           'otf_rescale_xy': (0.5, 0.5),
+                           'pixel_size_xy': (100, 100),
+                           'otf_rescale_xy': (0, 0),
                            'npupil': 64,
-                           'psf_size': 25,
-                           'objstage0': -0,
+                           'psf_size': 61,
+                           'objstage0': 0,
                            # 'zemit0': 0,
                            }
 
         # manually set camera parameters
-        # camera_params_dict = {'camera_type': 'idea'}
+        camera_params_dict = {'camera_type': 'idea'}
         # camera_params_dict = {'camera_type': 'emccd',
         #                       'qe': 0.9,
         #                       'spurious_charge': 0.002,
@@ -62,14 +62,14 @@ def transloc_train():
         #                       'e_per_adu': 45,
         #                       'baseline': 100.0,
         #                       }
-        camera_params_dict = {'camera_type': 'scmos',
-                              'qe': 0.81,
-                              'spurious_charge': 0.002,
-                              'read_noise_sigma': 1.61,
-                              'read_noise_map': None,
-                              'e_per_adu': 0.47,
-                              'baseline': 100.0,
-                              }
+        # camera_params_dict = {'camera_type': 'scmos',
+        #                       'qe': 0.81,
+        #                       'spurious_charge': 0.002,
+        #                       'read_noise_sigma': 1.61,
+        #                       'read_noise_map': None,
+        #                       'e_per_adu': 0.47,
+        #                       'baseline': 100.0,
+        #                       }
 
     # estimate the background range from experimental images
     if experiment_file is not None:
@@ -81,16 +81,16 @@ def transloc_train():
 
     # manually set sampler parameters
     sampler_params_dict = {
-        'temporal_attn': True,
-        'robust_training': True,  # if True, the training data will be added with some random Zernike aberrations
+        'temporal_attn': False,
+        'robust_training': False,  # if True, the training data will be added with some random Zernike aberrations
         'context_size': 10,  # for each batch unit, simulate several frames share the same photophysics and bg to train
-        'train_size': 64,
+        'train_size': 128,
         'num_em_avg': 10,
         'eval_batch_size': 100,
-        'photon_range': (1000, 10000),
-        'z_range': (-700, 700),
+        'photon_range': (4000, 6000),
+        'z_range': (-3000, 3000),
         'bg_range': bg_range if 'bg_range' in locals().keys() else (40, 60),
-        'bg_perlin': True,
+        'bg_perlin': False,
     }
 
     # print learning parameters
@@ -109,14 +109,24 @@ def transloc_train():
     transloc_model.build_evaluation_dataset(napari_plot=False)
 
     file_name = '../../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'TransLoc.pt'
-    transloc_model.online_train(batch_size=1,
-                                max_iterations=3000,
+    transloc_model.online_train(batch_size=2,
+                                max_iterations=40000,
                                 eval_freq=500,
                                 file_name=file_name)
 
     # plot evaluation performance during the training
     ailoc.common.plot_train_record(transloc_model)
 
+    # test single emitter localization accuracy with CRLB
+    ailoc.common.test_single_emitter_accuracy(loc_model=transloc_model,
+                                              psf_params=transloc_model.dict_psf_params,
+                                              xy_range=(-50, 50),
+                                              z_range=transloc_model.dict_sampler_params['z_range'],
+                                              photon=np.mean(transloc_model.dict_sampler_params['photon_range']),
+                                              bg=np.mean(transloc_model.dict_sampler_params['bg_range']),
+                                              num_z_step=31,
+                                              num_repeat=1000,
+                                              show_res=True)
 
     # analyze the experimental data
     image_path = os.path.dirname(experiment_file)
@@ -136,11 +146,11 @@ def transloc_train():
 
 
 def transloc_ckpoint_train():
-    file_name = '../../results/.pt'
+    file_name = '../../results/2024-03-29-15-33TransLoc.pt'
     with open(file_name, 'rb') as f:
         transloc_model = torch.load(f)
-    transloc_model.online_train(batch_size=1,
-                                max_iterations=30000,
+    transloc_model.online_train(batch_size=10,
+                                max_iterations=40000,
                                 eval_freq=500,
                                 file_name=file_name)
 

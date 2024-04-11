@@ -115,7 +115,8 @@ def split_fov(data, fov_xy=None, sub_fov_size=128, over_cut=8):
             image edge.
 
     Returns:
-        (list of np.ndarray, list of tuple, list of tuple): list of sub-FOV data with over cut, list of over cut sub-FOV indicator
+        (list of np.ndarray, list of tuple, list of tuple):
+            list of sub-FOV data with over cut, list of over cut sub-FOV indicator
             (x_start, x_end, y_start, y_end) and list of sub-FOV indicator without over cut
     """
 
@@ -131,22 +132,23 @@ def split_fov(data, fov_xy=None, sub_fov_size=128, over_cut=8):
 
     # enforce the image size to be multiple of 4, pad with estimated background adu. fov_xy_start should be modified
     # according to the padding size, and sub_fov_xy for sub-area images should be modified too.
-    if (h % 4 != 0) or (w % 4 != 0):
-        empty_area_adu, _ = ailoc.common.get_mean_percentile(data, percentile=50)
-        if h % 4 != 0:
-            new_h = (h // 4 + 1) * 4
+    factor = 4
+    if (h % factor != 0) or (w % factor != 0):
+        empty_area_adu = ailoc.common.get_mean_percentile(data, percentile=50)
+        if h % factor != 0:
+            new_h = (h // factor + 1) * factor
             pad_h = new_h - h
             data = np.pad(data, [[0, 0], [pad_h, 0], [0, 0]], mode='constant', constant_values=empty_area_adu)
             fov_xy_start[1] -= pad_h
             h += pad_h
-        if w % 4 != 0:
-            new_w = (w // 4 + 1) * 4
+        if w % factor != 0:
+            new_w = (w // factor + 1) * factor
             pad_w = new_w - w
             data = np.pad(data, [[0, 0], [0, 0], [pad_w, 0]], mode='constant', constant_values=empty_area_adu)
             fov_xy_start[0] -= pad_w
             w += pad_w
 
-    assert sub_fov_size % 4 == 0 and over_cut % 4 == 0, 'sub_fov_size and over_cut must be multiple of 4'
+    assert sub_fov_size % factor == 0 and over_cut % factor == 0, f'sub_fov_size and over_cut must be multiple of {factor}'
 
     # divide the data into sub-FOVs with over_cut
     row_sub_fov = int(np.ceil(h / sub_fov_size))

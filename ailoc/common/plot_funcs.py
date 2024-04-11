@@ -500,3 +500,24 @@ def plot_rmse_uncertainty(paired_locs):
             ax.set_ylim([0, 60])
     plt.show()
 
+
+def plot_psf_stack(psfs, z_pos, cmap='gray'):
+    num_z = psfs.shape[0]
+
+    fig, ax_arr = plt.subplots(int(np.ceil(num_z / 7)), 7,
+                               figsize=(7 * 2, 2 * int(np.ceil(num_z / 7))),
+                               constrained_layout=True)
+    ax = []
+    plts = []
+    for i in ax_arr:
+        try:
+            for j in i:
+                ax.append(j)
+        except:
+            ax.append(i)
+
+    for i in range(num_z):
+        plts.append(ax[i].imshow(ailoc.common.cpu(psfs)[i], cmap=cmap))
+        ax[i].set_title(f"{ailoc.common.cpu(z_pos[i]):.0f} nm")
+
+    plt.show()
