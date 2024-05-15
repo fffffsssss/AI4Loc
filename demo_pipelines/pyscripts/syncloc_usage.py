@@ -19,7 +19,7 @@ def syncloc_train():
     # set the file paths, calibration file is necessary,
     # experiment file is optional for background range estimation
     calib_file = None
-    experiment_file = '../../datasets/mismatch_data2/1.tif'
+    experiment_file = '../../datasets/npc_DMO1.2__5/npc_DMO1.2__6_MMStack_Default.ome.tif'
 
     if calib_file is not None:
         # using the same psf parameters and camera parameters as beads calibration
@@ -33,19 +33,19 @@ def syncloc_train():
 
     else:
         # manually set psf parameters
-        zernike_aber = np.array([2, -2, 0, 2, 2, 60, 3, -1, 0, 3, 1, 0, 4, 0, 0, 3, -3, 0, 3, 3, 0,
+        zernike_aber = np.array([2, -2, 70, 2, 2, 0, 3, -1, 0, 3, 1, 0, 4, 0, 0, 3, -3, 0, 3, 3, 0,
                                  4, -2, 0, 4, 2, 0, 5, -1, 0, 5, 1, 0, 6, 0, 0, 4, -4, 0, 4, 4, 0,
                                  5, -3, 0, 5, 3, 0, 6, -2, 0, 6, 2, 0, 7, 1, 0, 7, -1, 0, 8, 0, 0],
                                 dtype=np.float32).reshape([21, 3])
-        psf_params_dict = {'na': 1.49,
-                           'wavelength': 660,  # unit: nm
+        psf_params_dict = {'na': 1.5,
+                           'wavelength': 670,  # unit: nm
                            'refmed': 1.518,
                            'refcov': 1.518,
                            'refimm': 1.518,
                            'zernike_mode': zernike_aber[:, 0:2],
                            'zernike_coef': zernike_aber[:, 2],
-                           'pixel_size_xy': (100, 100),
-                           'otf_rescale_xy': (0.0, 0.0),
+                           'pixel_size_xy': (108, 108),
+                           'otf_rescale_xy': (0.5, 0.5),
                            'npupil': 64,
                            'psf_size': 25,
                            'objstage0': -0,
@@ -53,7 +53,7 @@ def syncloc_train():
                            }
 
         # manually set camera parameters
-        camera_params_dict = {'camera_type': 'idea'}
+        # camera_params_dict = {'camera_type': 'idea'}
         # camera_params_dict = {'camera_type': 'emccd',
         #                       'qe': 0.9,
         #                       'spurious_charge': 0.002,
@@ -62,14 +62,14 @@ def syncloc_train():
         #                       'e_per_adu': 45,
         #                       'baseline': 100.0,
         #                       }
-        # camera_params_dict = {'camera_type': 'scmos',
-        #                       'qe': 0.81,
-        #                       'spurious_charge': 0.002,
-        #                       'read_noise_sigma': 1.61,
-        #                       'read_noise_map': None,
-        #                       'e_per_adu': 0.47,
-        #                       'baseline': 100.0,
-        #                       }
+        camera_params_dict = {'camera_type': 'scmos',
+                              'qe': 0.81,
+                              'spurious_charge': 0.002,
+                              'read_noise_sigma': 1.61,
+                              'read_noise_map': None,
+                              'e_per_adu': 0.47,
+                              'baseline': 100.0,
+                              }
 
     # estimate the background range from experimental images
     if experiment_file is not None:
@@ -81,12 +81,12 @@ def syncloc_train():
 
     # manually set sampler parameters
     sampler_params_dict = {
-        'temporal_attn': True,
+        'temporal_attn': False,
         'robust_training': False,
         'context_size': 10,  # for each batch unit, simulate several frames share the same photophysics and bg to train
         'train_size': 64,
         'num_em_avg': 10,
-        'eval_batch_size': 1000,
+        'eval_batch_size': 100,
         'photon_range': (1000, 10000),
         'z_range': (-700, 700),
         'bg_range': bg_range if 'bg_range' in locals().keys() else (40, 60),
@@ -144,11 +144,11 @@ def syncloc_train():
 
 
 def syncloc_ckpoint_train():
-    model_name = '../../results/2023-12-21-15-09SyncLoc.pt'
+    model_name = '../../results/2024-04-24-14-03SyncLoc.pt'
     with open(model_name, 'rb') as f:
         syncloc_model = torch.load(f)
 
-    experiment_file = '../../datasets/mismatch_data2/1.tif'
+    experiment_file = '../../datasets/npc_DMO1.2__5/npc_DMO1.2__6_MMStack_Default.ome.tif'
     experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 2)
 
     # torch.autograd.set_detect_anomaly(True)
@@ -182,7 +182,7 @@ def syncloc_ckpoint_train():
                                                      sub_fov_size=256,
                                                      over_cut=8,
                                                      num_workers=0)
-    syncloc_analyzer.check_single_frame_output(frame_num=3)
+    syncloc_analyzer.check_single_frame_output(frame_num=9)
     preds_array, preds_rescale_array = syncloc_analyzer.divide_and_conquer()
 
 
@@ -233,6 +233,6 @@ def syncloc_analyze():
 
 
 if __name__ == '__main__':
-    syncloc_train()
-    # syncloc_ckpoint_train()
+    # syncloc_train()
+    syncloc_ckpoint_train()
     # syncloc_analyze()

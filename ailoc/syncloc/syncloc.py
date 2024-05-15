@@ -36,7 +36,7 @@ class SyncLoc(ailoc.common.XXLoc):
         except KeyError:
             self.temporal_attn = False
         # should be odd, using the same number of frames before and after the target frame
-        self.attn_length = 5
+        self.attn_length = 3
         assert self.attn_length % 2 == 1, 'attn_length should be odd'
         # add frames at the beginning and end to provide context
         self.context_size = sampler_params_dict['context_size'] + 2*(self.attn_length//2) if self.temporal_attn else sampler_params_dict['context_size']
@@ -62,6 +62,7 @@ class SyncLoc(ailoc.common.XXLoc):
         # self.optimizer_psf = torch.optim.SGD([self.learned_psf.zernike_coef], lr=0.1)
         # self.optimizer_psf = torch.optim.LBFGS([self.learned_psf.zernike_coef], lr=0.1, max_iter=1)
         self.scheduler_psf = torch.optim.lr_scheduler.StepLR(self.optimizer_psf, step_size=1000, gamma=0.9)
+        # self.scheduler_psf = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_psf, T_max=30000)
 
     @staticmethod
     def _init_recorder():
@@ -98,10 +99,11 @@ class SyncLoc(ailoc.common.XXLoc):
     def unfold_target(self, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt):
         if self.temporal_attn:
             extra_length = self.attn_length // 2
-            p_map_gt = p_map_gt[:, extra_length:-extra_length]
-            xyzph_array_gt = xyzph_array_gt[:, extra_length:-extra_length]
-            mask_array_gt = mask_array_gt[:, extra_length:-extra_length]
-            bg_map_gt = bg_map_gt[:, extra_length:-extra_length]
+            if extra_length > 0:
+                p_map_gt = p_map_gt[:, extra_length:-extra_length]
+                xyzph_array_gt = xyzph_array_gt[:, extra_length:-extra_length]
+                mask_array_gt = mask_array_gt[:, extra_length:-extra_length]
+                bg_map_gt = bg_map_gt[:, extra_length:-extra_length]
         else:
             pass
         return p_map_gt.flatten(start_dim=0, end_dim=1), \
@@ -155,6 +157,10 @@ class SyncLoc(ailoc.common.XXLoc):
         num_sample = reconstruction.shape[1]
         log_p_x_given_h = ailoc.syncloc.compute_log_p_x_given_h(data=real_data[:, None].expand(-1, num_sample, -1, -1),
                                                                 model=reconstruction)
+        # log_q_h_given_x = ailoc.syncloc.compute_log_q_h_given_x(xyzph_pred,
+        #                                                         xyzph_sig_pred,
+        #                                                         delta_map_sample,
+        #                                                         xyzph_map_sample)
         with torch.no_grad():
             log_q_h_given_x = ailoc.syncloc.compute_log_q_h_given_x(xyzph_pred,
                                                                     xyzph_sig_pred,
@@ -163,6 +169,7 @@ class SyncLoc(ailoc.common.XXLoc):
             importance = log_p_x_given_h - log_q_h_given_x
             importance_norm = torch.exp(importance - importance.logsumexp(dim=-1, keepdim=True))
             elbo_record = - torch.mean(torch.sum(importance_norm * log_p_x_given_h, dim=-1, keepdim=True))
+            # elbo_record = - torch.mean(torch.sum(importance_norm * (log_p_x_given_h + log_q_h_given_x), dim=-1, keepdim=True))
 
         # elbo = torch.sum(importance_norm * (log_p_x_given_h + log_q_h_given_x), dim=-1, keepdim=True)
         elbo = torch.sum(importance_norm * log_p_x_given_h, dim=-1, keepdim=True)
@@ -209,7 +216,7 @@ class SyncLoc(ailoc.common.XXLoc):
                     return np.nan
 
                 real_data_sampled = self.data_simulator.camera.backward(real_data_sampled)
-                if self.temporal_attn:
+                if self.temporal_attn and self.attn_length//2 > 0:
                     real_data_sampled = real_data_sampled[(self.attn_length//2): -(self.attn_length//2)]
 
                 real_data_sampled_crop, \
@@ -288,9 +295,11 @@ class SyncLoc(ailoc.common.XXLoc):
                                               xyzph_sig_pred_crop_list,
                                               z_weight_crop_list)
         self.optimizer_psf.zero_grad()
+        # self.optimizer_net.zero_grad()
         loss.backward()
         self.optimizer_psf.step()
         self.scheduler_psf.step()
+        # self.optimizer_net.step()
 
         # update the psf simulator
         if isinstance(self.data_simulator.psf_model, ailoc.simulation.VectorPSFTorch):
@@ -431,6 +440,7 @@ class SyncLoc(ailoc.common.XXLoc):
 
         file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'SyncLoc.pt' if file_name is None else file_name
         self.scheduler_net.T_max = max_iterations
+        # self.scheduler_psf.T_max = (max_iterations - self.warmup)//wake_interval
 
         assert real_data is not None, 'real data is not provided'
 
@@ -447,6 +457,9 @@ class SyncLoc(ailoc.common.XXLoc):
             self.scheduler_net = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_net,
                                                                             T_max=max_iterations,
                                                                             last_epoch=self._iter_sleep)
+            # self.scheduler_psf = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_psf,
+            #                                                                 T_max=(max_iterations - self.warmup)//wake_interval,
+            #                                                                 last_epoch=(self._iter_sleep-self.warmup)//wake_interval)
 
         while self._iter_sleep < max_iterations:
             t0 = time.time()
@@ -802,13 +815,20 @@ class SyncLoc(ailoc.common.XXLoc):
 
             if z_weight is not None:
                 with torch.no_grad():
+                    # # version 1: use the average z to index the z weight
+                    # delta_inds_for_z = tuple(delta_map_sample_crop[-1][0].nonzero().transpose(1, 0))
+                    # z_avg_crop = xyzph_pred_crop[-1][2][delta_inds_for_z].mean()
+                    # def find_weight(intervals, number):
+                    #     for i in range(len(intervals) - 1):
+                    #         if intervals[i] <= number < intervals[i + 1]:
+                    #             return i  # returning the interval index (0-based)
+                    # z_weight_tmp = z_weight[0][find_weight(z_weight[1], z_avg_crop)]
+                    # z_weight_crop.append(ailoc.common.gpu(z_weight_tmp))
+
+                    # version 2: use the average z weight
                     delta_inds_for_z = tuple(delta_map_sample_crop[-1][0].nonzero().transpose(1, 0))
-                    z_avg_crop = xyzph_pred_crop[-1][2][delta_inds_for_z].mean()
-                    def find_weight(intervals, number):
-                        for i in range(len(intervals) - 1):
-                            if intervals[i] <= number < intervals[i + 1]:
-                                return i  # returning the interval index (0-based)
-                    z_weight_tmp = z_weight[0][find_weight(z_weight[1], z_avg_crop)]
+                    z_crop = ailoc.common.cpu(xyzph_pred_crop[-1][2][delta_inds_for_z])
+                    z_weight_tmp = np.average(z_weight[0][np.digitize(z_crop, z_weight[1])-1])
                     z_weight_crop.append(ailoc.common.gpu(z_weight_tmp))
 
         return torch.stack(real_data_crop), \

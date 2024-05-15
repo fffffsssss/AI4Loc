@@ -15,7 +15,26 @@ class Out_Head(nn.Module):
 
     def __init__(self, c_input, kernel_size=3):
         super().__init__()
-        self.norm = ailoc.transloc.LayerNorm(c_input, data_format="chw", elementwise_affine=False)
+        # self.norm = ailoc.transloc.LayerNorm(c_input, data_format="channels_first")
+        self.res_conv = ailoc.transloc.Residual(
+            nn.Sequential(
+                ailoc.transloc.Conv2d_GELU(in_channels=c_input,
+                                           out_channels=c_input,
+                                           kernel_size=kernel_size,
+                                           stride=1,
+                                           padding=kernel_size // 2),
+                ailoc.transloc.Conv2d_GELU(in_channels=c_input,
+                                           out_channels=c_input,
+                                           kernel_size=kernel_size,
+                                           stride=1,
+                                           padding=kernel_size // 2),
+                ailoc.transloc.Conv2d_GELU(in_channels=c_input,
+                                           out_channels=c_input,
+                                           kernel_size=kernel_size,
+                                           stride=1,
+                                           padding=kernel_size // 2),
+            )
+        )
 
         self.p_out = nn.Sequential(ailoc.transloc.Conv2d_GELU(in_channels=c_input,
                                                               out_channels=c_input,
@@ -66,7 +85,8 @@ class Out_Head(nn.Module):
         nn.init.zeros_(self.bg_out[1][0].bias)
 
     def forward(self, x):
-        x = self.norm(x)
+        # x = self.norm(x)
+        x = self.res_conv(x)
         p = self.p_out(x)
         xyzph = self.xyzph_out(x)
         xyzphs = self.xyzphs_out(x)
@@ -108,6 +128,7 @@ class U_NeXt(nn.Module):
         #         ailoc.transloc.ConvNextBlock(curr_c, curr_c, kernel_size),
         #     )
         # self.bottleneck = nn.Sequential(*bottleneck)
+        # self.bottlenorm = ailoc.transloc.LayerNorm(curr_c, data_format="channels_first")
 
         # up sampling blocks
         self.up_sample = nn.ModuleList()
@@ -134,6 +155,7 @@ class U_NeXt(nn.Module):
             x = self.down_sample[i](x)
 
         # x = self.bottleneck(x)
+        # x = self.bottlenorm(x)
 
         for i in range(self.n_stages):
             skip_x = skip_list.pop()
@@ -206,6 +228,20 @@ class TransLocNet(nn.Module):
                           c_output=self.n_features,
                           n_stages=2,
                           kernel_size=5).cuda()
+
+        # import ailoc.deeploc
+        # self.fem = ailoc.deeploc.Unet(n_inp=1,
+        #                               n_filters=self.n_features,
+        #                               n_stages=2,
+        #                               pad=1,
+        #                               ker_size=3).cuda()
+
+        # layer norm for transformer based ttm
+        self.fem_norm = ailoc.transloc.LayerNorm(self.n_features, data_format="channels_first").cuda()
+
+        # # layer norm for Unext based ttm
+        # self.fem_norm = ailoc.transloc.LayerNorm(self.n_features*3, data_format="channels_first").cuda()
+
         if self.temporal_attn:
             # temporal transformer module
             patch_size = 1
@@ -214,17 +250,24 @@ class TransLocNet(nn.Module):
                                                        c_input=self.n_features,
                                                        patch_size=patch_size,
                                                        embedding_dim=(patch_size**2)*self.n_features,
-                                                       num_layers=2,
-                                                       num_heads=8,
+                                                       num_layers=1,
+                                                       num_heads=1,
                                                        mlp_dim=(patch_size**2)*4*self.n_features,
                                                        dropout_rate=0.0,
-                                                       context_dropout=0.1).cuda()
+                                                       context_dropout=0.5).cuda()
 
             # # Unext based temporal context module
             # self.ttm = U_NeXt(c_input=self.n_features * 3,
             #                   c_output=self.n_features,
             #                   n_stages=2,
             #                   kernel_size=5).cuda()
+
+            # # Unet based temporal context module
+            # self.ttm = ailoc.deeploc.Unet(n_inp=self.n_features * 3,
+            #                               n_filters=self.n_features,
+            #                               n_stages=2,
+            #                               pad=1,
+            #                               ker_size=3).cuda()
 
         self.om = Out_Head(c_input=self.n_features, kernel_size=3).cuda()
 
@@ -288,10 +331,17 @@ class TransLocNet(nn.Module):
         else:
             raise ValueError('The input dimension is not supported.')
 
+        # layer normalization
+        fem_out = self.fem_norm(fem_out)
+
         if self.temporal_attn:
             # transformer based ttm, since each traning/analysis batch is padded with attn_length//2 frames
             # at the beginning and end, we only need the prediction of the middle frames
-            ttm_out = self.ttm(fem_out)[:, self.attn_length//2: -(self.attn_length//2)].reshape([-1, self.n_features, img_h, img_w])
+            ttm_out = self.ttm(fem_out)
+            if self.attn_length//2 > 0:
+                ttm_out = ttm_out[:, self.attn_length//2: -(self.attn_length//2)].reshape([-1, self.n_features, img_h, img_w])
+            else:
+                ttm_out = ttm_out.reshape([-1, self.n_features, img_h, img_w])
 
             # # Unext based ttm, can only deal with 3 frames as a local context
             # ttm_out = self.ttm(fem_out)

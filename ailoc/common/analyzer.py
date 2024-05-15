@@ -539,7 +539,7 @@ class SmlmDataAnalyzer:
         preds_rescale_array = ailoc.common.resample_offset(preds_norescale_array,
                                                            pixel_size=self.pixel_size_xy,
                                                            threshold=0.25)
-        tmp_path = os.path.dirname(self.output_path) + '/' + os.path.basename(self.output_path).split('.')[0] + '_resample.csv'
+        tmp_path = os.path.dirname(self.output_path) + '/' + os.path.basename(self.output_path).split('.csv')[0] + '_resample.csv'
         ailoc.common.write_csv_array(preds_rescale_array, filename=tmp_path,
                                      write_mode='write localizations')
 

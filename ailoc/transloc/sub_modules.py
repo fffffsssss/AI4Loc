@@ -161,7 +161,7 @@ class DownSampleBlock(nn.Sequential):
 
     def __init__(self, in_channels, out_channels, kernel_size):
         super(DownSampleBlock, self).__init__(
-            LayerNorm(in_channels, data_format="chw", elementwise_affine=False),
+            LayerNorm(in_channels, data_format="channels_first"),
             Conv2d(in_channels, in_channels, 2, 2, 0),
             ConvNextBlock(in_channels, out_channels, kernel_size),
             # ConvNextBlock(out_channels, out_channels, kernel_size),
@@ -190,7 +190,7 @@ class UpSampleBlock(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size, tail=None):
         super(UpSampleBlock, self).__init__()
         self.layers = nn.ModuleList()
-        self.layers.append(LayerNorm(in_channels, data_format="chw", elementwise_affine=False))
+        self.layers.append(LayerNorm(in_channels, data_format="channels_first"))
         self.layers.append(nn.UpsamplingNearest2d(scale_factor=2))
         # self.layers.append(nn.UpsamplingBilinear2d(scale_factor=2))
         self.layers.append(ConvNextBlock(in_channels, out_channels, kernel_size))
@@ -238,8 +238,8 @@ class LayerNorm(nn.Module):
         if self.data_format == "channels_last":
             return F.layer_norm(x, self.normalized_shape, self.weight, self.bias, self.eps)
         elif self.data_format == "channels_first":
-            u = x.mean(1, keepdim=True)
-            s = (x - u).pow(2).mean(1, keepdim=True)
+            u = x.mean(-3, keepdim=True)
+            s = (x - u).pow(2).mean(-3, keepdim=True)
             x = (x - u) / torch.sqrt(s + self.eps)
             if self.weight is not None:
                 x = self.weight[:, None, None] * x + self.bias[:, None, None]
@@ -247,7 +247,7 @@ class LayerNorm(nn.Module):
                 x = x
             return x
         elif self.data_format == "chw":
-            return F.layer_norm(x, normalized_shape=x.shape[1:])
+            return F.layer_norm(x, normalized_shape=x.shape[-3:])
 
 
 class GRN(nn.Module):
@@ -291,40 +291,25 @@ class ConvNextBlock(nn.Module):
         # self.norm = LayerNorm(c_in, data_format="chw", elementwise_affine=False)
         self.pwconv1 = nn.Linear(c_in, 4 * c_in)  # pointwise/1x1 convs, implemented with linear layers
         self.act = nn.GELU()
-        if self.version == 2:
-            self.grn = GRN(4 * c_in)
         self.pwconv2 = nn.Linear(4 * c_in, c_out)
         self.gamma = nn.Parameter(layer_scale_init_value * torch.ones((c_out)),
                                   requires_grad=True) if layer_scale_init_value > 0 else None
 
     def forward(self, x):
-        if self.version == 1:
-            input = x
-            x = self.dwconv(x)
-            x = x.permute(0, 2, 3, 1)
-            # x = rearrange(x, 'b c h w -> b h w c')
-            # x = self.norm(x)
-            x = self.pwconv1(x)
-            x = self.act(x)
-            x = self.pwconv2(x)
-            if self.gamma is not None:
-                x = self.gamma * x
-            x = x.permute(0, 3, 1, 2)
-            # x = rearrange(x, 'b h w c -> b c h w')
-            if self.c_in == self.c_out:
-                x = input + x
-        elif self.version == 2:
-            input = x
-            x = self.dwconv(x)
-            x = x.permute(0, 2, 3, 1)  # (N, C, H, W) -> (N, H, W, C)
-            # x = self.norm(x)
-            x = self.pwconv1(x)
-            x = self.act(x)
-            x = self.grn(x)
-            x = self.pwconv2(x)
-            x = x.permute(0, 3, 1, 2)  # (N, H, W, C) -> (N, C, H, W)
-            if self.c_in == self.c_out:
-                x = input + x
+        input = x
+        x = self.dwconv(x)
+        x = x.permute(0, 2, 3, 1)
+        # x = rearrange(x, 'b c h w -> b h w c')
+        # x = self.norm(x)
+        x = self.pwconv1(x)
+        x = self.act(x)
+        x = self.pwconv2(x)
+        if self.gamma is not None:
+            x = self.gamma * x
+        x = x.permute(0, 3, 1, 2)
+        # x = rearrange(x, 'b h w c -> b c h w')
+        if self.c_in == self.c_out:
+            x = input + x
         return x
 
     # def __init__(self, c_in, c_out, kernel_size=7, layer_scale_init_value=0):
@@ -471,10 +456,6 @@ class UpSampleBlock_v2(nn.Module):
         x = rearrange(x, 'b h w c -> b c h w')
         x += x_skip
         return x
-
-
-import torch
-from torch import nn
 
 
 class DeformConv2d(nn.Module):

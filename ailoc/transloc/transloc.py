@@ -28,7 +28,7 @@ class TransLoc(ailoc.common.XXLoc):
         except KeyError:
             self.temporal_attn = False
         # should be odd, using the same number of frames before and after the target frame
-        self.attn_length = 5
+        self.attn_length = 7
         assert self.attn_length % 2 == 1, 'attn_length should be odd'
         # add frames at the beginning and end to provide context
         self.context_size = sampler_params_dict['context_size'] + 2*(self.attn_length//2) if self.temporal_attn else sampler_params_dict['context_size']

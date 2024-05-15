@@ -81,8 +81,8 @@ class SelfAttention(nn.Module):
             qkv[2],
         )
 
-        attn = (k @ q.transpose(-2, -1)) * self.scale
-        attn = attn.masked_fill(attn_mask==1, -torch.finfo(attn.dtype).max)
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = attn.masked_fill(attn_mask==1, -torch.inf)
 
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)

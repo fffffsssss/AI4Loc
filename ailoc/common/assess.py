@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import ailoc.common
 import ailoc.simulation
 
+
 def find_frame(molecule_list, frame_nbr, frame_parm_pos=0):
     """
     Find the list index of the last molecule with frame number not larger than the specified frame number and plus 1.
@@ -220,11 +221,11 @@ def test_single_emitter_accuracy(loc_model,
     Args:
         loc_model (ailoc.common.XXLoc):
             the trained XXLoc model
-        psf_params (dict):
+        psf_params (dict or None):
             the PSF parameters to test
         xy_range (tuple):
             (start, end), the lateral range for random emitter positions, the center of the image is 0, unit nm
-        z_range (tuple):
+        z_range (tuple or np.ndarray):
             (start, end), the axial range for random emitter positions, unit nm
         photon (int):
             the fixed photon number for test emitters
@@ -247,7 +248,7 @@ def test_single_emitter_accuracy(loc_model,
         attn_length = loc_model.attn_length
 
     # initialize the PSF model and calculate the 3D average CRLB
-    psf_model = ailoc.simulation.VectorPSFTorch(psf_params)
+    psf_model = ailoc.simulation.VectorPSFTorch(psf_params) if psf_params is not None else loc_model.data_simulator.psf_model
 
     # set emitter positions
     x = ailoc.common.gpu(torch.ones(num_z_step) * (xy_range[0]+xy_range[1])/2)  # unit nm
@@ -264,7 +265,9 @@ def test_single_emitter_accuracy(loc_model,
         bgs = ailoc.common.gpu(torch.ones(num_z_step) * bg * loc_model.data_simulator.camera.qe)   # unit photons
 
     if local_context or temporal_attn:
-        xyz_crlb, psfs = psf_model.compute_crlb_mf(x, y, z, photons, bgs, attn_length)
+        # xyz_crlb, psfs = psf_model.compute_crlb_mf(x, y, z, photons, bgs, attn_length)
+        xyz_crlb, psfs = psf_model.compute_crlb(x, y, z, photons, bgs)
+        xyz_crlb /= attn_length**0.5
     else:
         xyz_crlb, psfs = psf_model.compute_crlb(x, y, z, photons, bgs)
     xyz_crlb_np = ailoc.common.cpu(xyz_crlb)
@@ -274,13 +277,15 @@ def test_single_emitter_accuracy(loc_model,
     if local_context or temporal_attn:
         xemit = ailoc.common.gpu(torch.ones(num_z_step*num_repeat) * (xy_range[0]+xy_range[1])/2)  # unit nm
         yemit = ailoc.common.gpu(torch.ones(num_z_step*num_repeat) * (xy_range[0]+xy_range[1])/2)
-        zemit = z.repeat(num_repeat)
+        zemit = z[:,None].expand((-1,num_repeat)).flatten()
         z_step = (z_range[1] - z_range[0]) / (num_z_step - 1)
     else:
-        lateral_dist = torch.distributions.Uniform(xy_range[0], xy_range[1])
-        xemit = ailoc.common.gpu(lateral_dist.sample(torch.Size([num_z_step*num_repeat])))
-        yemit = ailoc.common.gpu(lateral_dist.sample(torch.Size([num_z_step*num_repeat])))
-        zemit = z.repeat(num_repeat)
+        # lateral_dist = torch.distributions.Uniform(xy_range[0], xy_range[1])
+        # xemit = ailoc.common.gpu(lateral_dist.sample(torch.Size([num_z_step*num_repeat])))
+        # yemit = ailoc.common.gpu(lateral_dist.sample(torch.Size([num_z_step*num_repeat])))
+        xemit = ailoc.common.gpu(torch.ones(num_z_step * num_repeat) * (xy_range[0] + xy_range[1]) / 2)  # unit nm
+        yemit = ailoc.common.gpu(torch.ones(num_z_step * num_repeat) * (xy_range[0] + xy_range[1]) / 2)
+        zemit = z[:,None].expand((-1,num_repeat)).flatten()
         z_step = (z_range[1] - z_range[0]) / (num_z_step - 1)
         # zemit += ailoc.common.gpu((torch.rand(zemit.shape)-0.5) * (z_step-1))
     photons_emit = ailoc.common.gpu(torch.ones(num_z_step*num_repeat) * photon)
@@ -302,13 +307,27 @@ def test_single_emitter_accuracy(loc_model,
 
     if show_res:
         print('example test images')
-        ailoc.common.plot_psf_stack(test_data[:num_z_step], zemit[:num_z_step])
+        ailoc.common.plot_psf_stack(test_data[0:num_z_step*num_repeat:num_repeat],
+                                    zemit[0:num_z_step*num_repeat:num_repeat])
 
     print('start inferring, wait a few minutes')
-    preds_list, preds_dict = ailoc.common.data_analyze(loc_model,
-                                                       test_data,
-                                                       sub_fov_xy_list[0],
-                                                       loc_model.data_simulator.camera)
+    if local_context or temporal_attn:
+        preds_list = []
+        for i in range(num_z_step):
+            preds_list_tmp, preds_dict_tmp = ailoc.common.data_analyze(loc_model,
+                                                                       test_data[i * num_repeat:(i + 1) * num_repeat],
+                                                                       sub_fov_xy_list[0],
+                                                                       loc_model.data_simulator.camera,
+                                                                       batch_size=32,
+                                                                       retain_infer_map=True)
+            preds_list_tmp = np.array(preds_list_tmp)
+            preds_list_tmp[:, 0] += i * num_repeat
+            preds_list+=preds_list_tmp.tolist()
+    else:
+        preds_list, preds_dict = ailoc.common.data_analyze(loc_model,
+                                                           test_data,
+                                                           sub_fov_xy_list[0],
+                                                           loc_model.data_simulator.camera)
     print('inference done')
 
     metric_dict, paired_array = ailoc.common.pair_localizations(prediction=preds_list,
@@ -321,6 +340,8 @@ def test_single_emitter_accuracy(loc_model,
                                                                 print_info=True)
 
     rmse_xyz = np.zeros([3, num_z_step])
+    std_xyz = np.zeros([3, num_z_step])
+    sigma_xyz = np.zeros([3, num_z_step])
     for i in range(num_z_step):
         z_tmp = ailoc.common.cpu(z[i])
         ind = np.where(((z_tmp - z_step / 2) < paired_array[:, 3]) & (paired_array[:, 3] < (z_tmp + z_step / 2)))
@@ -329,6 +350,12 @@ def test_single_emitter_accuracy(loc_model,
             rmse_xyz[0, i] = np.sqrt(np.mean(np.square(tmp[:, 1] - tmp[:, 5])))
             rmse_xyz[1, i] = np.sqrt(np.mean(np.square(tmp[:, 2] - tmp[:, 6])))
             rmse_xyz[2, i] = np.sqrt(np.mean(np.square(tmp[:, 3] - tmp[:, 7])))
+            std_xyz[0, i] = np.std(tmp[:, 5])
+            std_xyz[1, i] = np.std(tmp[:, 6])
+            std_xyz[2, i] = np.std(tmp[:, 7])
+            sigma_xyz[0, i] = np.mean(tmp[:, 9])
+            sigma_xyz[1, i] = np.mean(tmp[:, 10])
+            sigma_xyz[2, i] = np.mean(tmp[:, 11])
 
     print('average 3D CRLB is:',
           np.sum((xyz_crlb_np[:, 0] ** 2 + xyz_crlb_np[:, 1] ** 2 + xyz_crlb_np[:, 2] ** 2)**0.5) / num_z_step)
@@ -348,4 +375,24 @@ def test_single_emitter_accuracy(loc_model,
                    ncol=2,
                    loc='upper center')
         plt.xlim([np.min(ailoc.common.cpu(z)), np.max(ailoc.common.cpu(z))])
+        plt.ylim([0, np.max([np.max(xyz_crlb_np)*1.5, np.max(rmse_xyz)+5])])
+        plt.show()
+
+        print('plot the STD of network prediction vs CRLB')
+        plt.figure(constrained_layout=True)
+        plt.plot(ailoc.common.cpu(z), xyz_crlb_np[:, 0], 'b',
+                 ailoc.common.cpu(z), xyz_crlb_np[:, 1], 'g',
+                 ailoc.common.cpu(z), xyz_crlb_np[:, 2], 'r')
+        plt.scatter(ailoc.common.cpu(z), std_xyz[0, :], c='b')
+        plt.scatter(ailoc.common.cpu(z), std_xyz[1, :], c='g')
+        plt.scatter(ailoc.common.cpu(z), std_xyz[2, :], c='r')
+        plt.scatter(ailoc.common.cpu(z), sigma_xyz[0, :], c='b', marker='x')
+        plt.scatter(ailoc.common.cpu(z), sigma_xyz[1, :], c='g', marker='x')
+        plt.scatter(ailoc.common.cpu(z), sigma_xyz[2, :], c='r', marker='x')
+        plt.legend(('$CRLB_x^{1/2}$', '$CRLB_y^{1/2}$', '$CRLB_z^{1/2}$', '$STD_x$', '$STD_y$', '$STD_z$',
+                    '$\sigma_x$', '$\sigma_y$', '$\sigma_z$'),
+                   ncol=3,
+                   loc='upper center')
+        plt.xlim([np.min(ailoc.common.cpu(z)), np.max(ailoc.common.cpu(z))])
+        plt.ylim([0, np.max([np.max(xyz_crlb_np) * 1.5, np.max(std_xyz) + 5])])
         plt.show()
