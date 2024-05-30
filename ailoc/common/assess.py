@@ -66,7 +66,9 @@ def pair_localizations(prediction, ground_truth, frame_num=None, fov_xy_nm=None,
     gt_list = sorted(ground_truth, key=lambda x: x[0])
 
     if frame_num is None:
-        frame_num = int(gt_list[-1][0])
+        frame_num = int(max(gt_list[-1][0], pred_list[-1][0]))
+    else:
+        frame_num = int(min(frame_num, max(gt_list[-1][0], pred_list[-1][0])))
 
     pred_list = pred_list[: find_frame(pred_list, frame_num)]
     gt_list = gt_list[: find_frame(gt_list, frame_num)]
@@ -242,9 +244,7 @@ def test_single_emitter_accuracy(loc_model,
     local_context = getattr(loc_model, 'local_context', False)  # for DeepLoc model
     temporal_attn = getattr(loc_model, 'temporal_attn', False)  # for TransLoc model
     assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
-    if local_context:
-        attn_length = 3
-    elif temporal_attn:
+    if local_context or temporal_attn:
         attn_length = loc_model.attn_length
 
     # initialize the PSF model and calculate the 3D average CRLB
@@ -342,6 +342,7 @@ def test_single_emitter_accuracy(loc_model,
     rmse_xyz = np.zeros([3, num_z_step])
     std_xyz = np.zeros([3, num_z_step])
     sigma_xyz = np.zeros([3, num_z_step])
+    mean_xyz = np.zeros([3, num_z_step])
     for i in range(num_z_step):
         z_tmp = ailoc.common.cpu(z[i])
         ind = np.where(((z_tmp - z_step / 2) < paired_array[:, 3]) & (paired_array[:, 3] < (z_tmp + z_step / 2)))
@@ -356,6 +357,9 @@ def test_single_emitter_accuracy(loc_model,
             sigma_xyz[0, i] = np.mean(tmp[:, 9])
             sigma_xyz[1, i] = np.mean(tmp[:, 10])
             sigma_xyz[2, i] = np.mean(tmp[:, 11])
+            mean_xyz[0, i] = np.mean(tmp[:, 5])
+            mean_xyz[1, i] = np.mean(tmp[:, 6])
+            mean_xyz[2, i] = np.mean(tmp[:, 7])
 
     print('average 3D CRLB is:',
           np.sum((xyz_crlb_np[:, 0] ** 2 + xyz_crlb_np[:, 1] ** 2 + xyz_crlb_np[:, 2] ** 2)**0.5) / num_z_step)
@@ -376,6 +380,8 @@ def test_single_emitter_accuracy(loc_model,
                    loc='upper center')
         plt.xlim([np.min(ailoc.common.cpu(z)), np.max(ailoc.common.cpu(z))])
         plt.ylim([0, np.max([np.max(xyz_crlb_np)*1.5, np.max(rmse_xyz)+5])])
+        plt.xlabel('Z (nm)')
+        plt.ylabel('Accuracy (nm)')
         plt.show()
 
         print('plot the STD of network prediction vs CRLB')
@@ -395,4 +401,16 @@ def test_single_emitter_accuracy(loc_model,
                    loc='upper center')
         plt.xlim([np.min(ailoc.common.cpu(z)), np.max(ailoc.common.cpu(z))])
         plt.ylim([0, np.max([np.max(xyz_crlb_np) * 1.5, np.max(std_xyz) + 5])])
+        plt.xlabel('Z (nm)')
+        plt.ylabel('Precision (nm)')
+        plt.show()
+
+        print('plot the distribution of prediction z')
+        plt.figure(constrained_layout=True)
+        plt.scatter(paired_array[:,3],paired_array[:,7],c='cyan',marker='o',alpha=1,linewidths=0.1,)
+        plt.scatter(ailoc.common.cpu(z), mean_xyz[2, :], c='darkgreen', marker='x')
+        plt.scatter(ailoc.common.cpu(z), ailoc.common.cpu(z), c='r', marker='x')
+        plt.legend(('$z_{predict}$','$z_{predict,mean}$','$z_{gt}$'))
+        plt.xlabel('Z (nm)')
+        plt.ylabel('Z prediction (nm)')
         plt.show()
