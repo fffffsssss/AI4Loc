@@ -11,6 +11,7 @@ import os
 import cv2
 
 # import ailoc.common.local_tifffile
+import ailoc.common
 
 
 def setup_seed(seed):
@@ -301,9 +302,9 @@ def cmpdata_napari(data1, data2):
     napari.run()
 
 
-def plot_image(image):
+def plot_image(image, cmap='turbo'):
     plt.figure(figsize=(10, 10))
-    plt.imshow(image, cmap='gray')
+    plt.imshow(ailoc.common.cpu(image), cmap=cmap)
     plt.show()
 
 
