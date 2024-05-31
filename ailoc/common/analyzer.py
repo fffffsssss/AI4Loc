@@ -49,9 +49,7 @@ def data_analyze(loc_model, data, sub_fov_xy, camera, batch_size=32, retain_infe
         # if using local context or temporal attention, the rolling inference strategy will be
         # automatically applied in the network.forward()
         rolling_inference = True if local_context or temporal_attn else False
-        if local_context:
-            extra_length = 1
-        elif temporal_attn:
+        if rolling_inference:
             extra_length = loc_model.attn_length // 2
 
         # rolling inference strategy needs to pad the whole data with two more images at the beginning and end
@@ -69,7 +67,7 @@ def data_analyze(loc_model, data, sub_fov_xy, camera, batch_size=32, retain_infe
 
         molecule_list_pred = []
         inference_dict_list = []
-        # for each batch, rolling inference needs to take 2 more images at the beginning and end, but only needs
+        # for each batch, rolling inference needs to take 2*extra_length more images at the beginning and end, but only needs
         # to return the molecule list for the middle images
         for i in range(int(np.ceil(num_img / batch_size))):
             if rolling_inference:
