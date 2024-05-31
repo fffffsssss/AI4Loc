@@ -521,3 +521,30 @@ def plot_psf_stack(psfs, z_pos, cmap='gray'):
         ax[i].set_title(f"{ailoc.common.cpu(z_pos[i]):.0f} nm")
 
     plt.show()
+
+
+def plot_image_stack_difference(stack_a,stack_b,cmap='turbo'):
+    stack_a = ailoc.common.cpu(stack_a)
+    stack_b = ailoc.common.cpu(stack_b)
+
+    n_img = stack_a.shape[0]
+    n_row = min(int(np.ceil(n_img/1)),8)
+    # plot the data, model, error
+    figure, ax_arr = plt.subplots(n_row, 1, constrained_layout=True, figsize=(6, 2*n_row))
+    ax = []
+    plts = []
+    for i in ax_arr:
+        try:
+            for j in i:
+                ax.append(j)
+        except:
+            ax.append(i)
+
+    for i in range(n_img):
+        a_tmp = np.squeeze(stack_a[i])
+        b_tmp = np.squeeze(stack_b[i])
+        mismatch_tmp = a_tmp - b_tmp
+        image_tmp = np.concatenate([a_tmp, b_tmp, mismatch_tmp], axis=1)
+        plts.append(ax[i].imshow(image_tmp, cmap=cmap))
+        plt.colorbar(mappable=plts[-1],ax=ax[i],fraction=0.046, pad=0.04)
+    plt.show()
