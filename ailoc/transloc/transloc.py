@@ -152,10 +152,11 @@ class TransLoc(ailoc.common.XXLoc):
     def unfold_target(self, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt):
         if self.temporal_attn:
             extra_length = self.attn_length // 2
-            p_map_gt = p_map_gt[:, extra_length:-extra_length]
-            xyzph_array_gt = xyzph_array_gt[:, extra_length:-extra_length]
-            mask_array_gt = mask_array_gt[:, extra_length:-extra_length]
-            bg_map_gt = bg_map_gt[:, extra_length:-extra_length]
+            if extra_length > 0:
+                p_map_gt = p_map_gt[:, extra_length:-extra_length]
+                xyzph_array_gt = xyzph_array_gt[:, extra_length:-extra_length]
+                mask_array_gt = mask_array_gt[:, extra_length:-extra_length]
+                bg_map_gt = bg_map_gt[:, extra_length:-extra_length]
         else:
             pass
         return p_map_gt.flatten(start_dim=0, end_dim=1), \
