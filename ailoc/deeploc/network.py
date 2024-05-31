@@ -146,10 +146,12 @@ class DeepLocNet(nn.Module):
         with high accuracy. Nat Methods 18, 1082–1090 (2021).
     """
 
-    def __init__(self, local_context=True):
+    def __init__(self, local_context=True, attn_length=3, train_context_size=12):
         super().__init__()
 
         self.local_context = local_context
+        self.attn_length = attn_length
+        self.train_context_size = train_context_size
         self.n_features = 48
 
         self.frame_anlz_module = Unet(n_inp=1,
@@ -157,7 +159,7 @@ class DeepLocNet(nn.Module):
                                       n_stages=2,
                                       pad=1,
                                       ker_size=3).cuda()
-        self.temp_context_module = Unet(n_inp=self.n_features*3 if self.local_context else self.n_features,
+        self.temp_context_module = Unet(n_inp=self.n_features*self.attn_length if self.local_context else self.n_features,
                                         n_filters=self.n_features,
                                         n_stages=2,
                                         pad=1,
@@ -191,12 +193,18 @@ class DeepLocNet(nn.Module):
             fm_out = self.frame_anlz_module(x_input.reshape([-1, 1, img_h, img_w]))
 
             if self.local_context:
+                extra_length = self.attn_length // 2
                 fm_out = fm_out.reshape([batch_size, context_size, -1, img_h, img_w])
-                zeros = torch.zeros_like(fm_out[:, :1])
-                h_t1 = fm_out
-                h_t0 = torch.cat([zeros, fm_out[:, :-1]], dim=1)
-                h_t2 = torch.cat([fm_out[:, 1:], zeros], dim=1)
-                fm_out = torch.cat([h_t0, h_t1, h_t2], dim=2)[:, 1:-1].reshape(-1, self.n_features*3, img_h, img_w)
+                temporal_list = []
+                for i in range(extra_length):
+                    zeros = torch.zeros_like(fm_out[:, :(extra_length-i)])
+                    temporal_list.append(torch.cat([zeros, fm_out[:,:-(extra_length-i)]], dim=1))
+                temporal_list.append(fm_out)
+                for i in range(extra_length):
+                    zeros = torch.zeros_like(fm_out[:, :i+1])
+                    temporal_list.append(torch.cat([fm_out[:, i+1:], zeros], dim=1))
+                fm_out = (torch.cat(temporal_list, dim=2)[:, extra_length:-extra_length]
+                          .reshape(-1, self.n_features*self.attn_length, img_h, img_w))
 
         # when analyzing experimental data, the input dimension is 3, (analysis batch size, height, width)
         elif x_input.ndimension() == 3:
@@ -208,18 +216,16 @@ class DeepLocNet(nn.Module):
             # the head and tail to provide local context for target frames, so after context feature
             # concatenation, the head and tail output in the batch could be discarded
             if self.local_context:
-                # create a zero output with the shape (1, 48, height, width) to pad the head and tail
-                zeros = torch.zeros_like(fm_out[:1])
-                # the fm_out has the shape (analysis batch size+2, 48, height, width)
-                h_t1 = fm_out
-                # pad zero to the head and discard the tail frame output of the batch
-                h_t0 = torch.cat([zeros, fm_out], 0)[:-1]
-                # pad zero to the tail and discard the head frame output of the batch
-                h_t2 = torch.cat([fm_out, zeros], 0)[1:]
-                # reuse the features of each frame to build the local context with the shape
-                # (analysis batch size+2, 144, height, width), discard the head and tail
-                fm_out = torch.cat([h_t0, h_t1, h_t2], 1)[1:-1]
-
+                extra_length = self.attn_length // 2
+                temporal_list = []
+                for i in range(extra_length):
+                    zeros = torch.zeros_like(fm_out[:(extra_length-i)])
+                    temporal_list.append(torch.cat([zeros, fm_out[:-(extra_length - i)]], dim=0))
+                temporal_list.append(fm_out)
+                for i in range(extra_length):
+                    zeros = torch.zeros_like(fm_out[:i + 1])
+                    temporal_list.append(torch.cat([fm_out[i + 1:], zeros], dim=0))
+                fm_out = torch.cat(temporal_list, dim=1)[extra_length:-extra_length]
         else:
             raise ValueError('The input dimension is not supported.')
 
@@ -261,7 +267,7 @@ class DeepLocNet(nn.Module):
     def get_parameter_number(self):
         # print(f'Total network parameters: {sum(p.numel() for p in self.parameters() if p.requires_grad)/1e6:.2f}M')
 
-        dummy_input = torch.randn(1, 12, 64, 64).cuda() if self.local_context else torch.randn(1, 10, 64, 64).cuda()
+        dummy_input = torch.randn(1, self.train_context_size, 64, 64).cuda()
 
         macs, params = thop.profile(self, inputs=(dummy_input,))
         macs, params = thop.clever_format([macs, params], '%.3f')

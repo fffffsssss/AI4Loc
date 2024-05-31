@@ -24,8 +24,16 @@ class DeepLoc(ailoc.common.XXLoc):
         self.scale_ph_factor = self.dict_sampler_params['photon_range'][1]/50
 
         self.local_context = self.dict_sampler_params['local_context']
-        self._network = ailoc.deeploc.DeepLocNet(self.local_context)
-        self.context_size = sampler_params_dict['context_size'] + 2 if self.local_context else sampler_params_dict['context_size']
+        # attn_length only useful when local_context=True, should be odd,
+        # using the same number of frames before and after the target frame
+        self.attn_length = 7
+        assert self.attn_length % 2 == 1, 'attn_length should be odd'
+        assert self.attn_length > 1, 'attn_length should be larger than 1'
+        # add frames at the beginning and end to provide context
+        self.context_size = sampler_params_dict['context_size'] + 2*(self.attn_length//2) if self.local_context else sampler_params_dict['context_size']
+        self._network = ailoc.deeploc.DeepLocNet(self.local_context,
+                                                 self.attn_length,
+                                                 self.context_size,)
 
         self.evaluation_dataset = {}
         self.evaluation_recorder = self._init_recorder()
@@ -139,10 +147,12 @@ class DeepLoc(ailoc.common.XXLoc):
 
     def unfold_target(self, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt):
         if self.local_context:
-            p_map_gt = p_map_gt[:, 1:-1]
-            xyzph_array_gt = xyzph_array_gt[:, 1:-1]
-            mask_array_gt = mask_array_gt[:, 1:-1]
-            bg_map_gt = bg_map_gt[:, 1:-1]
+            extra_length = self.attn_length // 2
+            if extra_length > 0:
+                p_map_gt = p_map_gt[:, extra_length:-extra_length]
+                xyzph_array_gt = xyzph_array_gt[:, extra_length:-extra_length]
+                mask_array_gt = mask_array_gt[:, extra_length:-extra_length]
+                bg_map_gt = bg_map_gt[:, extra_length:-extra_length]
         else:
             pass
         return p_map_gt.flatten(start_dim=0, end_dim=1), \
@@ -245,12 +255,12 @@ class DeepLoc(ailoc.common.XXLoc):
                 n_per_img.append(inference_dict_tmp['prob'].sum((-2, -1)).mean())
 
                 if len(molecule_array_tmp) > 0:
-                    molecule_array_tmp[:, 0] += i * batch_size * (self.context_size-2 if self.local_context else self.context_size)
+                    molecule_array_tmp[:, 0] += i * batch_size * (self.context_size-2*(self.attn_length//2) if self.local_context else self.context_size)
                     molecule_list_pred += molecule_array_tmp.tolist()
 
             metric_dict, paired_array = ailoc.common.pair_localizations(prediction=np.array(molecule_list_pred),
                                                                         ground_truth=self.evaluation_dataset['molecule_list_gt'],
-                                                                        frame_num=self.evaluation_dataset['data'].shape[0] * (self.context_size-2 if self.local_context else self.context_size),
+                                                                        frame_num=self.evaluation_dataset['data'].shape[0] * (self.context_size-2*(self.attn_length//2) if self.local_context else self.context_size),
                                                                         fov_xy_nm=(0, self.evaluation_dataset['data'].shape[-1]*self.data_simulator.psf_model.pixel_size_xy[0],
                                                                                    0, self.evaluation_dataset['data'].shape[-2]*self.data_simulator.psf_model.pixel_size_xy[1]))
 
@@ -280,9 +290,10 @@ class DeepLoc(ailoc.common.XXLoc):
         if self.local_context:
             molecule_list_gt_corrected = []
             for i in range(self.dict_sampler_params['eval_batch_size']):
-                curr_context_idx = np.where((molecule_list_gt[:, 0]>i*self.context_size+1)&(molecule_list_gt[:, 0]<(i+1)*self.context_size))
+                curr_context_idx = np.where((molecule_list_gt[:, 0]>i*self.context_size+(self.attn_length//2))&
+                                            (molecule_list_gt[:, 0]<(i+1)*self.context_size-(self.attn_length//2)+1))
                 curr_molecule_list_gt = molecule_list_gt[curr_context_idx]
-                curr_molecule_list_gt[:, 0] -= (2*i+1)
+                curr_molecule_list_gt[:, 0] -= ((2*i+1) * (self.attn_length//2))
                 molecule_list_gt_corrected.append(curr_molecule_list_gt)
             molecule_list_gt = np.concatenate(molecule_list_gt_corrected, axis=0)
 
