@@ -65,10 +65,18 @@ def pair_localizations(prediction, ground_truth, frame_num=None, fov_xy_nm=None,
     pred_list = sorted(prediction, key=lambda x: x[0])
     gt_list = sorted(ground_truth, key=lambda x: x[0])
 
+    try:
+        pred_list_frame_num = pred_list[-1][0]
+    except IndexError:
+        pred_list_frame_num = 0
+    try:
+        gt_list_frame_num = gt_list[-1][0]
+    except IndexError:
+        gt_list_frame_num = 0
     if frame_num is None:
-        frame_num = int(max(gt_list[-1][0], pred_list[-1][0]))
+        frame_num = int(max(gt_list_frame_num, pred_list_frame_num))
     else:
-        frame_num = int(min(frame_num, max(gt_list[-1][0], pred_list[-1][0])))
+        frame_num = int(min(frame_num, max(gt_list_frame_num, pred_list_frame_num)))
 
     pred_list = pred_list[: find_frame(pred_list, frame_num)]
     gt_list = gt_list[: find_frame(gt_list, frame_num)]
