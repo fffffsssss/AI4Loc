@@ -82,7 +82,7 @@ class SelfAttention(nn.Module):
         )
 
         attn = (q @ k.transpose(-2, -1)) * self.scale
-        attn = attn.masked_fill(attn_mask==1, -torch.inf)
+        attn = attn.masked_fill(attn_mask == 1, -torch.inf)
 
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
@@ -164,9 +164,11 @@ class TransLayer(nn.Module):
                     ailoc.transloc.Residual(
                         fn=SelfAttention(dim=dim, heads=heads, dropout_rate=attn_dropout_rate),
                     ),
+                    nn.LayerNorm(dim),
                     ailoc.transloc.Residual(
                         fn=FeedForward(dim=dim, hidden_dim=mlp_dim, dropout_rate=ff_dropout_rate)
                     ),
+                    nn.LayerNorm(dim),
                 ]
             )
 
@@ -176,8 +178,61 @@ class TransLayer(nn.Module):
     def forward(self, x, attn_mask):
         # return self.net(x, attn_mask)
         for layer in self.net:
-            x = layer(x, attn_mask)
+            try:
+                x = layer(x, attn_mask)
+            except:
+                x = layer(x)
         return x
+
+
+def get_attn_mask(seq_length, attn_length):
+    """
+    attention mask for each frame, can only see attn_length//2 frames around the target frame.
+
+    Args:
+        seq_length: sequence length, the number of frames in a context
+        attn_length: attention length
+
+    Returns:
+        attn_mask: attention mask, shape: (seq_length, seq_length)
+    """
+
+    neighbour = attn_length // 2
+    attn_mask = torch.ones((seq_length, seq_length))
+    for i in range(seq_length):
+        attn_mask[i, max(0, i - neighbour):min(seq_length, i + neighbour + 1)] = 0
+        attn_mask[max(0, i - neighbour):min(seq_length, i + neighbour + 1), i] = 0
+    return attn_mask
+
+
+def attn_dropout(attn_mask, manual_drop=False, training=False, dropout_rate=0.0):
+    """
+    dropout for attention mask
+
+    Args:
+        attn_mask: attention mask
+        manual_drop: whether to manually set the attention mask to only see the target frame
+        training: whether the model is training
+        dropout_rate: dropout rate
+
+    Returns:
+        attn_mask: attention mask
+    """
+
+    if manual_drop:
+        attn_mask = -torch.eye(attn_mask.shape[0]).to(attn_mask.device)+1
+    else:
+        if training:
+            if dropout_rate > 0:
+                attn_mask_1_frame = -torch.eye(attn_mask.shape[0]).to(attn_mask.device) + 1
+                row_indices_to_drop = torch.bernoulli(torch.ones(attn_mask.shape[0]) * dropout_rate).bool()
+                attn_mask[row_indices_to_drop,:] = attn_mask_1_frame[row_indices_to_drop,:]
+            else:
+                pass
+        else:
+            pass
+
+    return attn_mask
 
 
 class EmbeddingLayer(nn.Module):
@@ -194,12 +249,7 @@ class EmbeddingLayer(nn.Module):
         #                                             d_model=self.embedding_dim,
         #                                             learnable=False)
 
-        # attention mask for each frame, can only see attn_length//2 frames around it
-        neighbour = self.attn_length // 2
-        self.attn_mask = torch.ones((seq_length, seq_length)).cuda()
-        for i in range(seq_length):
-            self.attn_mask[i, max(0, i - neighbour):min(seq_length, i + neighbour + 1)] = 0
-            self.attn_mask[max(0, i - neighbour):min(seq_length, i + neighbour + 1), i] = 0
+        self.attn_mask = get_attn_mask(self.seq_length, self.attn_length).cuda()
 
     def forward(self, x):
         batch_size, context_size, feature_size, height, width = x.size()
@@ -229,14 +279,10 @@ class EmbeddingLayer(nn.Module):
 
         # attention mask for each frame, can only see attn_length//2 frames around it
         if self.attn_mask.shape[0] == context_size:
-            attn_mask = self.attn_mask
+            attn_mask = self.attn_mask.clone()
         else:
-            neighbour = self.attn_length // 2
-            self.attn_mask = torch.ones((context_size, context_size), device=x.device)
-            for i in range(context_size):
-                self.attn_mask[i, max(0, i - neighbour):min(context_size, i + neighbour + 1)] = 0
-                self.attn_mask[max(0, i - neighbour):min(context_size, i + neighbour + 1), i] = 0
-            attn_mask = self.attn_mask
+            self.attn_mask = get_attn_mask(context_size, self.attn_length).cuda()
+            attn_mask = self.attn_mask.clone()
 
         return x, attn_mask
 
@@ -303,18 +349,54 @@ class TransformerBlock(nn.Module):
         self.context_dropout_rate = context_dropout
         self.context_dropout = nn.Dropout(context_dropout)
 
-        self.context_aggregation = ailoc.transloc.ConvNextBlock(c_in=self.c_input*2,
-                                                                c_out=self.c_input,
-                                                                kernel_size=3,)
+        # self.attn_dropout_rate = context_dropout
+
+        self.context_aggregation = ContextAggregation(depth=1,
+                                                      in_channels=self.c_input * 2,
+                                                      out_channels=self.c_input,
+                                                      kernel_size=3, )
 
     def forward(self, x):
         input = x
         x, attn_mask = self.embedding_layer(x)
+        # attn_mask = attn_dropout(attn_mask=attn_mask,
+        #                          manual_drop=False,
+        #                          training=self.training,
+        #                          dropout_rate=self.attn_dropout_rate)
         x = self.translayer(x, attn_mask)
         x = self.embedding_layer.backward(x)
-        x = x * self.context_dropout(torch.ones(input.shape[0], input.shape[1], 1, 1, 1).to(x.device))
-        x = x * (1. - self.context_dropout_rate) if self.context_dropout.training else x
+        context_dropout_mask = self.context_dropout(torch.ones(input.shape[0], input.shape[1], 1, 1, 1).to(x.device))
+        if self.context_dropout.training:
+            context_dropout_mask *= (1. - self.context_dropout_rate)
+        x = x * context_dropout_mask
         x = torch.cat([input.reshape([-1, self.c_input, input.shape[-2], input.shape[-1]]),
                        x.reshape([-1, self.c_input, input.shape[-2], input.shape[-1]])], dim=1)
         x = self.context_aggregation(x)
         return x.reshape(input.shape)
+
+
+class ContextAggregation(nn.Module):
+    def __init__(self, depth=6, in_channels=48, out_channels=48, kernel_size=3):
+        super(ContextAggregation, self).__init__()
+        assert depth > 0, "depth should be larger than 0"
+        layers = []
+        layers.extend(
+            [
+                ailoc.transloc.ConvNextBlock(c_in=in_channels,
+                                             c_out=out_channels,
+                                             kernel_size=kernel_size, ),
+            ]
+        )
+        layers.extend(
+            [
+                ailoc.transloc.ConvNextBlock(c_in=out_channels,
+                                             c_out=out_channels,
+                                             kernel_size=kernel_size, ) for _ in range(depth - 1)
+            ]
+        )
+        self.layers = nn.ModuleList(layers)
+
+    def forward(self, x):
+        for layer in self.layers:
+                x = layer(x)
+        return x
