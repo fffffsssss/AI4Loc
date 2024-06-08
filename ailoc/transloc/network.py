@@ -15,7 +15,6 @@ class Out_Head(nn.Module):
 
     def __init__(self, c_input, kernel_size=3):
         super().__init__()
-        # self.norm = ailoc.transloc.LayerNorm(c_input, data_format="channels_first")
         self.res_conv = ailoc.transloc.Residual(
             nn.Sequential(
                 ailoc.transloc.Conv2d_GELU(in_channels=c_input,
@@ -85,7 +84,6 @@ class Out_Head(nn.Module):
         nn.init.zeros_(self.bg_out[1][0].bias)
 
     def forward(self, x):
-        # x = self.norm(x)
         x = self.res_conv(x)
         p = self.p_out(x)
         xyzph = self.xyzph_out(x)
@@ -121,15 +119,6 @@ class U_NeXt(nn.Module):
             self.down_sample.append(ailoc.transloc.DownSampleBlock(curr_c, curr_c * 2, kernel_size))
             curr_c *= 2
 
-        # # bottleneck blocks
-        # bottleneck = []
-        # for j in range(3):
-        #     bottleneck.append(
-        #         ailoc.transloc.ConvNextBlock(curr_c, curr_c, kernel_size),
-        #     )
-        # self.bottleneck = nn.Sequential(*bottleneck)
-        # self.bottlenorm = ailoc.transloc.LayerNorm(curr_c, data_format="channels_first")
-
         # up sampling blocks
         self.up_sample = nn.ModuleList()
         for i in range(n_stages):
@@ -140,7 +129,6 @@ class U_NeXt(nn.Module):
                 for j in range(6):
                     tail.append(
                         ailoc.transloc.ConvNextBlock(curr_c//2, curr_c//2, kernel_size),
-                        # ailoc.transloc.InceptionNextBlock(curr_c // 2, curr_c // 2, band_kernel_size=kernel_size),
                     )
                 tail = nn.Sequential(*tail)
             self.up_sample.append(ailoc.transloc.UpSampleBlock(curr_c, curr_c // 2, kernel_size, tail))
@@ -153,9 +141,6 @@ class U_NeXt(nn.Module):
         for i in range(self.n_stages):
             skip_list.append(x)
             x = self.down_sample[i](x)
-
-        # x = self.bottleneck(x)
-        # x = self.bottlenorm(x)
 
         for i in range(self.n_stages):
             skip_x = skip_list.pop()
@@ -224,6 +209,7 @@ class TransLocNet(nn.Module):
         self.train_context_size = train_context_size
         self.n_features = 48
 
+        # feature extraction module
         self.fem = U_NeXt(c_input=1,
                           c_output=self.n_features,
                           n_stages=2,
@@ -236,16 +222,16 @@ class TransLocNet(nn.Module):
         #                               pad=1,
         #                               ker_size=3).cuda()
 
-        # layer norm for transformer based ttm
+        # layer norm for transformer based tam
         self.fem_norm = ailoc.transloc.LayerNorm(self.n_features, data_format="channels_first").cuda()
 
-        # # layer norm for Unext based ttm
+        # # layer norm for Unext based tam
         # self.fem_norm = ailoc.transloc.LayerNorm(self.n_features*3, data_format="channels_first").cuda()
 
         if self.temporal_attn:
-            # temporal transformer module
+            # temporal attention module
             patch_size = 1
-            self.ttm = ailoc.transloc.TransformerBlock(seq_length=train_context_size,
+            self.tam = ailoc.transloc.TransformerBlock(seq_length=train_context_size,
                                                        attn_length=attn_length,
                                                        c_input=self.n_features,
                                                        patch_size=patch_size,
@@ -256,20 +242,20 @@ class TransLocNet(nn.Module):
                                                        dropout_rate=0.0,
                                                        context_dropout=0.5).cuda()
 
-            # # Unext based temporal context module
-            # self.ttm = U_NeXt(c_input=self.n_features * 3,
+            # # Unext based temporal attention module
+            # self.tam = U_NeXt(c_input=self.n_features * 3,
             #                   c_output=self.n_features,
             #                   n_stages=2,
             #                   kernel_size=5).cuda()
 
-            # # Unet based temporal context module
-            # self.ttm = ailoc.deeploc.Unet(n_inp=self.n_features * 3,
+            # # Unet based temporal attention module
+            # self.tam = ailoc.deeploc.Unet(n_inp=self.n_features * 3,
             #                               n_filters=self.n_features,
             #                               n_stages=2,
             #                               pad=1,
             #                               ker_size=3).cuda()
 
-        self.om = Out_Head(c_input=self.n_features, kernel_size=3).cuda()
+        self.out_head = Out_Head(c_input=self.n_features, kernel_size=3).cuda()
 
         self.get_parameter_number()
 
@@ -296,10 +282,10 @@ class TransLocNet(nn.Module):
             batch_size, context_size = x_input.shape[:2]
             fem_out = self.fem(x_input.reshape([-1, 1, img_h, img_w]))
             if self.temporal_attn:
-                # transformer based ttm
+                # transformer based tam
                 fem_out = fem_out.reshape([batch_size, context_size, self.n_features, img_h, img_w])
 
-                # # Unext based ttm, can only deal with 3 frames as a local context
+                # # Unext based tam, can only deal with 3 frames as a local context
                 # fem_out = fem_out.reshape([batch_size, context_size, -1, img_h, img_w])
                 # zeros = torch.zeros_like(fem_out[:, :1])
                 # h_t1 = fem_out
@@ -313,10 +299,10 @@ class TransLocNet(nn.Module):
             anlz_batch_size = x_input.shape[0]
             fem_out = self.fem(x_input[:, None])
             if self.temporal_attn:
-                # transformer based ttm
+                # transformer based tam
                 fem_out = fem_out.reshape([1, anlz_batch_size, self.n_features, img_h, img_w])
 
-                # # Unext based ttm, can only deal with 3 frames as a local context
+                # # Unext based tam, can only deal with 3 frames as a local context
                 # # create a zero output with the shape (1, 48, height, width) to pad the head and tail
                 # zeros = torch.zeros_like(fem_out[:1])
                 # # the fm_out has the shape (analysis batch size+2, 48, height, width)
@@ -335,20 +321,20 @@ class TransLocNet(nn.Module):
         fem_out = self.fem_norm(fem_out)
 
         if self.temporal_attn:
-            # transformer based ttm, since each traning/analysis batch is padded with attn_length//2 frames
+            # transformer based tam, since each traning/analysis batch is padded with attn_length//2 frames
             # at the beginning and end, we only need the prediction of the middle frames
-            ttm_out = self.ttm(fem_out)
+            tam_out = self.tam(fem_out)
             if self.attn_length//2 > 0:
-                ttm_out = ttm_out[:, self.attn_length//2: -(self.attn_length//2)].reshape([-1, self.n_features, img_h, img_w])
+                tam_out = tam_out[:, self.attn_length//2: -(self.attn_length//2)].reshape([-1, self.n_features, img_h, img_w])
             else:
-                ttm_out = ttm_out.reshape([-1, self.n_features, img_h, img_w])
+                tam_out = tam_out.reshape([-1, self.n_features, img_h, img_w])
 
-            # # Unext based ttm, can only deal with 3 frames as a local context
-            # ttm_out = self.ttm(fem_out)
+            # # Unext based tam, can only deal with 3 frames as a local context
+            # tam_out = self.tam(fem_out)
 
-            p, xyzph, xyzphs, bg = self.om(ttm_out)
+            p, xyzph, xyzphs, bg = self.out_head(tam_out)
         else:
-            p, xyzph, xyzphs, bg = self.om(fem_out)
+            p, xyzph, xyzphs, bg = self.out_head(fem_out)
 
         p_pred = torch.sigmoid(torch.clamp(p, min=-16, max=16))[:, 0]  # probability
         xyzph_pred = xyzph
@@ -376,6 +362,6 @@ class TransLocNet(nn.Module):
         print(f'Params:{params}, MACs:{macs}, (input shape:{dummy_input.shape})')
 
         t0 = time.time()
-        for i in range(200):
+        for i in range(1000):
             self.forward(dummy_input)
-        print(f'Average forward time: {(time.time()-t0)/200:.4f} s')
+        print(f'Average forward time: {(time.time()-t0)/1000:.4f} s')
