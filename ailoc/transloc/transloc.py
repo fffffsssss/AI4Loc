@@ -181,44 +181,58 @@ class TransLoc(ailoc.common.XXLoc):
 
         return p_pred, xyzph_pred, xyzph_sig_pred, bg_pred
 
-    def post_process(self, p_pred, xyzph_pred, xyzph_sig_pred, bg_pred):
+    def post_process(self, p_pred, xyzph_pred, xyzph_sig_pred, bg_pred, return_infer_map=False):
         """
         Postprocess a batch of inference output map, output is GMM maps and molecule array
         [frame, x, y, z, photon, integrated prob, x uncertainty, y uncertainty, z uncertainty,
         photon uncertainty, x_offset_pixel, y_offset_pixel].
         """
 
-        inference_dict = {'prob': [], 'x_offset': [], 'y_offset': [], 'z_offset': [], 'photon': [],
-                          'bg': [], 'x_sig': [], 'y_sig': [], 'z_sig': [], 'photon_sig': []}
+        # # old version, slower
+        # inference_dict = {'prob': [], 'x_offset': [], 'y_offset': [], 'z_offset': [], 'photon': [],
+        #                   'bg': [], 'x_sig': [], 'y_sig': [], 'z_sig': [], 'photon_sig': []}
+        #
+        # inference_dict['prob'].append(ailoc.common.cpu(p_pred))
+        # inference_dict['x_offset'].append(ailoc.common.cpu(xyzph_pred[:, 0, :, :]))
+        # inference_dict['y_offset'].append(ailoc.common.cpu(xyzph_pred[:, 1, :, :]))
+        # inference_dict['z_offset'].append(ailoc.common.cpu(xyzph_pred[:, 2, :, :]))
+        # inference_dict['photon'].append(ailoc.common.cpu(xyzph_pred[:, 3, :, :]))
+        # inference_dict['x_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 0, :, :]))
+        # inference_dict['y_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 1, :, :]))
+        # inference_dict['z_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 2, :, :]))
+        # inference_dict['photon_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 3, :, :]))
+        # inference_dict['bg'].append(ailoc.common.cpu(bg_pred))
+        #
+        # for k in inference_dict.keys():
+        #     inference_dict[k] = np.vstack(inference_dict[k])
+        #
+        # inference_dict['prob_sampled'] = None
+        # inference_dict['bg_sampled'] = None
+        #
+        # molecule_array, inference_dict = ailoc.common.gmm_to_localizations_old(inference_dict=inference_dict,
+        #                                                                    thre_integrated=0.7,
+        #                                                                    pixel_size_xy=self.data_simulator.psf_model.pixel_size_xy,
+        #                                                                    z_scale=self.data_simulator.mol_sampler.z_scale,
+        #                                                                    photon_scale=self.data_simulator.mol_sampler.photon_scale,
+        #                                                                    bg_scale=self.data_simulator.mol_sampler.bg_scale,
+        #                                                                    batch_size=p_pred.shape[0])
 
-        inference_dict['prob'].append(ailoc.common.cpu(p_pred))
-        inference_dict['x_offset'].append(ailoc.common.cpu(xyzph_pred[:, 0, :, :]))
-        inference_dict['y_offset'].append(ailoc.common.cpu(xyzph_pred[:, 1, :, :]))
-        inference_dict['z_offset'].append(ailoc.common.cpu(xyzph_pred[:, 2, :, :]))
-        inference_dict['photon'].append(ailoc.common.cpu(xyzph_pred[:, 3, :, :]))
-        inference_dict['x_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 0, :, :]))
-        inference_dict['y_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 1, :, :]))
-        inference_dict['z_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 2, :, :]))
-        inference_dict['photon_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 3, :, :]))
-        inference_dict['bg'].append(ailoc.common.cpu(bg_pred))
-
-        for k in inference_dict.keys():
-            inference_dict[k] = np.vstack(inference_dict[k])
-
-        inference_dict['prob_sampled'] = None
-        inference_dict['bg_sampled'] = None
-
-        molecule_array,inference_dict = ailoc.common.gmm_to_localizations(inference_dict=inference_dict,
-                                                                          thre_integrated=0.7,
-                                                                          pixel_size_xy=self.data_simulator.psf_model.pixel_size_xy,
-                                                                          z_scale=self.data_simulator.mol_sampler.z_scale,
-                                                                          photon_scale=self.data_simulator.mol_sampler.photon_scale,
-                                                                          bg_scale=self.data_simulator.mol_sampler.bg_scale,
-                                                                          batch_size=p_pred.shape[0])
+        # new version, faster
+        molecule_array, inference_dict = ailoc.common.gmm_to_localizations(p_pred=p_pred,
+                                                                           xyzph_pred=xyzph_pred,
+                                                                           xyzph_sig_pred=xyzph_sig_pred,
+                                                                           bg_pred=bg_pred,
+                                                                           thre_integrated=0.7,
+                                                                           pixel_size_xy=self.data_simulator.psf_model.pixel_size_xy,
+                                                                           z_scale=self.data_simulator.mol_sampler.z_scale,
+                                                                           photon_scale=self.data_simulator.mol_sampler.photon_scale,
+                                                                           bg_scale=self.data_simulator.mol_sampler.bg_scale,
+                                                                           batch_size=p_pred.shape[0],
+                                                                           return_infer_map=return_infer_map)
 
         return molecule_array, inference_dict
 
-    def analyze(self, data, camera, sub_fov_xy=None):
+    def analyze(self, data, camera, sub_fov_xy=None, return_infer_map=False):
         """
         Wrap the inference and post_process function, receive a batch of data and return the molecule list.
 
@@ -227,6 +241,8 @@ class TransLoc(ailoc.common.XXLoc):
             camera (ailoc.simulation.Camera): camera object used to transform the data to photon unit.
             sub_fov_xy (tuple of int): (x_start, x_end, y_start, y_end), start from 0, in pixel unit,
                 the FOV indicator for these images
+            return_infer_map (bool): whether to return the prediction maps, which may occupy some memory
+                and take more time during data analysis
 
         Returns:
             (np.ndarray, dict): molecule array, [frame, x, y, z, photon, integrated prob, x uncertainty,
@@ -236,7 +252,11 @@ class TransLoc(ailoc.common.XXLoc):
         """
 
         p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(data, camera)
-        molecule_array, inference_dict = self.post_process(p_pred, xyzph_pred, xyzph_sig_pred, bg_pred)
+        molecule_array, inference_dict = self.post_process(p_pred,
+                                                           xyzph_pred,
+                                                           xyzph_sig_pred,
+                                                           bg_pred,
+                                                           return_infer_map)
 
         return molecule_array, inference_dict
 
@@ -254,8 +274,10 @@ class TransLoc(ailoc.common.XXLoc):
             molecule_list_pred = []
             for i in range(int(np.ceil(self.evaluation_dataset['data'].shape[0]/batch_size))):
                 molecule_array_tmp, inference_dict_tmp = \
-                    self.analyze(ailoc.common.gpu(self.evaluation_dataset['data'][i*batch_size: (i+1)*batch_size]),
-                                 self.data_simulator.camera)
+                    self.analyze(
+                        ailoc.common.gpu(self.evaluation_dataset['data'][i * batch_size: (i + 1) * batch_size]),
+                        self.data_simulator.camera,
+                        return_infer_map=True)
 
                 n_per_img.append(inference_dict_tmp['prob'].sum((-2, -1)).mean())
 
