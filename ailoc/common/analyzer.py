@@ -72,10 +72,16 @@ def data_analyze(loc_model, data, sub_fov_xy, camera, batch_size=32, retain_infe
         for i in range(int(np.ceil(num_img / batch_size))):
             if rolling_inference:
                 molecule_array_tmp, inference_dict_tmp = loc_model.analyze(
-                    ailoc.common.gpu(data[i * batch_size: (i + 1) * batch_size + 2*extra_length]), camera, sub_fov_xy)
+                    ailoc.common.gpu(data[i * batch_size: (i + 1) * batch_size + 2 * extra_length]),
+                    camera,
+                    sub_fov_xy,
+                    retain_infer_map)
             else:
                 molecule_array_tmp, inference_dict_tmp = loc_model.analyze(
-                    ailoc.common.gpu(data[i * batch_size: (i + 1) * batch_size]), camera, sub_fov_xy)
+                    ailoc.common.gpu(data[i * batch_size: (i + 1) * batch_size]),
+                    camera,
+                    sub_fov_xy,
+                    retain_infer_map)
 
             # adjust the frame number and the x, y position of the molecules
             if len(molecule_array_tmp) > 0:
@@ -88,13 +94,14 @@ def data_analyze(loc_model, data, sub_fov_xy, camera, batch_size=32, retain_infe
 
         # stack the inference_dict_list to a single dict
         inference_dict = {}
-        all_keys = copy.deepcopy(inference_dict_tmp).keys()
-        for keys in all_keys:
-            tmp_list = []
-            for i_batch in range(len(inference_dict_list)):
-                tmp_list.append(inference_dict_list[i_batch][keys])
-                del inference_dict_list[i_batch][keys]
-            inference_dict[keys] = np.concatenate(tmp_list, axis=0) if len(tmp_list) > 0 else None
+        if retain_infer_map:
+            all_keys = copy.deepcopy(inference_dict_tmp).keys()
+            for key in all_keys:
+                tmp_list = []
+                for i_batch in range(len(inference_dict_list)):
+                    tmp_list.append(inference_dict_list[i_batch][key])
+                    del inference_dict_list[i_batch][key]
+                inference_dict[key] = np.concatenate(tmp_list, axis=0) if len(tmp_list) > 0 else None
 
     return molecule_list_pred, inference_dict
 
