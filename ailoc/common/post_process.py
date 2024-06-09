@@ -7,7 +7,7 @@ import ailoc.common
 import ailoc.simulation
 
 
-def spatial_integration(p_pred, thre_candi_1=0.3, thre_candi_2=0.6):
+def spatial_integration_old(p_pred, thre_candi_1=0.3, thre_candi_2=0.6):
     """
     Extract local maximum from the probability map. Two situations are considered
 
@@ -54,7 +54,54 @@ def spatial_integration(p_pred, thre_candi_1=0.3, thre_candi_2=0.6):
         return ailoc.common.cpu(p_integrated_candidate[:, 0])
 
 
-def sample_prob(p_pred, batch_size, thre_integrated=0.7, thre_candi_1=0.3, thre_candi_2=0.6):
+def spatial_integration(p_pred, thre_candi_1=0.3, thre_candi_2=0.6):
+    """
+    Extract local maximum from the probability map. Two situations are considered
+
+    Args:
+        p_pred: the original probability map output from the network
+        thre_candi_1: the threshold for the original probability value for situation 1
+        thre_candi_2: the threshold for the original probability value for situation 2
+
+    Returns:
+        torch.Tensor: The spatially integrated probability map with only candidate pixels non-zero
+    """
+
+    with torch.no_grad():
+        p_pred = ailoc.common.gpu(p_pred)[:, None]
+
+        # Situation 1: Local maximum with probability values > candi_thre (normally 0.3)
+        # are regarded as candidates
+        p_pred_clip = torch.where(p_pred > thre_candi_1, p_pred, torch.zeros_like(p_pred))
+        # localize local maximum within a 3x3 patch
+        pool = F.max_pool2d(p_pred_clip, kernel_size=3, stride=1, padding=1)
+        candidate_mask1 = torch.eq(p_pred, pool).float()
+
+        # Situation 2: In order do be able to identify two emitters in adjacent pixels we look for
+        # probability values > 0.6 that are not part of the first mask
+        p_pred_except_candi1 = p_pred * (1 - candidate_mask1)
+        candidate_mask2 = torch.where(p_pred_except_candi1 > thre_candi_2,
+                                      torch.ones_like(p_pred_except_candi1),
+                                      torch.zeros_like(p_pred_except_candi1))
+
+        # Add probability values from the 4 adjacent pixels to the center pixel
+        diag = 0.  # 1/np.sqrt(2)
+        filter_ = ailoc.common.gpu(torch.tensor([[diag, 1., diag],
+                                                 [1, 1, 1],
+                                                 [diag, 1, diag]])).view([1, 1, 3, 3])
+        p_integrated = F.conv2d(p_pred, filter_, padding=1)
+
+        p_integrated_candidate_1 = candidate_mask1 * p_integrated
+        p_integrated_candidate_2 = candidate_mask2 * p_integrated
+
+        # This is our final integrated probability map which we then threshold (normally > 0.7)
+        # to get our final discrete locations
+        p_integrated_candidate = torch.clamp(p_integrated_candidate_1 + p_integrated_candidate_2, 0., 1.)
+
+        return p_integrated_candidate[:, 0]
+
+
+def sample_prob_old(p_pred, batch_size, thre_integrated=0.7, thre_candi_1=0.3, thre_candi_2=0.6):
     """
     Sample the probability map to get the binary map that indicates the existence of a molecule.
 
@@ -71,14 +118,38 @@ def sample_prob(p_pred, batch_size, thre_integrated=0.7, thre_candi_1=0.3, thre_
     p_integrated = np.zeros_like(p_pred)
     for i in range(int(np.ceil(num_img/batch_size))):
         slice_tmp = np.index_exp[i*batch_size: min((i+1)*batch_size, num_img)]
-        p_integrated[slice_tmp] = spatial_integration(p_pred[slice_tmp], thre_candi_1, thre_candi_2)
+        p_integrated[slice_tmp] = spatial_integration_old(p_pred[slice_tmp], thre_candi_1, thre_candi_2)
 
     p_sampled = np.where(p_integrated > thre_integrated, 1, 0)
 
     return p_sampled
 
 
-def inference_map_to_localizations(inference_dict, pixel_size_xy, z_scale, photon_scale):
+def sample_prob(p_pred, batch_size, thre_integrated=0.7, thre_candi_1=0.3, thre_candi_2=0.6):
+    """
+    Sample the probability map to get the binary map that indicates the existence of a molecule.
+
+    Args:
+        p_pred (torch.Tensor): the original probability map output from the network.
+        batch_size (int): the batch size used for spatial integration.
+        thre_integrated (float): the threshold for the integrated probability value.
+
+    Returns:
+        np.ndarray: The binary map that indicates the existence of a molecule.
+    """
+
+    num_img = len(p_pred)
+    p_integrated = torch.zeros_like(p_pred)
+    for i in range(int(np.ceil(num_img/batch_size))):
+        slice_tmp = np.index_exp[i*batch_size: min((i+1)*batch_size, num_img)]
+        p_integrated[slice_tmp] = spatial_integration(p_pred[slice_tmp], thre_candi_1, thre_candi_2)
+
+    p_sampled = torch.where(p_integrated > thre_integrated, 1, 0)
+
+    return p_sampled
+
+
+def inference_map_to_localizations_old(inference_dict, pixel_size_xy, z_scale, photon_scale):
     """
     Convert inference map to a list of molecules. The returned list is in the format of
     [frame, x, y, z, photon, integrated prob,
@@ -135,7 +206,56 @@ def inference_map_to_localizations(inference_dict, pixel_size_xy, z_scale, photo
     return pred_mol_array
 
 
-def gmm_to_localizations(inference_dict, thre_integrated, pixel_size_xy, z_scale, photon_scale, bg_scale, batch_size):
+def inference_map_to_localizations(p_sampled,
+                                   p_pred,
+                                   xyzph_pred,
+                                   xyzph_sig_pred,
+                                   bg_pred,
+                                   pixel_size_xy,
+                                   z_scale,
+                                   photon_scale):
+    """
+    Convert inference map to a list of molecules. The returned list is in the format of
+    [frame, x, y, z, photon, integrated prob,
+     x uncertainty, y uncertainty, z uncertainty, photon uncertainty,
+     x_offset_pixel, y_offset_pixel]. The xy position is based on the size of input maps, if the map size is
+     64 pixels, the xy position will be in the range of [0,64] * pixel size.
+
+     Returns:
+        np.ndarray: Molecule array
+    """
+
+    idxs_3d = torch.nonzero(p_sampled)
+    pred_mol_tensor = torch.zeros([len(idxs_3d), 12])
+
+    pred_mol_tensor[:, 0] = idxs_3d[:, 0] + 1
+    pred_mol_tensor[:, 1] = idxs_3d[:, 2] + 0.5 + xyzph_pred[:, 0][idxs_3d[:, 0], idxs_3d[:, 1], idxs_3d[:, 2]]
+    pred_mol_tensor[:, 2] = idxs_3d[:, 1] + 0.5 + xyzph_pred[:, 1][idxs_3d[:, 0], idxs_3d[:, 1], idxs_3d[:, 2]]
+    pred_mol_tensor[:, 3] = xyzph_pred[:, 2][idxs_3d[:, 0], idxs_3d[:, 1], idxs_3d[:, 2]]
+    pred_mol_tensor[:, 4] = xyzph_pred[:, 3][idxs_3d[:, 0], idxs_3d[:, 1], idxs_3d[:, 2]]
+    pred_mol_tensor[:, 5] = p_pred[idxs_3d[:, 0], idxs_3d[:, 1], idxs_3d[:, 2]]
+    pred_mol_tensor[:, 6] = xyzph_sig_pred[:, 0][idxs_3d[:, 0], idxs_3d[:, 1], idxs_3d[:, 2]]
+    pred_mol_tensor[:, 7] = xyzph_sig_pred[:, 1][idxs_3d[:, 0], idxs_3d[:, 1], idxs_3d[:, 2]]
+    pred_mol_tensor[:, 8] = xyzph_sig_pred[:, 2][idxs_3d[:, 0], idxs_3d[:, 1], idxs_3d[:, 2]]
+    pred_mol_tensor[:, 9] = xyzph_sig_pred[:, 3][idxs_3d[:, 0], idxs_3d[:, 1], idxs_3d[:, 2]]
+    pred_mol_tensor[:, 10] = xyzph_pred[:, 0][idxs_3d[:, 0], idxs_3d[:, 1], idxs_3d[:, 2]]
+    pred_mol_tensor[:, 11] = xyzph_pred[:, 1][idxs_3d[:, 0], idxs_3d[:, 1], idxs_3d[:, 2]]
+
+    if len(pred_mol_tensor)>0:
+        pred_mol_tensor[:, 1] *= pixel_size_xy[0]
+        pred_mol_tensor[:, 2] *= pixel_size_xy[1]
+        pred_mol_tensor[:, 3] *= z_scale
+        pred_mol_tensor[:, 4] *= photon_scale
+        pred_mol_tensor[:, 6] *= pixel_size_xy[0]
+        pred_mol_tensor[:, 7] *= pixel_size_xy[1]
+        pred_mol_tensor[:, 8] *= z_scale
+        pred_mol_tensor[:, 9] *= photon_scale
+    pred_mol_array = ailoc.common.cpu(pred_mol_tensor)
+
+    return pred_mol_array
+
+
+def gmm_to_localizations_old(inference_dict, thre_integrated, pixel_size_xy, z_scale, photon_scale, bg_scale, batch_size):
     """
     Postprocess the GMM posterior to the molecule list.
 
@@ -152,9 +272,72 @@ def gmm_to_localizations(inference_dict, thre_integrated, pixel_size_xy, z_scale
         (np.ndarray, dict): the molecule list with frame ordered based on the input dict, the modified inference dict.
     """
 
-    inference_dict['prob_sampled'] = sample_prob(inference_dict['prob'], batch_size, thre_integrated)
-    molecule_array = inference_map_to_localizations(inference_dict, ailoc.common.cpu(pixel_size_xy), z_scale, photon_scale)
+    inference_dict['prob_sampled'] = sample_prob_old(inference_dict['prob'], batch_size, thre_integrated)
+    molecule_array = inference_map_to_localizations_old(inference_dict, ailoc.common.cpu(pixel_size_xy), z_scale, photon_scale)
     inference_dict['bg_sampled'] = inference_dict['bg'] * bg_scale
+
+    return molecule_array, inference_dict
+
+
+def gmm_to_localizations(p_pred,
+                         xyzph_pred,
+                         xyzph_sig_pred,
+                         bg_pred,
+                         thre_integrated,
+                         pixel_size_xy,
+                         z_scale,
+                         photon_scale,
+                         bg_scale,
+                         batch_size,
+                         return_infer_map):
+    """
+    Postprocess the GMM posterior to the molecule list.
+
+    Args:
+        inference_dict (dict): the inference result from the network, contains the GMM components.
+        thre_integrated (float): the threshold for the integrated probability value.
+        pixel_size_xy (list of int): [int int], the pixel size in the xy plane.
+        z_scale (float): the scale factor for the z axis.
+        photon_scale (float): the scale factor for the photon count.
+        bg_scale (float): the scale factor for the background.
+        batch_size (int): the batch size used for spatial integration.
+
+    Returns:
+        (np.ndarray, dict): the molecule list with frame ordered based on the input dict, the modified inference dict.
+    """
+
+    p_sampled = sample_prob(p_pred, batch_size, thre_integrated)
+    molecule_array = inference_map_to_localizations(p_sampled,
+                                                    p_pred,
+                                                    xyzph_pred,
+                                                    xyzph_sig_pred,
+                                                    bg_pred,
+                                                    ailoc.common.cpu(pixel_size_xy),
+                                                    z_scale,
+                                                    photon_scale)
+    bg_sampled = bg_pred * bg_scale
+
+    if return_infer_map:
+        inference_dict = {'prob': [], 'x_offset': [], 'y_offset': [], 'z_offset': [], 'photon': [],
+                          'bg': [], 'x_sig': [], 'y_sig': [], 'z_sig': [], 'photon_sig': [],
+                          'prob_sampled': [], 'bg_sampled': []}
+
+        inference_dict['prob'].append(ailoc.common.cpu(p_pred))
+        inference_dict['x_offset'].append(ailoc.common.cpu(xyzph_pred[:, 0, :, :]))
+        inference_dict['y_offset'].append(ailoc.common.cpu(xyzph_pred[:, 1, :, :]))
+        inference_dict['z_offset'].append(ailoc.common.cpu(xyzph_pred[:, 2, :, :]))
+        inference_dict['photon'].append(ailoc.common.cpu(xyzph_pred[:, 3, :, :]))
+        inference_dict['x_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 0, :, :]))
+        inference_dict['y_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 1, :, :]))
+        inference_dict['z_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 2, :, :]))
+        inference_dict['photon_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 3, :, :]))
+        inference_dict['bg'].append(ailoc.common.cpu(bg_pred))
+        inference_dict['prob_sampled'].append(ailoc.common.cpu(p_sampled))
+        inference_dict['bg_sampled'].append(ailoc.common.cpu(bg_sampled))
+        for k in inference_dict.keys():
+            inference_dict[k] = np.vstack(inference_dict[k])
+    else:
+        inference_dict = None
 
     return molecule_array, inference_dict
 
