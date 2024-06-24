@@ -125,6 +125,8 @@ def split_fov(data, fov_xy=None, sub_fov_size=128, over_cut=8):
             (x_start, x_end, y_start, y_end) and list of sub-FOV indicator without over cut
     """
 
+    data = ailoc.common.cpu(data)
+
     if fov_xy is None:
         fov_xy = (0, data.shape[-1] - 1, 0, data.shape[-2] - 1)
         fov_xy_start = [0, 0]
@@ -321,7 +323,8 @@ class SmlmTiffDataset(torch.utils.data.Dataset):
             data_tmp = data_tmp[None] if data_tmp.ndim == 2 else data_tmp
             data_block.append(data_tmp)
 
-        data_block = np.concatenate(data_block, axis=0)
+        # data_block = np.concatenate(data_block, axis=0)
+        data_block = torch.tensor(np.concatenate(data_block, axis=0, dtype=np.float32))
 
         return data_block
 
