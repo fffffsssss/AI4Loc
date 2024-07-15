@@ -231,10 +231,11 @@ class DeepLocNet(nn.Module):
 
         # layer normalization
         fm_out_ln = nn.functional.layer_norm(fm_out, normalized_shape=fm_out.shape[1:])
+        cm_in = fm_out_ln
 
-        cm_out = self.temp_context_module(fm_out_ln)
+        cm_out = self.temp_context_module(cm_in)
         p, xyzph, xyzphs, bg = self.out_module(cm_out)
-        # p, xyzph, xyzphs, bg = self.out_module(fm_out_ln)  # skip the temporal context module
+        # p, xyzph, xyzphs, bg = self.out_module(cm_in)  # skip the temporal context module
 
         # todo:  may need to set an extra scale and offset for the output considering the sensitive
         #  range of the activation function sigmoid and tanh

@@ -26,7 +26,7 @@ class DeepLoc(ailoc.common.XXLoc):
         self.local_context = self.dict_sampler_params['local_context']
         # attn_length only useful when local_context=True, should be odd,
         # using the same number of frames before and after the target frame
-        self.attn_length = 7
+        self.attn_length = 3
         assert self.attn_length % 2 == 1, 'attn_length should be odd'
         assert self.attn_length > 1, 'attn_length should be larger than 1'
         # add frames at the beginning and end to provide context

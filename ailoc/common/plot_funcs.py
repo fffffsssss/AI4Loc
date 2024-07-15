@@ -523,7 +523,7 @@ def plot_psf_stack(psfs, z_pos, cmap='gray'):
     plt.show()
 
 
-def plot_image_stack_difference(stack_a,stack_b,cmap='turbo'):
+def plot_image_stack_difference(stack_a,stack_b,cmap='magma'):
     stack_a = ailoc.common.cpu(stack_a)
     stack_b = ailoc.common.cpu(stack_b)
 
@@ -540,7 +540,7 @@ def plot_image_stack_difference(stack_a,stack_b,cmap='turbo'):
         except:
             ax.append(i)
 
-    for i in range(n_img):
+    for i in range(n_row):
         a_tmp = np.squeeze(stack_a[i])
         b_tmp = np.squeeze(stack_b[i])
         mismatch_tmp = a_tmp - b_tmp
