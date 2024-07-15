@@ -81,3 +81,9 @@ class XXLoc(ABC):
 
         raise NotImplementedError
 
+    def remove_gpu_attribute(self, *args, **kwargs):
+        """
+        remove the attributes belong to specific GPU, for multi-GPU process usage.
+        """
+
+        raise NotImplementedError

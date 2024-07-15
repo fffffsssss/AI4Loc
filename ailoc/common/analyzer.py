@@ -9,6 +9,10 @@ import tifffile
 import natsort
 import pathlib
 import gc
+import torch.multiprocessing as mp
+import platform
+import queue
+import csv
 
 import ailoc.common
 # from ailoc.common import local_tifffile
@@ -752,3 +756,945 @@ class SmlmDataAnalyzer:
         # return pre_index, target_index, next_index
 
 
+class CompetitiveSmlmDataAnalyzer_v1:
+    """
+    This class uses the torch.multiprocessing.queue to analyze data in parallel processes, it will create a read list in
+    main process, and create workers with the same number of available GPUs to competitively analyze the data.
+    For each worker, it has two processes, producer and consumer, the producer reads the data from the tiff file using
+    the read list, and do the sub-fov segmentation, put sub-fov data in the shared queue.
+    The consumer gets the sub-fov data from the shared queue,
+    and analyze the data, put the result in a container. The main process gets the result from the worker and
+    save the result to the csv file.
+    """
+
+    def __init__(self,
+                 loc_model,
+                 tiff_path,
+                 output_path,
+                 time_block_gb=1,
+                 batch_size=16,
+                 sub_fov_size=256,
+                 over_cut=8,
+                 multi_GPU=False,
+                 camera=None,
+                 fov_xy_start=None,
+                 end_frame_num=None,):
+        """
+        Args:
+            loc_model (ailoc.common.XXLoc): localization model object
+            tiff_path (str): the path of the tiff file, can also be a directory containing multiple tiff files
+            output_path (str): the path to save the analysis results
+            time_block_gb (int or float): the size (GB) of the data block loaded into the RAM iteratively,
+                to deal with the large data problem
+            batch_size (int): batch size for analyzing the sub-FOVs data, the larger the faster, but more GPU memory
+            sub_fov_size (int): in pixel, the data is divided into this size of the sub-FOVs, must be multiple of 4,
+                the larger the faster, but more GPU memory
+            over_cut (int): in pixel, must be multiple of 4, cut a slightly larger sub-FOV to avoid artifact from
+                the incomplete PSFs at image edge.
+            multi_GPU (bool): if True, use multiple GPUs to analyze the data in parallel
+            camera (ailoc.simulation.Camera or None): camera object used to transform the data to photon unit, if None, use
+                the default camera object in the loc_model
+            fov_xy_start (list of int or None): (x_start, y_start) in pixel unit, If None, use (0,0).
+                The global xy pixel position (not row and column) of the tiff images in the whole pixelated FOV,
+                start from the top left. For example, (102, 41) means the top left pixel
+                of the input images (namely data[:, 0, 0]) corresponds to the pixel xy (102,41) in the whole FOV. This
+                parameter is normally (0,0) as we usually treat the input images as the whole FOV. However, when using
+                an FD-DeepLoc model trained with pixel-wise field-dependent aberration, this parameter should be carefully
+                set to ensure the consistency of the input data position relative to the training aberration map.
+            end_frame_num (int or None): the end frame number to analyze, if None, analyze all frames
+        """
+
+        self.loc_model = loc_model
+        self.tiff_path = pathlib.Path(tiff_path)
+        self.output_path = output_path
+        self.time_block_gb = time_block_gb
+        self.batch_size = batch_size
+        self.camera = camera if camera is not None else loc_model.data_simulator.camera
+        self.sub_fov_size = sub_fov_size
+        self.over_cut = over_cut
+        self.fov_xy_start = fov_xy_start if fov_xy_start is not None else (0, 0)
+        self.multi_GPU = multi_GPU
+        self.pixel_size_xy = ailoc.common.cpu(loc_model.data_simulator.psf_model.pixel_size_xy)
+        # self.pixel_size_xy = (100,100)
+        self.end_frame_num = end_frame_num
+
+        print(f'the file to save the predictions is: {self.output_path}')
+
+        if os.path.exists(self.output_path):
+            try:
+                last_preds = ailoc.common.read_csv_array(self.output_path)
+                last_frame_num = int(last_preds[-1, 0])
+                del last_preds
+                print(f'divide_and_conquer will append the pred list to existed csv, ' \
+                                    f'the last analyzed frame is: {last_frame_num}')
+            except IndexError:
+                last_frame_num = 0
+                print('the csv file exists but is empty, start from the first frame')
+        else:
+            last_frame_num = 0
+
+        self.start_frame_num = last_frame_num
+        # create the file name list and corresponding frame range, used for seamlessly slicing
+        start_num = 0
+        self.file_name_list = []
+        self.file_range_list = []
+        if self.tiff_path.is_dir():
+            files_list = natsort.natsorted(self.tiff_path.glob('*.tif*'))
+            files_list = [str(file_tmp) for file_tmp in files_list]
+            for file_tmp in files_list:
+                tiff_handle_tmp = tifffile.TiffFile(file_tmp, is_ome=False, is_lsm=False, is_ndpi=False)
+                length_tmp = len(tiff_handle_tmp.pages)
+                tiff_handle_tmp.close()
+                self.file_name_list.append(file_tmp)
+                self.file_range_list.append((start_num, start_num + length_tmp - 1, length_tmp))
+                start_num += length_tmp
+        else:
+            tiff_handle_tmp = tifffile.TiffFile(self.tiff_path)
+            length_tmp = len(tiff_handle_tmp.pages)
+            tiff_handle_tmp.close()
+            self.file_name_list.append(str(self.tiff_path))
+            self.file_range_list.append((0, length_tmp - 1, length_tmp))
+
+        # make the plan to read image stack sequentially
+        # tiff_handle = local_tifffile.TiffFile(self.tiff_path, is_ome=True)
+        tiff_handle = tifffile.TiffFile(self.file_name_list[0])
+        self.tiff_shape = tiff_handle.series[0].shape
+        self.fov_xy = (self.fov_xy_start[0], self.fov_xy_start[0] + self.tiff_shape[-1] - 1,
+                       self.fov_xy_start[1], self.fov_xy_start[1] + self.tiff_shape[-2] - 1)
+        single_frame_nbyte = tiff_handle.series[0].size * tiff_handle.series[0].dtype.itemsize / self.tiff_shape[0]
+        self.time_block_n_img = int(np.ceil(self.time_block_gb * (1024 ** 3) / single_frame_nbyte))
+        tiff_handle.close()
+
+        print(f"frame ranges || filename: ")
+        for i in range(len(self.file_range_list)):
+            print(f"[{self.file_range_list[i][0]}-{self.file_range_list[i][1]}] || {self.file_name_list[i]}")
+
+        self.sum_file_length = np.array(self.file_range_list)[:, 1].sum() - np.array(self.file_range_list)[:,
+                                                                            0].sum() + len(self.file_range_list)
+        self.end_frame_num = self.sum_file_length if end_frame_num is None or end_frame_num > self.sum_file_length else end_frame_num
+        if self.sum_file_length != self.tiff_shape[0]:
+            print_message_tmp = f"Warning: meta data shows that the tiff stack has {self.tiff_shape[0]} frames, the sum of all file pages is {self.sum_file_length}"
+            print('\033[0;31m' + print_message_tmp + '\033[0m')
+
+        frame_slice = []
+        i = 0
+        while ((i + 1) * self.time_block_n_img + self.start_frame_num) <= self.end_frame_num:
+            frame_slice.append(
+                slice(i * self.time_block_n_img + self.start_frame_num, (i + 1) * self.time_block_n_img + self.start_frame_num))
+            i += 1
+        if i * self.time_block_n_img + self.start_frame_num < self.end_frame_num:
+            frame_slice.append(slice(i * self.time_block_n_img + self.start_frame_num, self.end_frame_num))
+        self.frame_slice = frame_slice
+
+        # all saved localizations are in the following physical FOV, the unit is nm
+        self.fov_xy_nm = (self.fov_xy_start[0] * self.pixel_size_xy[0],
+                          (self.fov_xy_start[0] + self.tiff_shape[-1]) * self.pixel_size_xy[0],
+                          self.fov_xy_start[1] * self.pixel_size_xy[1],
+                          (self.fov_xy_start[1] + self.tiff_shape[-2]) * self.pixel_size_xy[1])
+
+        # make the file read list queue, should include the frame number and the file name and the read plan
+        self.file_read_list_queue = mp.Queue()
+        for curr_frame_slice in self.frame_slice:
+            slice_start = curr_frame_slice.start
+            slice_end = curr_frame_slice.stop
+
+            # for multiprocessing dataloader, the tiff handle cannot be shared by different processes, so we need to
+            # get the relation between the frame number and the file name and corresponding frame range for each file,
+            # and then use the imread function in each process
+            files_to_read = []
+            slice_for_files = []
+            for file_name, file_range in zip(self.file_name_list, self.file_range_list):
+                # situation 1: the first frame to get is in the current file
+                # situation 2: the last frame to get is in the current file
+                # situation 3: the current file is in the middle of the frame range
+                if file_range[0] <= slice_start <= file_range[1] or \
+                        file_range[0] < slice_end <= file_range[1] + 1 or \
+                        (slice_start < file_range[0] and slice_end > file_range[1] + 1):
+                    files_to_read.append(file_name)
+                    slice_for_files.append(slice(max(0, slice_start - file_range[0]),
+                                                 min(file_range[2], slice_end - file_range[0])))
+
+            item = [slice_start, slice_end, files_to_read, slice_for_files]
+            self.file_read_list_queue.put(item)
+
+        # initiate the workers according to the number of available GPUs
+        self.num_workers = torch.cuda.device_count() if self.multi_GPU else 1
+        self.worker_list = []
+        for i in range(self.num_workers):
+            worker = WorkerShmQueue(
+                device='cuda:' + str(i),
+                loc_model=self.loc_model,
+                file_read_list_queue=self.file_read_list_queue,
+                batch_size=self.batch_size,
+                sub_fov_size=self.sub_fov_size,
+                over_cut=self.over_cut,
+                camera=self.camera,
+                fov_xy=self.fov_xy,
+                pixel_size_xy=self.pixel_size_xy,
+                max_queue_size=self.time_block_n_img,
+            )
+            self.worker_list.append(worker)
+
+    def start(self):
+        """
+        start the data analysis
+        """
+
+        print(f'{mp.current_process().name}, id is {os.getpid()}')
+
+        for worker in self.worker_list:
+            worker.producer.start()
+
+        for worker in self.worker_list:
+            worker.consumer.start()
+
+        for worker in self.worker_list:
+            worker.join()
+
+
+class WorkerShmQueue:
+    """
+    This class is used to analyze the data in parallel processes, it will get the read list from the
+    main process (SmlmDataAnalyzerShmQueue). Each worker has a producer and a consumer process, the producer
+    reads the data from the tiff file using the read list, and do the sub-fov segmentation, put sub-fov data in
+    the shared queue. The consumer gets the sub-fov data from the shared queue, and analyze the data, put the result
+    in a container of the main process.
+    """
+
+    def __init__(self,
+                 device,
+                 loc_model,
+                 file_read_list_queue,
+                 batch_size,
+                 sub_fov_size,
+                 over_cut,
+                 camera,
+                 fov_xy,
+                 pixel_size_xy,
+                 max_queue_size):
+        """
+        Args:
+            device (str): the GPU device to use, e.g., 'cuda:0'
+            loc_model (ailoc.common.XXLoc): localization model object
+            file_read_list_queue (torch.multiprocessing.Queue): the queue to get the read list from the main process
+            batch_size (int): batch size for analyzing the sub-FOVs data, the larger the faster, but more GPU memory
+            sub_fov_size (int): in pixel, the data is divided into this size of the sub-FOVs, must be multiple of 4,
+                the larger the faster, but more GPU memory
+            over_cut (int): in pixel, must be multiple of 4, cut a slightly larger sub-FOV to avoid artifact from
+                the incomplete PSFs at image edge.
+            camera (ailoc.simulation.Camera or None): camera object used to transform the data to photon unit, if None, use
+                the default camera object in the loc_model
+            fov_xy_start (list of int or None): (x_start, y_start) in pixel unit, If None, use (0,0).
+                The global xy pixel position (not row and column) of the tiff images in the whole pixelated FOV,
+                start from the top left. For example, (102, 41) means the top left pixel
+                of the input images (namely data[:, 0, 0]) corresponds to the pixel xy (102,41) in the whole FOV. This
+                parameter is normally (0,0) as we usually treat the input images as the whole FOV. However, when using
+                an FD-DeepLoc model trained with pixel-wise field-dependent aberration, this parameter should be carefully
+                set to ensure the consistency of the input data position relative to the training aberration map.
+            pixel_size_xy (tuple of int): pixel size in xy dimension, unit nm
+        """
+
+        self.device = device
+        self.loc_model = loc_model
+        self.file_read_list_queue = file_read_list_queue
+        self.batch_size = batch_size
+        self.sub_fov_size = sub_fov_size
+        self.over_cut = over_cut
+        self.camera = camera if camera is not None else loc_model.data_simulator.camera
+        self.fov_xy = fov_xy
+        self.pixel_size_xy = pixel_size_xy
+        self.max_queue_size = max_queue_size
+
+        self.batch_data_queue = mp.JoinableQueue(maxsize=self.max_queue_size)
+        self.producer = mp.Process(target=self.producer_func,
+                                   args=(
+                                       self.loc_model,
+                                       self.file_read_list_queue,
+                                       self.batch_size,
+                                       self.sub_fov_size,
+                                       self.over_cut,
+                                       self.fov_xy,
+                                       self.batch_data_queue
+                                   ))
+        self.consumer = mp.Process(target=self.consumer_func,
+                                   args=(
+                                       self.loc_model,
+                                       self.camera,
+                                       self.pixel_size_xy,
+                                       self.batch_data_queue,
+                                       self.device))
+
+    def start(self):
+        self.producer.start()
+        self.consumer.start()
+
+    def join(self):
+        self.producer.join()
+        self.consumer.join()
+
+    @staticmethod
+    def producer_func(
+            loc_model,
+            file_read_list_queue,
+            batch_size,
+            sub_fov_size,
+            over_cut,
+            fov_xy,
+            batch_data_queue,
+    ):
+
+        print(f'enter the producer process: {os.getpid()}')
+        wait_time = 0
+        put_time = 0
+
+        # for rolling inference strategy
+        local_context = getattr(loc_model, 'local_context', False)  # for DeepLoc model
+        temporal_attn = getattr(loc_model, 'temporal_attn', False)  # for TransLoc model
+        assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
+        # if using local context or temporal attention, the rolling inference strategy will be
+        # automatically applied in the network.forward()
+        rolling_inference = True if local_context or temporal_attn else False
+        if local_context:
+            extra_length = 1
+        elif temporal_attn:
+            extra_length = loc_model.attn_length // 2
+
+        while True:
+            try:
+                file_read_list = file_read_list_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            slice_start = file_read_list[0]
+            slice_end = file_read_list[1]
+            files_to_read = file_read_list[2]
+            slice_for_files = file_read_list[3]
+
+            data_block = []
+            for file_name, slice_tmp in zip(files_to_read, slice_for_files):
+                data_tmp = tifffile.imread(file_name, key=slice_tmp)
+                data_block.append(data_tmp)
+
+            data_block = np.concatenate(data_block, axis=0)
+            num_img, h, w = data_block.shape
+
+            # rolling inference strategy needs to pad the whole data with two more images at the beginning and end
+            # to provide the context for the first and last image
+            if rolling_inference:
+                if num_img > extra_length:
+                    data_block = np.concatenate([data_block[extra_length:0:-1], data_block, data_block[-2:-2 - extra_length:-1]], 0)
+                else:
+                    data_nopad = data_block.copy()
+                    for i in range(extra_length):
+                        data_block = np.concatenate([data_nopad[(i + 1) % num_img: (i + 1) % num_img + 1],
+                                               data_block,
+                                               data_nopad[num_img - 1 - ((i + 1) % num_img): num_img - 1 - (
+                                                           (i + 1) % num_img) + 1],
+                                               ], 0)
+
+            # sub-FOV segmentation
+            sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list = split_fov(data=data_block,
+                                                                                     fov_xy=fov_xy,
+                                                                                     sub_fov_size=sub_fov_size,
+                                                                                     over_cut=over_cut)
+
+            # put the sub-FOV batch data in the shared queue
+            for i_fov in range(len(sub_fov_data_list)):
+                # for each batch, rolling inference needs to take 2 more images at the beginning and end, but only needs
+                # to return the molecule list for the middle images
+                for i in range(int(np.ceil(num_img / batch_size))):
+                    if rolling_inference:
+                        item = {
+                            'data': torch.tensor(sub_fov_data_list[i_fov][i * batch_size: (i + 1) * batch_size + 2 * extra_length]),
+                            'sub_fov_xy': sub_fov_xy_list[i_fov],
+                            'original_sub_fov_xy': original_sub_fov_xy_list[i_fov],
+                            'frame_num': slice_start + i * batch_size,
+                        }
+                    else:
+                        item = {
+                            'data': torch.tensor(sub_fov_data_list[i_fov][i * batch_size: (i + 1) * batch_size]),
+                            'sub_fov_xy': sub_fov_xy_list[i_fov],
+                            'original_sub_fov_xy': original_sub_fov_xy_list[i_fov],
+                            'frame_num': slice_start + i * batch_size,
+                        }
+                    batch_data_queue.put(item)
+        batch_data_queue.put(None)
+        batch_data_queue.join()
+
+    @staticmethod
+    def consumer_func(
+            loc_model,
+            camera,
+            pixel_size_xy,
+            batch_data_queue,
+            device
+    ):
+
+        print(f'enter the comsumer process: {os.getpid()}')
+
+        loc_model.network.to(device)
+
+        # # manually set psf parameters
+        # zernike_aber = np.array([2, -2, 0, 2, 2, 70, 3, -1, 0, 3, 1, 0, 4, 0, 0, 3, -3, 0, 3, 3, 0,
+        #                          4, -2, 0, 4, 2, 0, 5, -1, 0, 5, 1, 0, 6, 0, 0, 4, -4, 0, 4, 4, 0,
+        #                          5, -3, 0, 5, 3, 0, 6, -2, 0, 6, 2, 0, 7, 1, 0, 7, -1, 0, 8, 0, 0],
+        #                         dtype=np.float32).reshape([21, 3])
+        # psf_params_dict = {'na': 1.49,
+        #                    'wavelength': 660,  # unit: nm
+        #                    'refmed': 1.518,
+        #                    'refcov': 1.518,
+        #                    'refimm': 1.518,
+        #                    'zernike_mode': zernike_aber[:, 0:2],
+        #                    'zernike_coef': zernike_aber[:, 2],
+        #                    'pixel_size_xy': (100, 100),
+        #                    'otf_rescale_xy': (0, 0),
+        #                    'npupil': 64,
+        #                    'psf_size': 51,
+        #                    'objstage0': 0,
+        #                    'zemit0': 0,
+        #                    }
+        #
+        # # manually set camera parameters
+        # camera_params_dict = {'camera_type': 'idea'}
+        # # manually set sampler parameters
+        # sampler_params_dict = {
+        #     'local_context': False,
+        #     'robust_training': True,
+        #     'context_size': 10,
+        #     # for each batch unit, simulate several frames share the same photophysics and bg to train
+        #     'train_size': 64,
+        #     'num_em_avg': 10,
+        #     'eval_batch_size': 100,
+        #     'photon_range': (1000, 10000),
+        #     'z_range': (-700, 700),
+        #     'bg_range': (40, 60),
+        #     'bg_perlin': True,
+        # }
+        # # instantiate the DeepLoc model and start to train
+        # loc_model = ailoc.deeploc.DeepLoc(psf_params_dict, camera_params_dict, sampler_params_dict)
+
+        get_time = 0
+        anlz_time = 0
+        item_counts = 0
+
+        while True:
+            with autocast():
+                t0 = time.monotonic()
+                if batch_data_queue.empty():
+                    # print('queue is empty')
+                    get_time += time.monotonic() - t0
+                    continue
+                item = batch_data_queue.get_nowait()
+                batch_data_queue.task_done()
+                get_time += time.monotonic() - t0
+
+                if item is None:
+                    break
+
+                item_counts += 1
+
+                t1 = time.monotonic()
+                data = item['data']
+                data = data.to(device, non_blocking=True)
+                sub_fov_xy = item['sub_fov_xy']
+                original_sub_fov_xy = item['original_sub_fov_xy']
+                frame_num = item['frame_num']
+                get_time += time.monotonic() - t1
+
+                t2 = time.monotonic()
+                molecule_array, inference_dict = loc_model.analyze(data, camera)
+                molecule_array[:, 0] += frame_num
+                molecule_array[:, 1] += sub_fov_xy[0] * pixel_size_xy[0]
+                molecule_array[:, 2] += sub_fov_xy[2] * pixel_size_xy[1]
+                anlz_time += time.monotonic() - t2
+                # print(f'Process: {os.getpid()}, analyzed {frame_num}')
+                # todo postprocess
+
+        print(f'Consumer {os.getpid()}, '
+              f'device: {device}, '
+              f'total data get time: {get_time}, '
+              f'analyze time: {anlz_time}, '
+              f'item counts: {item_counts}')
+
+
+class CompetitiveSmlmDataAnalyzer:
+    """
+    This class uses the torch.multiprocessing to analyze data in parallel, it will create a read list in main process,
+    and then create a public producer to load the tiff file and do the preprocess
+    (rolling inference, fov segmentation, batch segmentation), put the batch data in a queue,
+    then create multiple consumer processes with the same number of available GPUs.
+    Consumers will competitively get and analyze the batch data from the shared memory queue.
+    """
+
+    def __init__(self,
+                 loc_model,
+                 tiff_path,
+                 output_path,
+                 time_block_gb=1,
+                 batch_size=16,
+                 sub_fov_size=256,
+                 over_cut=8,
+                 multi_GPU=False,
+                 camera=None,
+                 fov_xy_start=None,
+                 end_frame_num=None,):
+        """
+        Args:
+            loc_model (ailoc.common.XXLoc): localization model object
+            tiff_path (str): the path of the tiff file, can also be a directory containing multiple tiff files
+            output_path (str): the path to save the analysis results
+            time_block_gb (int or float): the size (GB) of the data block loaded into the RAM iteratively,
+                to deal with the large data problem
+            batch_size (int): batch size for analyzing the sub-FOVs data, the larger the faster, but more GPU memory
+            sub_fov_size (int): in pixel, the data is divided into this size of the sub-FOVs, must be multiple of 4,
+                the larger the faster, but more GPU memory
+            over_cut (int): in pixel, must be multiple of 4, cut a slightly larger sub-FOV to avoid artifact from
+                the incomplete PSFs at image edge.
+            multi_GPU (bool): if True, use multiple GPUs to analyze the data in parallel
+            camera (ailoc.simulation.Camera or None): camera object used to transform the data to photon unit, if None, use
+                the default camera object in the loc_model
+            fov_xy_start (list of int or None): (x_start, y_start) in pixel unit, If None, use (0,0).
+                The global xy pixel position (not row and column) of the tiff images in the whole pixelated FOV,
+                start from the top left. For example, (102, 41) means the top left pixel
+                of the input images (namely data[:, 0, 0]) corresponds to the pixel xy (102,41) in the whole FOV. This
+                parameter is normally (0,0) as we usually treat the input images as the whole FOV. However, when using
+                an FD-DeepLoc model trained with pixel-wise field-dependent aberration, this parameter should be carefully
+                set to ensure the consistency of the input data position relative to the training aberration map.
+            end_frame_num (int or None): the end frame number to analyze, if None, analyze all frames
+        """
+
+        mp.set_start_method('spawn', force=True)
+
+        self.loc_model = loc_model
+        self.tiff_path = pathlib.Path(tiff_path)
+        self.output_path = output_path
+        self.time_block_gb = time_block_gb
+        self.batch_size = batch_size
+        self.camera = camera if camera is not None else loc_model.data_simulator.camera
+        self.sub_fov_size = sub_fov_size
+        self.over_cut = over_cut
+        self.fov_xy_start = fov_xy_start if fov_xy_start is not None else (0, 0)
+        self.multi_GPU = multi_GPU
+        self.pixel_size_xy = ailoc.common.cpu(loc_model.data_simulator.psf_model.pixel_size_xy)
+        # self.pixel_size_xy = (100,100)
+        self.end_frame_num = end_frame_num
+
+        print(f'the file to save the predictions is: {self.output_path}')
+
+        if os.path.exists(self.output_path):
+            last_frame_num = 0
+            print('the csv file exists but the analyzer will overwrite it and start from the first frame')
+        else:
+            last_frame_num = 0
+
+        self.start_frame_num = last_frame_num
+        # create the file name list and corresponding frame range, used for seamlessly slicing
+        start_num = 0
+        self.file_name_list = []
+        self.file_range_list = []
+        if self.tiff_path.is_dir():
+            files_list = natsort.natsorted(self.tiff_path.glob('*.tif*'))
+            files_list = [str(file_tmp) for file_tmp in files_list]
+            for file_tmp in files_list:
+                tiff_handle_tmp = tifffile.TiffFile(file_tmp, is_ome=False, is_lsm=False, is_ndpi=False)
+                length_tmp = len(tiff_handle_tmp.pages)
+                tiff_handle_tmp.close()
+                self.file_name_list.append(file_tmp)
+                self.file_range_list.append((start_num, start_num + length_tmp - 1, length_tmp))
+                start_num += length_tmp
+        else:
+            tiff_handle_tmp = tifffile.TiffFile(self.tiff_path)
+            length_tmp = len(tiff_handle_tmp.pages)
+            tiff_handle_tmp.close()
+            self.file_name_list.append(str(self.tiff_path))
+            self.file_range_list.append((0, length_tmp - 1, length_tmp))
+
+        # make the plan to read image stack sequentially
+        # tiff_handle = local_tifffile.TiffFile(self.tiff_path, is_ome=True)
+        tiff_handle = tifffile.TiffFile(self.file_name_list[0])
+        self.tiff_shape = tiff_handle.series[0].shape
+        self.fov_xy = (self.fov_xy_start[0], self.fov_xy_start[0] + self.tiff_shape[-1] - 1,
+                       self.fov_xy_start[1], self.fov_xy_start[1] + self.tiff_shape[-2] - 1)
+        single_frame_nbyte = tiff_handle.series[0].size * tiff_handle.series[0].dtype.itemsize / self.tiff_shape[0]
+        self.time_block_n_img = int(np.ceil(self.time_block_gb * (1024 ** 3) / single_frame_nbyte))
+        tiff_handle.close()
+
+        print(f"frame ranges || filename: ")
+        for i in range(len(self.file_range_list)):
+            print(f"[{self.file_range_list[i][0]}-{self.file_range_list[i][1]}] || {self.file_name_list[i]}")
+
+        self.sum_file_length = np.array(self.file_range_list)[:, 1].sum() - np.array(self.file_range_list)[:,
+                                                                            0].sum() + len(self.file_range_list)
+        self.end_frame_num = self.sum_file_length if end_frame_num is None or end_frame_num > self.sum_file_length else end_frame_num
+        if self.sum_file_length != self.tiff_shape[0]:
+            print_message_tmp = f"Warning: meta data shows that the tiff stack has {self.tiff_shape[0]} frames, the sum of all file pages is {self.sum_file_length}"
+            print('\033[0;31m' + print_message_tmp + '\033[0m')
+
+        frame_slice = []
+        i = 0
+        while ((i + 1) * self.time_block_n_img + self.start_frame_num) <= self.end_frame_num:
+            frame_slice.append(
+                slice(i * self.time_block_n_img + self.start_frame_num, (i + 1) * self.time_block_n_img + self.start_frame_num))
+            i += 1
+        if i * self.time_block_n_img + self.start_frame_num < self.end_frame_num:
+            frame_slice.append(slice(i * self.time_block_n_img + self.start_frame_num, self.end_frame_num))
+        self.frame_slice = frame_slice
+
+        # all saved localizations are in the following physical FOV, the unit is nm
+        self.fov_xy_nm = (self.fov_xy_start[0] * self.pixel_size_xy[0],
+                          (self.fov_xy_start[0] + self.tiff_shape[-1]) * self.pixel_size_xy[0],
+                          self.fov_xy_start[1] * self.pixel_size_xy[1],
+                          (self.fov_xy_start[1] + self.tiff_shape[-2]) * self.pixel_size_xy[1])
+
+        # make the file read list queue, should include the frame number and the file name and the read plan
+        self.file_read_list_queue = mp.Queue()
+        for curr_frame_slice in self.frame_slice:
+            slice_start = curr_frame_slice.start
+            slice_end = curr_frame_slice.stop
+
+            # for multiprocessing dataloader, the tiff handle cannot be shared by different processes, so we need to
+            # get the relation between the frame number and the file name and corresponding frame range for each file,
+            # and then use the imread function in each process
+            files_to_read = []
+            slice_for_files = []
+            for file_name, file_range in zip(self.file_name_list, self.file_range_list):
+                # situation 1: the first frame to get is in the current file
+                # situation 2: the last frame to get is in the current file
+                # situation 3: the current file is in the middle of the frame range
+                if file_range[0] <= slice_start <= file_range[1] or \
+                        file_range[0] < slice_end <= file_range[1] + 1 or \
+                        (slice_start < file_range[0] and slice_end > file_range[1] + 1):
+                    files_to_read.append(file_name)
+                    slice_for_files.append(slice(max(0, slice_start - file_range[0]),
+                                                 min(file_range[2], slice_end - file_range[0])))
+
+            item = [slice_start, slice_end, files_to_read, slice_for_files]
+            self.file_read_list_queue.put(item)
+
+        # instantiate one producer and multiple consumer
+        self.num_consumers = torch.cuda.device_count() if self.multi_GPU else 1
+        self.batch_data_queue = mp.JoinableQueue(maxsize=self.time_block_n_img)
+        self.result_queue = mp.JoinableQueue()
+
+        self.loc_model.remove_gpu_attribute()
+        self.print_lock = mp.Lock()
+
+        self.public_producer = mp.Process(target=self.producer_func,
+                                   args=(
+                                       self.loc_model,
+                                       self.file_read_list_queue,
+                                       self.batch_size,
+                                       self.sub_fov_size,
+                                       self.over_cut,
+                                       self.fov_xy,
+                                       self.batch_data_queue,
+                                       self.num_consumers,
+                                       self.print_lock
+                                   ))
+
+        self.consumer_list = []
+        for i in range(self.num_consumers):
+            consumer = mp.Process(
+                target=self.consumer_func,
+                args=(
+                    self.loc_model,
+                    self.camera,
+                    self.batch_data_queue,
+                    'cuda:' + str(i),
+                    self.result_queue,
+                    self.print_lock,
+                )
+            )
+            self.consumer_list.append(consumer)
+
+        self.saver = mp.Process(
+            target=self.saver_func,
+            args=(
+                self.result_queue,
+                self.output_path,
+                self.num_consumers,
+                self.pixel_size_xy,
+                self.print_lock,
+                self.start_frame_num,
+                self.end_frame_num,
+                self.tiff_shape,
+                self.sub_fov_size,
+                self.batch_size,
+            )
+        )
+
+    def start(self):
+        """
+        start the data analysis
+        """
+
+        print(f'{mp.current_process().name}, id is {os.getpid()}')
+
+        self.public_producer.start()
+        self.saver.start()
+        for consumer in self.consumer_list:
+            consumer.start()
+
+        self.public_producer.join()
+        self.saver.join()
+        for consumer in self.consumer_list:
+            consumer.join()
+
+    @staticmethod
+    def producer_func(
+            loc_model,
+            file_read_list_queue,
+            batch_size,
+            sub_fov_size,
+            over_cut,
+            fov_xy,
+            batch_data_queue,
+            num_consumers,
+            print_lock,
+    ):
+
+        with print_lock:
+            print(f'enter the producer process: {os.getpid()}')
+
+        # for rolling inference strategy
+        local_context = getattr(loc_model, 'local_context', False)  # for DeepLoc model
+        temporal_attn = getattr(loc_model, 'temporal_attn', False)  # for TransLoc model
+        assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
+        # if using local context or temporal attention, the rolling inference strategy will be
+        # automatically applied in the network.forward()
+        rolling_inference = True if local_context or temporal_attn else False
+        if local_context:
+            extra_length = 1
+        elif temporal_attn:
+            extra_length = loc_model.attn_length // 2
+
+        while True:
+            try:
+                file_read_list = file_read_list_queue.get_nowait()
+            except queue.Empty:
+                break
+
+            slice_start = file_read_list[0]
+            slice_end = file_read_list[1]
+            files_to_read = file_read_list[2]
+            slice_for_files = file_read_list[3]
+
+            data_block = []
+            for file_name, slice_tmp in zip(files_to_read, slice_for_files):
+                data_tmp = tifffile.imread(file_name, key=slice_tmp)
+                data_block.append(data_tmp)
+
+            data_block = np.concatenate(data_block, axis=0)
+            num_img, h, w = data_block.shape
+
+            # rolling inference strategy needs to pad the whole data with two more images at the beginning and end
+            # to provide the context for the first and last image
+            if rolling_inference:
+                if num_img > extra_length:
+                    data_block = np.concatenate(
+                        [data_block[extra_length:0:-1], data_block, data_block[-2:-2 - extra_length:-1]], 0)
+                else:
+                    data_nopad = data_block.copy()
+                    for i in range(extra_length):
+                        data_block = np.concatenate([data_nopad[(i + 1) % num_img: (i + 1) % num_img + 1],
+                                                     data_block,
+                                                     data_nopad[num_img - 1 - ((i + 1) % num_img): num_img - 1 - (
+                                                             (i + 1) % num_img) + 1],
+                                                     ], 0)
+
+            # sub-FOV segmentation
+            sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list = split_fov(data=data_block,
+                                                                                     fov_xy=fov_xy,
+                                                                                     sub_fov_size=sub_fov_size,
+                                                                                     over_cut=over_cut)
+
+            # put the sub-FOV batch data in the shared queue
+            for i_fov in range(len(sub_fov_data_list)):
+                # for each batch, rolling inference needs to take 2 more images at the beginning and end, but only needs
+                # to return the molecule list for the middle images
+                for i in range(int(np.ceil(num_img / batch_size))):
+                    if rolling_inference:
+                        item = {
+                            'data': torch.tensor(
+                                sub_fov_data_list[i_fov][i * batch_size: (i + 1) * batch_size + 2 * extra_length]),
+                            'sub_fov_xy': sub_fov_xy_list[i_fov],
+                            'original_sub_fov_xy': original_sub_fov_xy_list[i_fov],
+                            'frame_num': slice_start + i * batch_size,
+                        }
+                    else:
+                        item = {
+                            'data': torch.tensor(sub_fov_data_list[i_fov][i * batch_size: (i + 1) * batch_size]),
+                            'sub_fov_xy': sub_fov_xy_list[i_fov],
+                            'original_sub_fov_xy': original_sub_fov_xy_list[i_fov],
+                            'frame_num': slice_start + i * batch_size,
+                        }
+                    batch_data_queue.put(item)
+
+        for i in range(num_consumers):
+            batch_data_queue.put(None)
+        batch_data_queue.join()
+
+    @staticmethod
+    def consumer_func(
+            loc_model,
+            camera,
+            batch_data_queue,
+            device,
+            result_queue,
+            print_lock,
+    ):
+
+        with print_lock:
+            print(f'enter the comsumer process: {os.getpid()}, '
+                  f'device: {device}')
+
+        torch.cuda.set_device(device)
+        loc_model.network.to(device)
+        loc_model._data_simulator = ailoc.simulation.Simulator(loc_model.dict_psf_params,
+                                                               loc_model.dict_camera_params,
+                                                               loc_model.dict_sampler_params)
+
+        get_time = 0
+        anlz_time = 0
+        item_counts = 0
+
+        while True:
+            with autocast():
+                t0 = time.monotonic()
+                try:
+                    item = batch_data_queue.get(timeout=1)  # timeout is optional
+                except queue.Empty:
+                    get_time += time.monotonic() - t0
+                    continue
+                batch_data_queue.task_done()
+                get_time += time.monotonic() - t0
+
+                if item is None:
+                    break
+
+                item_counts += 1
+
+                t1 = time.monotonic()
+                data = item['data']
+                data = data.to(device, non_blocking=True)
+                sub_fov_xy = item['sub_fov_xy']
+                original_sub_fov_xy = item['original_sub_fov_xy']
+                frame_num = item['frame_num']
+                get_time += time.monotonic() - t1
+
+                t2 = time.monotonic()
+                molecule_array_tmp, inference_dict = loc_model.analyze(data, camera)
+                anlz_time += time.monotonic() - t2
+
+                result_item = {
+                    'molecule_array': molecule_array_tmp,
+                    'sub_fov_xy': sub_fov_xy,
+                    'original_sub_fov_xy': original_sub_fov_xy,
+                    'frame_num': frame_num
+                }
+                result_queue.put(result_item)
+
+        result_queue.put(None)
+        result_queue.join()
+
+        with print_lock:
+            print(f'Consumer {os.getpid()}, '
+                  f'device: {device}, '
+                  f'total data get time: {get_time}, '
+                  f'analyze time: {anlz_time}, '
+                  f'item counts: {item_counts}')
+
+    @staticmethod
+    def saver_func(
+            result_queue,
+            output_path,
+            num_consumers,
+            pixel_size_xy,
+            print_lock,
+            start_frame_num,
+            end_frame_num,
+            tiff_shape,
+            sub_fov_size,
+            batch_size,
+    ):
+
+        with print_lock:
+            print(f'enter the saver process: {os.getpid()}')
+
+        ailoc.common.write_csv_array(input_array=np.array([]), filename=output_path,
+                                     write_mode='write localizations')
+
+        with open(output_path, 'a', newline='') as csvfile:
+            csvwriter = csv.writer(csvfile, delimiter=',', quoting=csv.QUOTE_MINIMAL)
+
+            total_result_item_num = int(np.ceil(tiff_shape[-1] / sub_fov_size)) * int(np.ceil(tiff_shape[-2] / sub_fov_size)) * np.ceil((end_frame_num-start_frame_num) / batch_size)
+            patience = total_result_item_num//20
+            finished_item_num = 0
+            time_recent = time.monotonic()
+
+            get_time = 0
+            process_time = 0
+            format_time = 0
+            write_time = 0
+            none_counts = 0
+            while True:
+
+                # compute approximate remaining time
+                if finished_item_num > 0 and finished_item_num % patience == 0:
+                    time_cost_recent = time.monotonic() - time_recent
+                    time_recent = time.monotonic()
+                    print(f'Analysis progress: {finished_item_num/total_result_item_num*100:.2f}%, '
+                          f'ETA: {time_cost_recent/patience*(total_result_item_num-finished_item_num):.0f}s')
+
+                t0 = time.monotonic()
+                try:
+                    result_item = result_queue.get(timeout=1)  # timeout is optional
+                except queue.Empty:
+                    get_time += time.monotonic() - t0
+                    continue
+                result_queue.task_done()
+                get_time += time.monotonic() - t0
+
+                if result_item is None:
+                    none_counts += 1
+                    if none_counts == num_consumers:
+                        break
+                else:
+                    t1 = time.monotonic()
+                    molecule_array_tmp = result_item['molecule_array']
+                    sub_fov_xy_tmp = result_item['sub_fov_xy']
+                    original_sub_fov_xy_tmp = result_item['original_sub_fov_xy']
+                    frame_num = result_item['frame_num']
+                    get_time += time.monotonic() - t1
+
+                    if len(molecule_array_tmp) > 0:
+                        t2 = time.monotonic()
+                        molecule_array_tmp[:, 0] += frame_num
+                        molecule_array_tmp[:, 1] += sub_fov_xy_tmp[0] * pixel_size_xy[0]
+                        molecule_array_tmp[:, 2] += sub_fov_xy_tmp[2] * pixel_size_xy[1]
+
+                        molecule_list_tmp = SmlmDataAnalyzer.filter_over_cut([molecule_array_tmp],
+                                                                             [sub_fov_xy_tmp],
+                                                                             [original_sub_fov_xy_tmp],
+                                                                             pixel_size_xy,)
+                        # molecule_list_tmp = np.array(molecule_list_tmp)
+                        process_time += time.monotonic()-t2
+
+                        if len(molecule_list_tmp) > 0:
+                            t3 = time.monotonic()
+                            # format the data to string with 2 decimal to save the disk space and csv writing time
+                            formatted_data = [['{:.2f}'.format(item) for item in row] for row in molecule_list_tmp]
+                            format_time += time.monotonic() - t3
+
+                            t4 = time.monotonic()
+                            csvwriter.writerows(formatted_data)
+                            write_time += time.monotonic()-t4
+
+                    finished_item_num += 1
+
+        with print_lock:
+            print(f'Saver {os.getpid()}, '
+                  f'total result get time {get_time}, '
+                  f'process time {process_time}, '
+                  f'format time {format_time}, '
+                  f'write time {write_time}')

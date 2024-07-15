@@ -8,7 +8,7 @@ import pandas as pd
 def read_csv_array(path):
     """
     Reads a csv_file with columns: [frame, x, y, z, photon, integrated prob, x uncertainty, y uncertainty,
-    z uncertainty, photon uncertainty, x_offset_pixel, y_offset_pixel]. If the csv_file does not match this format,
+    z uncertainty, photon uncertainty, x_offset, y_offset]. If the csv_file does not match this format,
     the function will try to find the columns with the following columns: frame, x, y, z, photon... and return them.
     
     Args:
@@ -48,7 +48,7 @@ def write_csv_array(input_array, filename, write_mode='write localizations'):
     """
     Writes a csv_file with different column orders depending on the input.
         [frame, x, y, z, photon, integrated prob, x uncertainty, y uncertainty,
-         z uncertainty, photon uncertainty, x_offset_pixel, y_offset_pixel]
+         z uncertainty, photon uncertainty, x_offset, y_offset]
     
     Args:
         input_array (np.ndarray): molecule array that need to be written
@@ -80,7 +80,7 @@ def write_csv_array(input_array, filename, write_mode='write localizations'):
         with open(filename, 'w', newline='') as csvfile:
             csvwriter = csv.writer(csvfile, delimiter=',', quoting=csv.QUOTE_MINIMAL)
             csvwriter.writerow(['frame', 'xnm', 'ynm', 'znm', 'photon', 'prob', 'x_sig', 'y_sig', 'z_sig',
-                                'photon_sig', 'xo', 'yo'])
+                                'photon_sig', 'xoffset', 'yoffset'])
             for row in input_array:
                 csvwriter.writerow([repr(element) for element in row])
     elif write_mode == 'append localizations':

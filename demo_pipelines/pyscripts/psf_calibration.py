@@ -1,6 +1,9 @@
 import numpy as np
 import sys
 sys.path.append('../../')
+import logging
+logger = logging.getLogger()
+logger.setLevel(logging.ERROR)
 
 import ailoc.deeploc
 import ailoc.common

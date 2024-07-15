@@ -7,6 +7,10 @@ import os
 import tifffile
 from IPython.display import display
 import scipy.io as sio
+import time
+import logging
+logger = logging.getLogger()
+logger.setLevel(logging.ERROR)
 
 import ailoc.deeploc
 import ailoc.common
@@ -198,8 +202,58 @@ def deeploc_analyze():
     #                              write_mode='write paired localizations')
 
 
+def deeploc_competitive_analyze():
+
+    loc_model_path = '../../results/2024-05-29-21-47DeepLoc.pt'
+    # can be a tiff file path or a folder path
+    image_path = '../../datasets/sw_npc_20211028/NUP96_SNP647_3D_512_20ms_hama_mm_1800mW_3'
+    save_path = '../../results/' + \
+                os.path.split(loc_model_path)[-1].split('.')[0] + \
+                '_' + os.path.basename(image_path) + '_predictions.csv'
+
+    # load the completely trained model
+    with open(loc_model_path, 'rb') as f:
+        deeploc_model = torch.load(f)
+
+    # # plot evaluation performance during the training
+    # ailoc.common.plot_train_record(deeploc_model)
+
+    deeploc_analyzer = ailoc.common.CompetitiveSmlmDataAnalyzer_v2(
+        loc_model=deeploc_model,
+        tiff_path=image_path,
+        output_path=save_path,
+        time_block_gb=1,
+        batch_size=32,
+        sub_fov_size=256,
+        over_cut=8,
+        multi_GPU=True,
+        end_frame_num=None,
+    )
+
+    # deeploc_analyzer.check_single_frame_output(frame_num=3)
+
+    t0 = time.time()
+    deeploc_analyzer.start()
+    print(f'Prediction time cost: {time.time() - t0} s')
+
+    # # read the ground truth and calculate metrics
+    # preds_array = ailoc.common.read_csv_array(save_path)
+    # gt_array = ailoc.common.read_csv_array("../../results/2024-05-29-21-47DeepLoc__predictions.csv")
+    #
+    # metric_dict, paired_array = ailoc.common.pair_localizations(prediction=preds_array[:100000],
+    #                                                             ground_truth=gt_array[:100000],
+    #                                                             frame_num=None,
+    #                                                             fov_xy_nm=deeploc_analyzer.fov_xy_nm,
+    #                                                             print_info=True)
+    # # write the paired localizations to csv file
+    # save_paried_path = '../../results/'+os.path.split(save_path)[-1].split('.')[0]+'_paired.csv'
+    # ailoc.common.write_csv_array(input_array=paired_array,
+    #                              filename=save_paried_path,
+    #                              write_mode='write paired localizations')
+
 
 if __name__ == '__main__':
     deeploc_train()
     # deeploc_ckpoint_train()
     # deeploc_analyze()
+    # deeploc_competitive_analyze()

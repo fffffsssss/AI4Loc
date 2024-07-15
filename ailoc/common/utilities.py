@@ -29,8 +29,8 @@ def gpu(x, data_type=torch.float32):
     """
 
     if not isinstance(x, torch.Tensor):
-        return torch.tensor(x, device='cuda:0', dtype=data_type)
-    return x.to(device='cuda:0', dtype=data_type)
+        return torch.tensor(x, device='cuda', dtype=data_type)
+    return x.to(device='cuda', dtype=data_type)
 
 
 def cpu(x, data_type=np.float32):

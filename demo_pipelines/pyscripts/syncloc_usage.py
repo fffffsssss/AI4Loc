@@ -8,6 +8,9 @@ import tifffile
 from IPython.display import display
 import imageio
 import scipy.io as sio
+import logging
+logger = logging.getLogger()
+logger.setLevel(logging.ERROR)
 
 import ailoc.syncloc
 import ailoc.common

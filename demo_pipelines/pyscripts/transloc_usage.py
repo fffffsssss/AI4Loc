@@ -7,6 +7,9 @@ import os
 import tifffile
 from IPython.display import display
 import scipy.io as sio
+import logging
+logger = logging.getLogger()
+logger.setLevel(logging.ERROR)
 
 import ailoc.transloc
 import ailoc.common

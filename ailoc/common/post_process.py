@@ -218,7 +218,7 @@ def inference_map_to_localizations(p_sampled,
     Convert inference map to a list of molecules. The returned list is in the format of
     [frame, x, y, z, photon, integrated prob,
      x uncertainty, y uncertainty, z uncertainty, photon uncertainty,
-     x_offset_pixel, y_offset_pixel]. The xy position is based on the size of input maps, if the map size is
+     x_offset, y_offset]. The xy position is based on the size of input maps, if the map size is
      64 pixels, the xy position will be in the range of [0,64] * pixel size.
 
      Returns:
@@ -250,6 +250,8 @@ def inference_map_to_localizations(p_sampled,
         pred_mol_tensor[:, 7] *= pixel_size_xy[1]
         pred_mol_tensor[:, 8] *= z_scale
         pred_mol_tensor[:, 9] *= photon_scale
+        pred_mol_tensor[:, 10] *= pixel_size_xy[0]
+        pred_mol_tensor[:, 11] *= pixel_size_xy[1]
     pred_mol_array = ailoc.common.cpu(pred_mol_tensor)
 
     return pred_mol_array
@@ -385,7 +387,7 @@ def rescale_offset(preds_array, pixel_size=None, rescale_bins=20, sig_3d=False):
 
     Args:
         preds_array (np.ndarray): the molecule list with format [frame, x, y, z, photon, integrated prob, x uncertainty,
-            y uncertainty, z uncertainty, photon uncertainty, x_offset_pixel, y_offset_pixel].
+            y uncertainty, z uncertainty, photon uncertainty, x_offset, y_offset].
         sig_3d (bool): If True, the z uncertainty will be used to bin the molecules.
         rescale_bins (int): The bias scales with the uncertainty of the localization. All molecules
             are binned according to their predicted uncertainty. Detections within different bins are then
@@ -399,8 +401,8 @@ def rescale_offset(preds_array, pixel_size=None, rescale_bins=20, sig_3d=False):
     if pixel_size is None:
         pixel_size = [100, 100]
 
-    xo = preds_array[:, -2].copy()
-    yo = preds_array[:, -1].copy()
+    xo = preds_array[:, -2].copy() / pixel_size[0]
+    yo = preds_array[:, -1].copy() / pixel_size[1]
 
     x_sig = preds_array[:, -6].copy()
     y_sig = preds_array[:, -5].copy()
@@ -462,7 +464,7 @@ def resample_offset(preds_array, pixel_size=None, threshold=0.3):
 
     Args:
         preds_array (np.ndarray): the molecule list with format [frame, x, y, z, photon, integrated prob, x uncertainty,
-            y uncertainty, z uncertainty, photon uncertainty, x_offset_pixel, y_offset_pixel].
+            y uncertainty, z uncertainty, photon uncertainty, x_offset, y_offset].
         threshold (float): the threshold of the uncertainty to resample, if the uncertainty relative to pixel size
             is larger than the threshold, the xy offset will be resampled.
         pixel_size (tuple of int): (int int), the pixel size in the xy plane.
@@ -497,14 +499,14 @@ def resample_offset(preds_array, pixel_size=None, threshold=0.3):
     # xo_resample[inds] = np.random.normal(0, 1, len(inds[0])) * x_sig[inds] / pixel_size[0] + xo[inds]
     # yo_resample[inds] = np.random.normal(0, 1, len(inds[0])) * y_sig[inds] / pixel_size[1] + yo[inds]
 
-    xo_resample[inds_x] = np.random.normal(0, 1, len(inds_x[0])) * x_sig[inds_x] / pixel_size[0] + xo[inds_x]
-    yo_resample[inds_y] = np.random.normal(0, 1, len(inds_y[0])) * y_sig[inds_y] / pixel_size[1] + yo[inds_y]
+    xo_resample[inds_x] = np.random.normal(0, 1, len(inds_x[0])) * x_sig[inds_x] + xo[inds_x]
+    yo_resample[inds_y] = np.random.normal(0, 1, len(inds_y[0])) * y_sig[inds_y] + yo[inds_y]
 
     # xo_resample[inds_x] = histogram_equalization(xo[inds_x]) + np.mean(xo[inds_x])
     # yo_resample[inds_y] = histogram_equalization(yo[inds_y]) + np.mean(yo[inds_y])
 
-    x_resample = preds_array[:, 1] + (xo_resample-xo) * pixel_size[0]
-    y_resample = preds_array[:, 2] + (yo_resample-yo) * pixel_size[1]
+    x_resample = preds_array[:, 1] + (xo_resample - xo)
+    y_resample = preds_array[:, 2] + (yo_resample - yo)
 
     # preds_array_resample = np.column_stack((preds_array, xo_resample, yo_resample, x_resample, y_resample))
     preds_array_resample = preds_array.copy()
@@ -514,16 +516,16 @@ def resample_offset(preds_array, pixel_size=None, threshold=0.3):
     fig, ax = plt.subplots(2, 2, constrained_layout=True)
     ax[0, 0].hist(xo, bins=100, label='original x offset')
     ax[0, 0].legend()
-    ax[0, 0].set_xlim([-0.5, 0.5])
+    ax[0, 0].set_xlim([-0.5 * pixel_size[0], 0.5 * pixel_size[0]])
     ax[0, 1].hist(xo_resample, bins=100, label='resampled x offset')
     ax[0, 1].legend()
-    ax[0, 1].set_xlim([-0.5, 0.5])
+    ax[0, 1].set_xlim([-0.5 * pixel_size[0], 0.5 * pixel_size[0]])
     ax[1, 0].hist(yo, bins=100, label='original y offset')
     ax[1, 0].legend()
-    ax[1, 0].set_xlim([-0.5, 0.5])
+    ax[1, 0].set_xlim([-0.5 * pixel_size[1], 0.5 * pixel_size[1]])
     ax[1, 1].hist(yo_resample, bins=100, label='resampled y offset')
     ax[1, 1].legend()
-    ax[1, 1].set_xlim([-0.5, 0.5])
+    ax[1, 1].set_xlim([-0.5 * pixel_size[1], 0.5 * pixel_size[1]])
     plt.show()
 
     return preds_array_resample

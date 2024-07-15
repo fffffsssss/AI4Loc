@@ -180,7 +180,7 @@ class DeepLoc(ailoc.common.XXLoc):
         """
         Postprocess a batch of inference output map, output is GMM maps and molecule array
         [frame, x, y, z, photon, integrated prob, x uncertainty, y uncertainty, z uncertainty,
-        photon uncertainty, x_offset_pixel, y_offset_pixel].
+        photon uncertainty, x_offset, y_offset].
         """
 
         # # old version, slower
@@ -246,12 +246,14 @@ class DeepLoc(ailoc.common.XXLoc):
                 is a dict that contains the inferred multichannel maps from the network.
         """
 
-        p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(data, camera)
-        molecule_array, inference_dict = self.post_process(p_pred,
-                                                           xyzph_pred,
-                                                           xyzph_sig_pred,
-                                                           bg_pred,
-                                                           return_infer_map)
+        self.network.eval()
+        with torch.no_grad():
+            p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(data, camera)
+            molecule_array, inference_dict = self.post_process(p_pred,
+                                                               xyzph_pred,
+                                                               xyzph_sig_pred,
+                                                               bg_pred,
+                                                               return_infer_map)
 
         return molecule_array, inference_dict
 
@@ -444,3 +446,13 @@ class DeepLoc(ailoc.common.XXLoc):
 
         except KeyError:
             print('No recent performance record found')
+
+    def remove_gpu_attribute(self):
+        """
+        Remove the gpu attribute of the loc model, so that can be shared between processes.
+        """
+
+        self._network.to('cpu')
+        self.optimizer = None
+        self.scheduler = None
+        self._data_simulator = None
