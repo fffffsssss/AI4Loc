@@ -278,11 +278,13 @@ class EmbeddingLayer(nn.Module):
         # x = self.position_encoding(x)
 
         # attention mask for each frame, can only see attn_length//2 frames around it
-        if self.attn_mask.shape[0] == context_size:
-            attn_mask = self.attn_mask.clone()
-        else:
+        if self.attn_mask is None or self.attn_mask.shape[0] != context_size:
             self.attn_mask = get_attn_mask(context_size, self.attn_length).cuda()
             attn_mask = self.attn_mask.clone()
+        elif self.attn_mask.shape[0] == context_size:
+            attn_mask = self.attn_mask.clone()
+        else:
+            raise ValueError("attn_mask shape is not correct")
 
         return x, attn_mask
 

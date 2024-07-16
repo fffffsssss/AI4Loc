@@ -1265,7 +1265,7 @@ class CompetitiveSmlmDataAnalyzer:
 
         mp.set_start_method('spawn', force=True)
 
-        self.loc_model = loc_model
+        self.loc_model = copy.deepcopy(loc_model)
         self.tiff_path = pathlib.Path(tiff_path)
         self.output_path = output_path
         self.time_block_gb = time_block_gb

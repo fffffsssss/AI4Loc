@@ -173,7 +173,6 @@ def plot_syncloc_record(model):
 
         plt.close(fig)
 
-    print('Plot done, saving the .gif')
     # zernike_phase_3d = np.stack(zernike_phase_list, axis=0)
 
     return zernike_phase_list

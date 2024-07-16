@@ -428,6 +428,7 @@ class TransLoc(ailoc.common.XXLoc):
         """
 
         self._network.to('cpu')
+        self._network.tam.embedding_layer.attn_mask = None
         self.optimizer = None
         self.scheduler = None
         self._data_simulator = None

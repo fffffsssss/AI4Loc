@@ -7,7 +7,7 @@ import ailoc.common
 import ailoc.simulation
 
 
-def spatial_integration_old(p_pred, thre_candi_1=0.3, thre_candi_2=0.6):
+def spatial_integration_v1(p_pred, thre_candi_1=0.3, thre_candi_2=0.6):
     """
     Extract local maximum from the probability map. Two situations are considered
 
@@ -101,7 +101,7 @@ def spatial_integration(p_pred, thre_candi_1=0.3, thre_candi_2=0.6):
         return p_integrated_candidate[:, 0]
 
 
-def sample_prob_old(p_pred, batch_size, thre_integrated=0.7, thre_candi_1=0.3, thre_candi_2=0.6):
+def sample_prob_v1(p_pred, batch_size, thre_integrated=0.7, thre_candi_1=0.3, thre_candi_2=0.6):
     """
     Sample the probability map to get the binary map that indicates the existence of a molecule.
 
@@ -149,7 +149,7 @@ def sample_prob(p_pred, batch_size, thre_integrated=0.7, thre_candi_1=0.3, thre_
     return p_sampled
 
 
-def inference_map_to_localizations_old(inference_dict, pixel_size_xy, z_scale, photon_scale):
+def inference_map_to_localizations_v1(inference_dict, pixel_size_xy, z_scale, photon_scale):
     """
     Convert inference map to a list of molecules. The returned list is in the format of
     [frame, x, y, z, photon, integrated prob,
@@ -257,7 +257,7 @@ def inference_map_to_localizations(p_sampled,
     return pred_mol_array
 
 
-def gmm_to_localizations_old(inference_dict, thre_integrated, pixel_size_xy, z_scale, photon_scale, bg_scale, batch_size):
+def gmm_to_localizations_v1(inference_dict, thre_integrated, pixel_size_xy, z_scale, photon_scale, bg_scale, batch_size):
     """
     Postprocess the GMM posterior to the molecule list.
 
