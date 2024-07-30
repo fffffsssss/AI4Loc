@@ -1276,7 +1276,6 @@ class CompetitiveSmlmDataAnalyzer:
         self.fov_xy_start = fov_xy_start if fov_xy_start is not None else (0, 0)
         self.multi_GPU = multi_GPU
         self.pixel_size_xy = ailoc.common.cpu(loc_model.data_simulator.psf_model.pixel_size_xy)
-        # self.pixel_size_xy = (100,100)
         self.end_frame_num = end_frame_num
 
         print(f'the file to save the predictions is: {self.output_path}')
@@ -1378,6 +1377,11 @@ class CompetitiveSmlmDataAnalyzer:
 
         self.loc_model.remove_gpu_attribute()
         self.print_lock = mp.Lock()
+        self.total_result_item_num = 0
+        for slice_tmp in self.frame_slice:
+            self.total_result_item_num += int(np.ceil(self.tiff_shape[-1] / sub_fov_size)) * int(
+                np.ceil(self.tiff_shape[-2] / sub_fov_size)) * np.ceil(
+                (slice_tmp.stop - slice_tmp.start) / batch_size)
 
         self.public_producer = mp.Process(target=self.producer_func,
                                    args=(
@@ -1415,11 +1419,7 @@ class CompetitiveSmlmDataAnalyzer:
                 self.num_consumers,
                 self.pixel_size_xy,
                 self.print_lock,
-                self.start_frame_num,
-                self.end_frame_num,
-                self.tiff_shape,
-                self.sub_fov_size,
-                self.batch_size,
+                self.total_result_item_num,
             )
         )
 
@@ -1611,11 +1611,7 @@ class CompetitiveSmlmDataAnalyzer:
             num_consumers,
             pixel_size_xy,
             print_lock,
-            start_frame_num,
-            end_frame_num,
-            tiff_shape,
-            sub_fov_size,
-            batch_size,
+            total_result_item_num,
     ):
 
         with print_lock:
@@ -1627,7 +1623,6 @@ class CompetitiveSmlmDataAnalyzer:
         with open(output_path, 'a', newline='') as csvfile:
             csvwriter = csv.writer(csvfile, delimiter=',', quoting=csv.QUOTE_MINIMAL)
 
-            total_result_item_num = int(np.ceil(tiff_shape[-1] / sub_fov_size)) * int(np.ceil(tiff_shape[-2] / sub_fov_size)) * np.ceil((end_frame_num-start_frame_num) / batch_size)
             patience = total_result_item_num//20
             finished_item_num = 0
             time_recent = time.monotonic()
@@ -1643,8 +1638,9 @@ class CompetitiveSmlmDataAnalyzer:
                 if finished_item_num > 0 and finished_item_num % patience == 0:
                     time_cost_recent = time.monotonic() - time_recent
                     time_recent = time.monotonic()
-                    print(f'Analysis progress: {finished_item_num/total_result_item_num*100:.2f}%, '
-                          f'ETA: {time_cost_recent/patience*(total_result_item_num-finished_item_num):.0f}s')
+                    with print_lock:
+                        print(f'Analysis progress: {finished_item_num/total_result_item_num*100:.2f}%, '
+                              f'ETA: {time_cost_recent/patience*(total_result_item_num-finished_item_num):.0f}s')
 
                 t0 = time.monotonic()
                 try:
