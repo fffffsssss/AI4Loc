@@ -118,7 +118,7 @@ def sample_prob_v1(p_pred, batch_size, thre_integrated=0.7, thre_candi_1=0.3, th
     p_integrated = np.zeros_like(p_pred)
     for i in range(int(np.ceil(num_img/batch_size))):
         slice_tmp = np.index_exp[i*batch_size: min((i+1)*batch_size, num_img)]
-        p_integrated[slice_tmp] = spatial_integration_old(p_pred[slice_tmp], thre_candi_1, thre_candi_2)
+        p_integrated[slice_tmp] = spatial_integration_v1(p_pred[slice_tmp], thre_candi_1, thre_candi_2)
 
     p_sampled = np.where(p_integrated > thre_integrated, 1, 0)
 
@@ -274,8 +274,8 @@ def gmm_to_localizations_v1(inference_dict, thre_integrated, pixel_size_xy, z_sc
         (np.ndarray, dict): the molecule list with frame ordered based on the input dict, the modified inference dict.
     """
 
-    inference_dict['prob_sampled'] = sample_prob_old(inference_dict['prob'], batch_size, thre_integrated)
-    molecule_array = inference_map_to_localizations_old(inference_dict, ailoc.common.cpu(pixel_size_xy), z_scale, photon_scale)
+    inference_dict['prob_sampled'] = sample_prob_v1(inference_dict['prob'], batch_size, thre_integrated)
+    molecule_array = inference_map_to_localizations_v1(inference_dict, ailoc.common.cpu(pixel_size_xy), z_scale, photon_scale)
     inference_dict['bg_sampled'] = inference_dict['bg'] * bg_scale
 
     return molecule_array, inference_dict
