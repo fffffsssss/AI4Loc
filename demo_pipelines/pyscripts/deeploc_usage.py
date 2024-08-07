@@ -204,9 +204,10 @@ def deeploc_analyze():
 
 def deeploc_competitive_analyze():
 
-    loc_model_path = '../../results/2024-05-29-21-47DeepLoc.pt'
+    loc_model_path = '../../results/2024-04-11-19-00DeepLoc.pt'
     # can be a tiff file path or a folder path
-    image_path = '../../datasets/sw_npc_20211028/NUP96_SNP647_3D_512_20ms_hama_mm_1800mW_3'
+    # image_path = '../../datasets/sw_npc_20211028/NUP96_SNP647_3D_512_20ms_hama_mm_1800mW_3'
+    image_path = 'Y:/Users/Fei_Yue/fig4_edfig6_sifig8_largeFOV_astigmatism_NPC/fig4_edfig6_sifig8_largeFOV_astigmatism_NPC/raw_data'
     save_path = '../../results/' + \
                 os.path.split(loc_model_path)[-1].split('.')[0] + \
                 '_' + os.path.basename(image_path) + '_predictions.csv'
@@ -218,7 +219,7 @@ def deeploc_competitive_analyze():
     # # plot evaluation performance during the training
     # ailoc.common.plot_train_record(deeploc_model)
 
-    deeploc_analyzer = ailoc.common.CompetitiveSmlmDataAnalyzer_v2(
+    deeploc_analyzer = ailoc.common.CompetitiveSmlmDataAnalyzer(
         loc_model=deeploc_model,
         tiff_path=image_path,
         output_path=save_path,
@@ -253,7 +254,7 @@ def deeploc_competitive_analyze():
 
 
 if __name__ == '__main__':
-    deeploc_train()
+    # deeploc_train()
     # deeploc_ckpoint_train()
     # deeploc_analyze()
-    # deeploc_competitive_analyze()
+    deeploc_competitive_analyze()
