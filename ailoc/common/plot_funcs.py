@@ -76,7 +76,7 @@ def plot_train_record(model):
     plt.show(block=True)
 
 
-def plot_syncloc_record(model):
+def plot_synclearning_record(model):
     recorder = model.evaluation_recorder
 
     plt.figure(figsize=(9, 6), constrained_layout=True)

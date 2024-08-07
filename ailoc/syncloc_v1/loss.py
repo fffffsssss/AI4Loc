@@ -84,3 +84,26 @@ def sample_loss(p_pred, p_gt):
 def bg_loss(bg_pred, bg_gt):
     loss_bg = nn.MSELoss(reduction='none')(bg_pred, bg_gt)
     return loss_bg.sum([-2, -1])
+
+
+def compute_log_p_x_given_h(data, model):
+    # log_p_x_given_h = - model + data + data*torch.log(model/data)
+    log_p_x_given_h = data * torch.log(model) - model - torch.lgamma(data + 1)
+    return log_p_x_given_h.sum([-2, -1])
+
+
+def compute_log_q_h_given_x(mu, sig, delta, data):
+    num_sample = delta.shape[1]
+    gauss = torch.distributions.Normal(mu[:, None].expand(-1, num_sample, -1, -1, -1),
+                                       sig[:, None].expand(-1, num_sample, -1, -1, -1))
+    log_q_h_given_x = gauss.log_prob(data.permute([1, 2, 0, 3, 4])).sum(2)*delta
+    return log_q_h_given_x.sum([-2, -1])
+
+
+if __name__ == '__main__':
+    xyzph_pred = torch.rand(16, 4, 64, 64, requires_grad=True)
+    xyzph_sig_pred = torch.rand(16, 4, 64, 64)
+    delta_map_sample = torch.distributions.Bernoulli(torch.ones(16, 40, 64, 64)*0.5).sample()
+    xyzph_map_sample = torch.rand(16, 40, 4, 64, 64)
+    loss = compute_log_q_h_given_x(xyzph_pred, xyzph_sig_pred, delta_map_sample, xyzph_map_sample)
+    print(loss.detach().numpy())
