@@ -444,11 +444,15 @@ class SmlmDataAnalyzer:
                           self.fov_xy_start[1] * self.pixel_size_xy[1],
                           (self.fov_xy_start[1] + self.tiff_dataset.tiff_shape[-2]) * self.pixel_size_xy[1])
 
-    def divide_and_conquer(self):
+    def divide_and_conquer(self, resample=False):
         """
         Analyze a large tiff file through loading images into the RAM by time block, each time block will be
         divided into sub-FOVs and analyzed separately.
 
+        Args:
+            resample: If true, resample the xy offsets to reduce grid artifacts in the
+                difficult conditions (low SNR, high density, etc.), replace the original
+                xnm and ynm with x_rescale and y_rescale'
         Returns:
             np.ndarray: return the localization results.
         """
@@ -514,56 +518,70 @@ class SmlmDataAnalyzer:
                 ailoc.common.write_csv_array(input_array=molecule_list_block, filename=self.output_path,
                                              write_mode='append localizations')
 
-        # # histogram equalization for grid artifacts removal
-        # time_start = time.time()
-        #
-        # print_message_tmp = 'applying histogram equalization to the xy offsets to avoid grid artifacts ' \
-        #                     'in the difficult conditions (low SNR, high density, etc.) ' \
-        #                     'replace the original xnm and ynm with x_rescale and y_rescale'
-        # print(print_message_tmp)
-        # self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
-        #
-        # preds_norescale_array = ailoc.common.read_csv_array(self.output_path)
-        # preds_rescale_array = ailoc.common.rescale_offset(preds_norescale_array, pixel_size=self.pixel_size_xy,
-        #                                                   rescale_bins=20, sig_3d=False)
-        # tmp_path = os.path.dirname(self.output_path) + '/' + os.path.basename(self.output_path).split('.')[0] + '_rescale.csv'
-        # ailoc.common.write_csv_array(preds_rescale_array, filename=tmp_path,
-        #                              write_mode='write localizations')
-        #
-        # print_message_tmp = f'histogram equalization finished, time cost (min): {(time.time() - time_start) / 60:.2f}'
-        # print(print_message_tmp)
-        # self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
-        #
-        # print_message_tmp = f'the file to save the predictions is: {tmp_path}'
-        # print(print_message_tmp)
-        # self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+        preds_array = ailoc.common.read_csv_array(self.output_path)
+        if resample:
+            # # histogram equalization for grid artifacts removal
+            # time_start = time.time()
+            #
+            # print_message_tmp = 'applying histogram equalization to the xy offsets to avoid grid artifacts ' \
+            #                     'in the difficult conditions (low SNR, high density, etc.) ' \
+            #                     'replace the original xnm and ynm with x_rescale and y_rescale'
+            # print(print_message_tmp)
+            # self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+            #
+            # preds_array_re = ailoc.common.rescale_offset(
+            #     preds_array,
+            #     pixel_size=self.pixel_size_xy,
+            #     rescale_bins=20,
+            #     sig_3d=False
+            # )
+            # tmp_path = os.path.dirname(self.output_path) + '/' + os.path.basename(self.output_path).split('.')[0] + '_rescale.csv'
+            # ailoc.common.write_csv_array(
+            #     preds_array_re,
+            #     filename=tmp_path,
+            #     write_mode='write localizations'
+            # )
+            #
+            # print_message_tmp = f'histogram equalization finished, time cost (min): {(time.time() - time_start) / 60:.2f}'
+            # print(print_message_tmp)
+            # self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+            #
+            # print_message_tmp = f'the file to save the predictions is: {tmp_path}'
+            # print(print_message_tmp)
+            # self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
-        # resampling the localizations with large uncertainty to avoid the grid artifacts
-        time_start = time.time()
+            # resampling the localizations with large uncertainty to avoid the grid artifacts
+            time_start = time.time()
 
-        print_message_tmp = 'resample the xy offsets to reduce grid artifacts ' \
-                            'in the difficult conditions (low SNR, high density, etc.) ' \
-                            'replace the original xnm and ynm with x_rescale and y_rescale'
-        print(print_message_tmp)
-        self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+            print_message_tmp = 'resample the xy offsets to reduce grid artifacts ' \
+                                'in the difficult conditions (low SNR, high density, etc.) ' \
+                                'replace the original xnm and ynm with x_rescale and y_rescale'
+            print(print_message_tmp)
+            self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
-        preds_norescale_array = ailoc.common.read_csv_array(self.output_path)
-        preds_rescale_array = ailoc.common.resample_offset(preds_norescale_array,
-                                                           pixel_size=self.pixel_size_xy,
-                                                           threshold=0.25)
-        tmp_path = os.path.dirname(self.output_path) + '/' + os.path.basename(self.output_path).split('.csv')[0] + '_resample.csv'
-        ailoc.common.write_csv_array(preds_rescale_array, filename=tmp_path,
-                                     write_mode='write localizations')
+            preds_array_re = ailoc.common.resample_offset(
+                preds_array,
+                pixel_size=self.pixel_size_xy,
+                threshold=0.25
+            )
+            tmp_path = os.path.dirname(self.output_path) + '/' + os.path.basename(self.output_path).split('.csv')[0] + '_resample.csv'
+            ailoc.common.write_csv_array(
+                preds_array_re,
+                filename=tmp_path,
+                write_mode='write localizations'
+            )
 
-        print_message_tmp = f'resample finished, time cost (min): {(time.time() - time_start) / 60:.2f}'
-        print(print_message_tmp)
-        self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+            print_message_tmp = f'resample finished, time cost (min): {(time.time() - time_start) / 60:.2f}'
+            print(print_message_tmp)
+            self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
-        print_message_tmp = f'the file to save the resampled predictions is: {tmp_path}'
-        print(print_message_tmp)
-        self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+            print_message_tmp = f'the file to save the resampled predictions is: {tmp_path}'
+            print(print_message_tmp)
+            self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+        else:
+            preds_array_re = None
 
-        return preds_norescale_array, preds_rescale_array
+        return preds_array, preds_array_re
 
     def check_single_frame_output(self, frame_num):
         """

@@ -35,9 +35,11 @@ class SyncLoc_LocLearning(ailoc.common.XXLoc):
         assert self.attn_length % 2 == 1, 'attn_length should be odd'
         # add frames at the beginning and end to provide context
         self.context_size = sampler_params_dict['context_size'] + 2*(self.attn_length//2) if self.temporal_attn else sampler_params_dict['context_size']
-        self._network = ailoc.syncloc.SyncLocNet(self.temporal_attn,
-                                                   self.attn_length,
-                                                   self.context_size,)
+        self._network = ailoc.syncloc.SyncLocNet(
+            self.temporal_attn,
+            self.attn_length,
+            self.context_size,
+        )
 
         self.evaluation_dataset = {}
         self.evaluation_recorder = self._init_recorder()

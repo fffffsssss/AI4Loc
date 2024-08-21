@@ -210,10 +210,12 @@ class SyncLocNet(nn.Module):
         self.n_features = 48
 
         # feature extraction module
-        self.fem = U_NeXt(c_input=1,
-                          c_output=self.n_features,
-                          n_stages=2,
-                          kernel_size=5).cuda()
+        self.fem = U_NeXt(
+            c_input=1,
+            c_output=self.n_features,
+            n_stages=2,
+            kernel_size=5
+        ).cuda()
 
         # import ailoc.deeploc
         # self.fem = ailoc.deeploc.Unet(n_inp=1,
@@ -231,16 +233,18 @@ class SyncLocNet(nn.Module):
         if self.temporal_attn:
             # temporal attention module
             patch_size = 1
-            self.tam = ailoc.syncloc.TransformerBlock(seq_length=train_context_size,
-                                                       attn_length=attn_length,
-                                                       c_input=self.n_features,
-                                                       patch_size=patch_size,
-                                                       embedding_dim=(patch_size**2)*self.n_features,
-                                                       num_layers=1,
-                                                       num_heads=1,
-                                                       mlp_dim=(patch_size**2)*4*self.n_features,
-                                                       dropout_rate=0.0,
-                                                       context_dropout=0.5).cuda()
+            self.tam = ailoc.syncloc.TransformerBlock(
+                seq_length=train_context_size,
+                attn_length=attn_length,
+                c_input=self.n_features,
+                patch_size=patch_size,
+                embedding_dim=(patch_size ** 2) * self.n_features,
+                num_layers=1,
+                num_heads=1,
+                mlp_dim=(patch_size ** 2) * 4 * self.n_features,
+                dropout_rate=0.0,
+                context_dropout=0.5
+            ).cuda()
 
             # # Unext based temporal attention module
             # self.tam = U_NeXt(c_input=self.n_features * 3,
