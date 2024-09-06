@@ -332,6 +332,20 @@ def fig2data(fig):
     return image
 
 
+def print_learning_params(psf_params_dict, camera_params_dict, sampler_params_dict):
+    for params_dict in [psf_params_dict, camera_params_dict, sampler_params_dict]:
+        for keys in params_dict.keys():
+            if keys == 'zernike_mode':
+                params = params_dict[keys].transpose()
+                print(f"{keys}:\n {params}")
+            elif keys == 'zernike_coef':
+                params = np.around(params_dict[keys], decimals=1)
+                print(f"{keys}:\n {params}")
+            else:
+                params = params_dict[keys]
+                print(f"{keys}: {params}")
+
+
 if __name__ == "__main__":
     # Generate a figure with matplotlib</font>
     figure = plt.figure()
