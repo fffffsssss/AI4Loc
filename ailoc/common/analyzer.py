@@ -1756,3 +1756,93 @@ class CompetitiveSmlmDataAnalyzer:
                   f'    process time {process_time}, \n'
                   f'    format time {format_time}, \n'
                   f'    write time {write_time}')
+
+    def check_single_frame_output(self, frame_num):
+        """
+        check the network outputs of a single frame
+
+        Args:
+            frame_num (int): the frame to be checked, start from 0
+        """
+
+        assert self.sum_file_length > frame_num >= 0, \
+            f'frame_num {frame_num} is not in the valid range: [0-{self.sum_file_length - 1}]'
+
+        local_context = getattr(self.loc_model, 'local_context', False)  # for DeepLoc model
+        temporal_attn = getattr(self.loc_model, 'temporal_attn', False)  # for TransLoc model
+        assert not (local_context and temporal_attn), 'local_context and temporal_attn cannot be both True'
+
+        # need to put the loc_model to the GPU, like the consumer func does
+        torch.cuda.set_device('cuda:0')
+        self.loc_model.network.to('cuda:0')
+        self.loc_model._data_simulator = ailoc.simulation.Simulator(
+            self.loc_model.dict_psf_params,
+            self.loc_model.dict_camera_params,
+            self.loc_model.dict_sampler_params
+        )
+
+        if local_context:
+            extra_length = 1
+        elif temporal_attn:
+            extra_length = self.loc_model.attn_length // 2
+        else:
+            extra_length = 0
+
+        idx_list = SmlmDataAnalyzer.get_context_index(self.sum_file_length, frame_num, extra_length)
+
+        # get specific frames with temporal context
+        files_to_read = []
+        slice_for_files = []
+        for frame_num in idx_list:
+            for file_name, file_range in zip(self.file_name_list, self.file_range_list):
+                if file_range[0] <= frame_num <= file_range[1]:
+                    files_to_read.append(file_name)
+                    slice_for_files.append(slice(frame_num - file_range[0], frame_num - file_range[0] + 1))
+        frames = []
+        for file_name, slice_for_file in zip(files_to_read, slice_for_files):
+            data_tmp = tifffile.imread(file_name, key=slice_for_file)
+            data_tmp = data_tmp[None] if data_tmp.ndim == 2 else data_tmp
+            frames.append(data_tmp)
+        frames = np.concatenate(frames, axis=0)
+
+        data_block = frames
+
+        sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list = split_fov(data=data_block,
+                                                                                 fov_xy=self.fov_xy,
+                                                                                 sub_fov_size=self.sub_fov_size,
+                                                                                 over_cut=self.over_cut)
+
+        sub_fov_molecule_list = []
+        sub_fov_inference_list = []
+        for i_fov in range(len(sub_fov_data_list)):
+            print(f'\rProcessing sub-FOV: {i_fov + 1}/{len(sub_fov_xy_list)}, {sub_fov_xy_list[i_fov]}, '
+                  f'keep molecules in: {original_sub_fov_xy_list[i_fov]}, '
+                  f'loc model: {type(self.loc_model)}', end='')
+
+            with autocast():
+                molecule_list_tmp, inference_dict_tmp = data_analyze(loc_model=self.loc_model,
+                                                                     data=sub_fov_data_list[i_fov],
+                                                                     sub_fov_xy=sub_fov_xy_list[i_fov],
+                                                                     camera=self.camera,
+                                                                     batch_size=self.batch_size,
+                                                                     retain_infer_map=True)
+
+            sub_fov_molecule_list.append(molecule_list_tmp)
+            sub_fov_inference_list.append(inference_dict_tmp)
+        print('')
+
+        merge_inference_dict = SmlmDataAnalyzer.merge_sub_fov_inference(
+            sub_fov_inference_list,
+            sub_fov_xy_list,
+            original_sub_fov_xy_list,
+            self.sub_fov_size,
+            local_context or temporal_attn,
+            extra_length,
+            self.tiff_shape
+        )
+        merge_inference_dict['raw_image'] = data_block[extra_length]
+
+        ailoc.common.plot_single_frame_inference(merge_inference_dict)
+
+        # remove the GPU attribute
+        self.loc_model.remove_gpu_attribute()
