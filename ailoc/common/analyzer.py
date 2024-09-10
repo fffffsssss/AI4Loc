@@ -444,15 +444,15 @@ class SmlmDataAnalyzer:
                           self.fov_xy_start[1] * self.pixel_size_xy[1],
                           (self.fov_xy_start[1] + self.tiff_dataset.tiff_shape[-2]) * self.pixel_size_xy[1])
 
-    def divide_and_conquer(self, resample=False):
+    def divide_and_conquer(self, degrid=False):
         """
         Analyze a large tiff file through loading images into the RAM by time block, each time block will be
         divided into sub-FOVs and analyzed separately.
 
         Args:
-            resample: If true, resample the xy offsets to reduce grid artifacts in the
+            degrid: If true, adjust the xy offsets to reduce grid artifacts in the
                 difficult conditions (low SNR, high density, etc.), replace the original
-                xnm and ynm with x_rescale and y_rescale'
+                xnm and ynm with x_rescale and y_rescale, this does not affect the localization metric
         Returns:
             np.ndarray: return the localization results.
         """
@@ -519,43 +519,43 @@ class SmlmDataAnalyzer:
                                              write_mode='append localizations')
 
         preds_array = ailoc.common.read_csv_array(self.output_path)
-        if resample:
-            # # histogram equalization for grid artifacts removal
-            # time_start = time.time()
-            #
-            # print_message_tmp = 'applying histogram equalization to the xy offsets to avoid grid artifacts ' \
-            #                     'in the difficult conditions (low SNR, high density, etc.) ' \
-            #                     'replace the original xnm and ynm with x_rescale and y_rescale'
-            # print(print_message_tmp)
-            # self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
-            #
-            # preds_array_re = ailoc.common.rescale_offset(
-            #     preds_array,
-            #     pixel_size=self.pixel_size_xy,
-            #     rescale_bins=20,
-            #     sig_3d=False
-            # )
-            # tmp_path = os.path.dirname(self.output_path) + '/' + os.path.basename(self.output_path).split('.')[0] + '_rescale.csv'
-            # ailoc.common.write_csv_array(
-            #     preds_array_re,
-            #     filename=tmp_path,
-            #     write_mode='write localizations'
-            # )
-            #
-            # print_message_tmp = f'histogram equalization finished, time cost (min): {(time.time() - time_start) / 60:.2f}'
-            # print(print_message_tmp)
-            # self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
-            #
-            # print_message_tmp = f'the file to save the predictions is: {tmp_path}'
-            # print(print_message_tmp)
-            # self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+        if degrid:  # todo: wait for determining the degrid method
+            # histogram equalization for grid artifacts removal
+            time_start = time.time()
+
+            print_message_tmp = 'applying histogram equalization to the xy offsets to avoid grid artifacts ' \
+                                'in the difficult conditions (low SNR, high density, etc.) ' \
+                                'replace the original xnm and ynm with x_rescale and y_rescale'
+            print(print_message_tmp)
+            self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+
+            preds_array_re = ailoc.common.rescale_offset(
+                preds_array,
+                pixel_size=self.pixel_size_xy,
+                rescale_bins=20,
+                sig_3d=False
+            )
+            tmp_path = os.path.dirname(self.output_path) + '/' + os.path.basename(self.output_path).split('.')[0] + '_rescale.csv'
+            ailoc.common.write_csv_array(
+                preds_array_re,
+                filename=tmp_path,
+                write_mode='write localizations'
+            )
+
+            print_message_tmp = f'histogram equalization finished, time cost (min): {(time.time() - time_start) / 60:.2f}'
+            print(print_message_tmp)
+            self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+
+            print_message_tmp = f'the file to save the rescaled predictions is: {tmp_path}'
+            print(print_message_tmp)
+            self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
             # resampling the localizations with large uncertainty to avoid the grid artifacts
             time_start = time.time()
 
             print_message_tmp = 'resample the xy offsets to reduce grid artifacts ' \
                                 'in the difficult conditions (low SNR, high density, etc.) ' \
-                                'replace the original xnm and ynm with x_rescale and y_rescale'
+                                'replace the original xnm and ynm with x_resample and y_resample'
             print(print_message_tmp)
             self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
@@ -1253,6 +1253,7 @@ class CompetitiveSmlmDataAnalyzer:
                  sub_fov_size=256,
                  over_cut=8,
                  multi_GPU=False,
+                 num_producers=1,
                  camera=None,
                  fov_xy_start=None,
                  end_frame_num=None,):
@@ -1279,6 +1280,8 @@ class CompetitiveSmlmDataAnalyzer:
                 an FD-DeepLoc model trained with pixel-wise field-dependent aberration, this parameter should be carefully
                 set to ensure the consistency of the input data position relative to the training aberration map.
             end_frame_num (int or None): the end frame number to analyze, if None, analyze all frames
+            num_producers (int): the number of producers to load the tiff file and do the preprocess,
+                useful when inference is too quick and the producer is the bottleneck
         """
 
         mp.set_start_method('spawn', force=True)
@@ -1295,6 +1298,7 @@ class CompetitiveSmlmDataAnalyzer:
         self.multi_GPU = multi_GPU
         self.pixel_size_xy = ailoc.common.cpu(loc_model.data_simulator.psf_model.pixel_size_xy)
         self.end_frame_num = end_frame_num
+        self.num_producers = num_producers
 
         print(f'the file to save the predictions is: {self.output_path}')
 
@@ -1388,7 +1392,7 @@ class CompetitiveSmlmDataAnalyzer:
             item = [slice_start, slice_end, files_to_read, slice_for_files]
             self.file_read_list_queue.put(item)
 
-        # instantiate one producer and multiple consumer
+        # instantiate producer and consumer
         self.num_consumers = torch.cuda.device_count() if self.multi_GPU else 1
         self.batch_data_queue = mp.JoinableQueue(maxsize=self.time_block_n_img)
         self.result_queue = mp.JoinableQueue()
@@ -1401,18 +1405,37 @@ class CompetitiveSmlmDataAnalyzer:
                 np.ceil(self.tiff_shape[-2] / sub_fov_size)) * np.ceil(
                 (slice_tmp.stop - slice_tmp.start) / batch_size)
 
-        self.public_producer = mp.Process(target=self.producer_func,
-                                   args=(
-                                       self.loc_model,
-                                       self.file_read_list_queue,
-                                       self.batch_size,
-                                       self.sub_fov_size,
-                                       self.over_cut,
-                                       self.fov_xy,
-                                       self.batch_data_queue,
-                                       self.num_consumers,
-                                       self.print_lock
-                                   ))
+        # # only one producer
+        # self.public_producer = mp.Process(target=self.producer_func,
+        #                            args=(
+        #                                self.loc_model,
+        #                                self.file_read_list_queue,
+        #                                self.batch_size,
+        #                                self.sub_fov_size,
+        #                                self.over_cut,
+        #                                self.fov_xy,
+        #                                self.batch_data_queue,
+        #                                self.num_consumers,
+        #                                self.print_lock
+        #                            ))
+
+        # multiple producers
+        self.producer_list = []
+        for producer_idx in range(self.num_producers):
+            self.file_read_list_queue.put(None)
+            self.producer_list.append(mp.Process(target=self.producer_func,
+                                                 args=(
+                                                     self.loc_model,
+                                                     self.file_read_list_queue,
+                                                     self.batch_size,
+                                                     self.sub_fov_size,
+                                                     self.over_cut,
+                                                     self.fov_xy,
+                                                     self.batch_data_queue,
+                                                     self.num_consumers,
+                                                     self.print_lock,
+                                                     producer_idx,
+                                                 )))
 
         self.consumer_list = []
         for i in range(self.num_consumers):
@@ -1448,12 +1471,16 @@ class CompetitiveSmlmDataAnalyzer:
 
         print(f'{mp.current_process().name}, id is {os.getpid()}')
 
-        self.public_producer.start()
+        # self.public_producer.start()
+        for producer in self.producer_list:
+            producer.start()
         self.saver.start()
         for consumer in self.consumer_list:
             consumer.start()
 
-        self.public_producer.join()
+        # self.public_producer.join()
+        for producer in self.producer_list:
+            producer.join()
         self.saver.join()
         for consumer in self.consumer_list:
             consumer.join()
@@ -1469,10 +1496,11 @@ class CompetitiveSmlmDataAnalyzer:
             batch_data_queue,
             num_consumers,
             print_lock,
+            producer_idx,
     ):
 
         with print_lock:
-            print(f'enter the producer process: {os.getpid()}')
+            print(f'enter the producer {producer_idx} process: {os.getpid()}')
 
         # for rolling inference strategy
         local_context = getattr(loc_model, 'local_context', False)  # for DeepLoc model
@@ -1486,11 +1514,17 @@ class CompetitiveSmlmDataAnalyzer:
         elif temporal_attn:
             extra_length = loc_model.attn_length // 2
 
+        pre_process_time = 0
         while True:
             try:
                 file_read_list = file_read_list_queue.get_nowait()
             except queue.Empty:
+                continue
+
+            if file_read_list is None:
                 break
+
+            t0 = time.monotonic()
 
             slice_start = file_read_list[0]
             slice_end = file_read_list[1]
@@ -1526,11 +1560,14 @@ class CompetitiveSmlmDataAnalyzer:
                                                                                      sub_fov_size=sub_fov_size,
                                                                                      over_cut=over_cut)
 
+            pre_process_time += time.monotonic() - t0
+
             # put the sub-FOV batch data in the shared queue
             for i_fov in range(len(sub_fov_data_list)):
                 # for each batch, rolling inference needs to take 2 more images at the beginning and end, but only needs
                 # to return the molecule list for the middle images
                 for i in range(int(np.ceil(num_img / batch_size))):
+                    t1 = time.monotonic()
                     if rolling_inference:
                         item = {
                             'data': torch.tensor(
@@ -1546,11 +1583,18 @@ class CompetitiveSmlmDataAnalyzer:
                             'original_sub_fov_xy': original_sub_fov_xy_list[i_fov],
                             'frame_num': slice_start + i * batch_size,
                         }
+                    pre_process_time += time.monotonic() - t1
                     batch_data_queue.put(item)
 
-        for i in range(num_consumers):
-            batch_data_queue.put(None)
-        batch_data_queue.join()
+        batch_data_queue.join()  # all producers wait here until the batch data queue is empty
+        if producer_idx == 0:
+            for i in range(int(num_consumers)):
+                batch_data_queue.put(None)  # put the end signal to the batch data queue
+            batch_data_queue.join()  # producer 0 waits here until all consumers finish
+        with print_lock:
+            print(f'Producer {producer_idx}, \n'
+                  f'    preprocess time {pre_process_time}')
+
 
     @staticmethod
     def consumer_func(
@@ -1617,10 +1661,10 @@ class CompetitiveSmlmDataAnalyzer:
 
         with print_lock:
             print(f'Consumer {os.getpid()}, '
-                  f'device: {device}, '
-                  f'total data get time: {get_time}, '
-                  f'analyze time: {anlz_time}, '
-                  f'item counts: {item_counts}')
+                  f'device: {device}, \n'
+                  f'    total data get time: {get_time}, \n'
+                  f'    analyze time: {anlz_time}, \n'
+                  f'    item counts: {item_counts}')
 
     @staticmethod
     def saver_func(
@@ -1707,8 +1751,8 @@ class CompetitiveSmlmDataAnalyzer:
                     finished_item_num += 1
 
         with print_lock:
-            print(f'Saver {os.getpid()}, '
-                  f'total result get time {get_time}, '
-                  f'process time {process_time}, '
-                  f'format time {format_time}, '
-                  f'write time {write_time}')
+            print(f'Saver {os.getpid()}, \n'
+                  f'    total result get time {get_time}, \n'
+                  f'    process time {process_time}, \n'
+                  f'    format time {format_time}, \n'
+                  f'    write time {write_time}')
