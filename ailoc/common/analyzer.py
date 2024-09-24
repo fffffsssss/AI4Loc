@@ -533,9 +533,8 @@ class SmlmDataAnalyzer:
                 preds_array,
                 pixel_size=self.pixel_size_xy,
                 rescale_bins=20,
-                sig_3d=False
             )
-            tmp_path = os.path.dirname(self.output_path) + '/' + os.path.basename(self.output_path).split('.')[0] + '_rescale.csv'
+            tmp_path = os.path.dirname(self.output_path) + '/' + os.path.basename(self.output_path).split('.csv')[0] + '_rescale.csv'
             ailoc.common.write_csv_array(
                 preds_array_re,
                 filename=tmp_path,
@@ -550,34 +549,34 @@ class SmlmDataAnalyzer:
             print(print_message_tmp)
             self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
 
-            # resampling the localizations with large uncertainty to avoid the grid artifacts
-            time_start = time.time()
-
-            print_message_tmp = 'resample the xy offsets to reduce grid artifacts ' \
-                                'in the difficult conditions (low SNR, high density, etc.) ' \
-                                'replace the original xnm and ynm with x_resample and y_resample'
-            print(print_message_tmp)
-            self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
-
-            preds_array_re = ailoc.common.resample_offset(
-                preds_array,
-                pixel_size=self.pixel_size_xy,
-                threshold=0.25
-            )
-            tmp_path = os.path.dirname(self.output_path) + '/' + os.path.basename(self.output_path).split('.csv')[0] + '_resample.csv'
-            ailoc.common.write_csv_array(
-                preds_array_re,
-                filename=tmp_path,
-                write_mode='write localizations'
-            )
-
-            print_message_tmp = f'resample finished, time cost (min): {(time.time() - time_start) / 60:.2f}'
-            print(print_message_tmp)
-            self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
-
-            print_message_tmp = f'the file to save the resampled predictions is: {tmp_path}'
-            print(print_message_tmp)
-            self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+            # # resampling the localizations with large uncertainty to avoid the grid artifacts
+            # time_start = time.time()
+            #
+            # print_message_tmp = 'resample the xy offsets to reduce grid artifacts ' \
+            #                     'in the difficult conditions (low SNR, high density, etc.) ' \
+            #                     'replace the original xnm and ynm with x_resample and y_resample'
+            # print(print_message_tmp)
+            # self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+            #
+            # preds_array_re = ailoc.common.resample_offset(
+            #     preds_array,
+            #     pixel_size=self.pixel_size_xy,
+            #     threshold=0.25
+            # )
+            # tmp_path = os.path.dirname(self.output_path) + '/' + os.path.basename(self.output_path).split('.csv')[0] + '_resample.csv'
+            # ailoc.common.write_csv_array(
+            #     preds_array_re,
+            #     filename=tmp_path,
+            #     write_mode='write localizations'
+            # )
+            #
+            # print_message_tmp = f'resample finished, time cost (min): {(time.time() - time_start) / 60:.2f}'
+            # print(print_message_tmp)
+            # self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
+            #
+            # print_message_tmp = f'the file to save the resampled predictions is: {tmp_path}'
+            # print(print_message_tmp)
+            # self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
         else:
             preds_array_re = None
 
@@ -648,7 +647,7 @@ class SmlmDataAnalyzer:
                                                             self.tiff_dataset.tiff_shape)
         merge_inference_dict['raw_image'] = data_block[extra_length]
 
-        ailoc.common.plot_single_frame_inference(merge_inference_dict)
+        ailoc.common.plot_single_frame_inference(merge_inference_dict, self.loc_model)
 
     @staticmethod
     def filter_over_cut(sub_fov_molecule_list, sub_fov_xy_list, original_sub_fov_xy_list, pixel_size_xy):

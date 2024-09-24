@@ -178,7 +178,7 @@ def plot_synclearning_record(model):
     return zernike_phase_list
 
 
-def plot_single_frame_inference(inference_dict):
+def plot_single_frame_inference(inference_dict, loc_model):
     """
     Plot the results of a single frame inference.
     Args:
@@ -221,11 +221,34 @@ def plot_single_frame_inference(inference_dict):
         # ax[1].add_patch(plt.Circle((x, y), radius=1.5, color='cyan', fill=True, lw=0.5, alpha=0.8))
         ax[1].scatter(x, y, s=10, c='m', marker='x')
 
-    fig2, ax2 = plt.subplots(1, 1, figsize=(6, 6), constrained_layout=True)
-    plt.colorbar(mappable=ax2.imshow(datas[0], cmap='gray'), ax=ax2, fraction=0.046, pad=0.04)
+    # plot the reconstruction (use the training PSF and localization results) vs raw data
+    reconstruction = loc_model.data_simulator.reconstruct_posterior(
+        loc_model.data_simulator.psf_model,
+        ailoc.common.gpu(inference_dict['prob_sampled'])[None, None],
+        ailoc.common.gpu(np.concatenate([inference_dict['x_offset'][None],
+                          inference_dict['y_offset'][None],
+                          inference_dict['z_offset'][None],
+                          inference_dict['photon'][None]],axis=0)),
+        ailoc.common.gpu(inference_dict['bg_sampled']/loc_model.data_simulator.mol_sampler.bg_scale)
+    )
+    reconstruction = ailoc.common.cpu(loc_model.data_simulator.camera.forward_wo_noise(reconstruction))[0,0]
+    fig2, ax2 = plt.subplots(2, 2, figsize=(12, 12), constrained_layout=True)
+    cmap = 'gray'
+    plt.colorbar(mappable=ax2[0,0].imshow(datas[0], cmap=cmap), ax=ax2[0,0], fraction=0.046, pad=0.04)
     for x, y in zip(inference_dict['prob_sampled'].nonzero()[1], inference_dict['prob_sampled'].nonzero()[0]):
         # ax2.add_patch(plt.Circle((x, y), radius=1.5, color='cyan', fill=True, lw=0.5, alpha=0.8))
-        ax2.scatter(x, y, s=10, c='m', marker='x')
+        ax2[0,0].scatter(x, y, s=10, c='m', marker='x')
+    ax2[0,0].set_title('raw data')
+
+    cmap = 'magma'
+    plt.colorbar(mappable=ax2[0,1].imshow(datas[0], cmap=cmap), ax=ax2[0,1], fraction=0.046, pad=0.04)
+    ax2[0,1].set_title('raw data')
+
+    plt.colorbar(mappable=ax2[1,0].imshow(reconstruction, cmap=cmap), ax=ax2[1,0], fraction=0.046, pad=0.04)
+    ax2[1,0].set_title('reconstruction')
+
+    plt.colorbar(mappable=ax2[1,1].imshow(datas[0]-reconstruction, cmap=cmap), ax=ax2[1,1], fraction=0.046, pad=0.04)
+    ax2[1,1].set_title('residual')
 
     plt.show(block=True)
 
