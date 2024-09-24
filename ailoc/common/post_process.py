@@ -379,7 +379,7 @@ def histogram_equalization(x):
     return x_re
 
 
-def rescale_offset(preds_array, pixel_size=None, rescale_bins=20, sig_3d=False):
+def rescale_offset_v1(preds_array, pixel_size=None, rescale_bins=20, sig_3d=False):
     """
     Rescales x and y offsets so that they are distributed uniformly within [-0.5, 0.5] to
     correct for biased outputs. All molecules are binned based on their uncertainties and then
@@ -422,6 +422,85 @@ def rescale_offset(preds_array, pixel_size=None, rescale_bins=20, sig_3d=False):
     bins = np.interp(np.linspace(0, len(tot_sig), rescale_bins + 1), np.arange(len(tot_sig)), np.sort(tot_sig))
 
     for i in range(rescale_bins):
+        inds = np.where((tot_sig > bins[i]) & (tot_sig < bins[i + 1]) & (tot_sig != 0))
+        xo_rescale[inds] = histogram_equalization(xo[inds]) + np.mean(xo[inds])
+        yo_rescale[inds] = histogram_equalization(yo[inds]) + np.mean(yo[inds])
+
+        # fig, ax = plt.subplots(1, 2, constrained_layout=True)
+        # ax[0].hist(xo[inds], bins=100)
+        # ax[1].hist(xo_rescale[inds], bins=100)
+        # plt.show()
+
+    x_rescale = preds_array[:, 1] + (xo_rescale-xo) * pixel_size[0]
+    y_rescale = preds_array[:, 2] + (yo_rescale-yo) * pixel_size[1]
+
+    # preds_array_rescale = np.column_stack((preds_array, xo_rescale, yo_rescale, x_rescale, y_rescale))
+    preds_array_rescale = preds_array.copy()
+    preds_array_rescale[:, 1:3] = np.column_stack((x_rescale, y_rescale))
+
+    # plot the histogram of the original and rescaled offsets
+    fig, ax = plt.subplots(2, 2, constrained_layout=True)
+    ax[0, 0].hist(xo, bins=100, label='original x offset')
+    ax[0, 0].legend()
+    ax[0, 0].set_xlim([-0.5, 0.5])
+    ax[0, 1].hist(xo_rescale, bins=100, label='rescaled x offset')
+    ax[0, 1].legend()
+    ax[0, 1].set_xlim([-0.5, 0.5])
+    ax[1, 0].hist(yo, bins=100, label='original y offset')
+    ax[1, 0].legend()
+    ax[1, 0].set_xlim([-0.5, 0.5])
+    ax[1, 1].hist(yo_rescale, bins=100, label='rescaled y offset')
+    ax[1, 1].legend()
+    ax[1, 1].set_xlim([-0.5, 0.5])
+    plt.show()
+
+    return preds_array_rescale
+
+
+def rescale_offset(preds_array, pixel_size=None, rescale_bins=20, threshold=0.2):
+    """
+    Rescales x and y offsets so that they are distributed uniformly within [-0.5, 0.5] to
+    correct for biased outputs. All molecules are binned based on their uncertainties and then
+    do histogram equalization within each bin. And only perform this if the uncertainty is larger than a threshold.
+
+    Args:
+        preds_array (np.ndarray): the molecule list with format [frame, x, y, z, photon, integrated prob, x uncertainty,
+            y uncertainty, z uncertainty, photon uncertainty, x_offset, y_offset].
+        rescale_bins (int): The bias scales with the uncertainty of the localization. All molecules
+            are binned according to their predicted uncertainty. Detections within different bins are then
+            rescaled seperately. This specifies the number of bins.
+        pixel_size (list of int): [int int], the pixel size in the xy plane.
+        threshold (float): the threshold of the uncertainty to rescale, if the uncertainty relative to pixel size
+            is larger than the threshold, the xy offset will be rescaled.
+
+    Returns:
+        np.ndarray: the rescaled molecule list, the rescaled xo, yo, xnm, ynm are stored in the last four columns.
+    """
+
+    if pixel_size is None:
+        pixel_size = [100, 100]
+
+    xo = preds_array[:, -2].copy() / pixel_size[0]
+    yo = preds_array[:, -1].copy() / pixel_size[1]
+
+    x_sig = preds_array[:, -6].copy()
+    y_sig = preds_array[:, -5].copy()
+    z_sig = preds_array[:, -4].copy()
+
+    x_sig_var = np.var(x_sig)
+    y_sig_var = np.var(y_sig)
+    z_sig_var = np.var(z_sig)
+
+    xo_rescale = xo.copy()
+    yo_rescale = yo.copy()
+
+    tot_sig = np.sqrt(x_sig ** 2 + (np.sqrt(x_sig_var / y_sig_var) * y_sig) ** 2)
+
+    bins = np.interp(np.linspace(0, len(tot_sig), rescale_bins + 1), np.arange(len(tot_sig)), np.sort(tot_sig))
+
+    for i in range(rescale_bins):
+        if bins[i] < threshold*np.sqrt(pixel_size[0]**2 + pixel_size[1]**2):
+            continue
         inds = np.where((tot_sig > bins[i]) & (tot_sig < bins[i + 1]) & (tot_sig != 0))
         xo_rescale[inds] = histogram_equalization(xo[inds]) + np.mean(xo[inds])
         yo_rescale[inds] = histogram_equalization(yo[inds]) + np.mean(yo[inds])
