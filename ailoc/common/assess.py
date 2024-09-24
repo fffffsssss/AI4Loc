@@ -422,3 +422,5 @@ def test_single_emitter_accuracy(loc_model,
         plt.xlabel('Z (nm)')
         plt.ylabel('Z prediction (nm)')
         plt.show()
+
+    return metric_dict, paired_array, np.concatenate([ailoc.common.cpu(z)[:, None], xyz_crlb_np], axis=1)
