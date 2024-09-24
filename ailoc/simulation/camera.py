@@ -40,6 +40,13 @@ class Camera(ABC):
 
         return x_photon
 
+    def forward_wo_noise(self, x_photon):
+        x_e = x_photon * self.qe + self.spurious_charge
+        if self.em_gain is not None:
+            x_e *= self.em_gain
+        x_adu = x_e / self.e_per_adu + self.baseline
+        return x_adu
+
 
 class EMCCD(Camera):
     """
