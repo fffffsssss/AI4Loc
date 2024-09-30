@@ -266,7 +266,7 @@ def test_single_emitter_accuracy(loc_model,
     if isinstance(loc_model.data_simulator.camera, ailoc.simulation.SCMOS):
         bgs = ailoc.common.gpu(torch.ones(num_z_step) * bg * loc_model.data_simulator.camera.qe +
                                loc_model.data_simulator.camera.read_noise_sigma**2)  # unit photons
-    elif isinstance(loc_model.data_simulator.camera, ailoc.simulation.EMCCD):  # EMCCD needs test
+    elif isinstance(loc_model.data_simulator.camera, ailoc.simulation.EMCCD):  # todo: EMCCD to be developed
         bgs = ailoc.common.gpu(torch.ones(num_z_step) * bg * loc_model.data_simulator.camera.qe +
                                loc_model.data_simulator.camera.read_noise_sigma**2)  # unit photons
     else:

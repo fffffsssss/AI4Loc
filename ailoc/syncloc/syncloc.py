@@ -192,36 +192,6 @@ class SyncLoc_LocLearning(ailoc.common.XXLoc):
         photon uncertainty, x_offset_pixel, y_offset_pixel].
         """
 
-        # # old version, slower
-        # inference_dict = {'prob': [], 'x_offset': [], 'y_offset': [], 'z_offset': [], 'photon': [],
-        #                   'bg': [], 'x_sig': [], 'y_sig': [], 'z_sig': [], 'photon_sig': []}
-        #
-        # inference_dict['prob'].append(ailoc.common.cpu(p_pred))
-        # inference_dict['x_offset'].append(ailoc.common.cpu(xyzph_pred[:, 0, :, :]))
-        # inference_dict['y_offset'].append(ailoc.common.cpu(xyzph_pred[:, 1, :, :]))
-        # inference_dict['z_offset'].append(ailoc.common.cpu(xyzph_pred[:, 2, :, :]))
-        # inference_dict['photon'].append(ailoc.common.cpu(xyzph_pred[:, 3, :, :]))
-        # inference_dict['x_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 0, :, :]))
-        # inference_dict['y_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 1, :, :]))
-        # inference_dict['z_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 2, :, :]))
-        # inference_dict['photon_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 3, :, :]))
-        # inference_dict['bg'].append(ailoc.common.cpu(bg_pred))
-        #
-        # for k in inference_dict.keys():
-        #     inference_dict[k] = np.vstack(inference_dict[k])
-        #
-        # inference_dict['prob_sampled'] = None
-        # inference_dict['bg_sampled'] = None
-        #
-        # molecule_array, inference_dict = ailoc.common.gmm_to_localizations_old(inference_dict=inference_dict,
-        #                                                                    thre_integrated=0.7,
-        #                                                                    pixel_size_xy=self.data_simulator.psf_model.pixel_size_xy,
-        #                                                                    z_scale=self.data_simulator.mol_sampler.z_scale,
-        #                                                                    photon_scale=self.data_simulator.mol_sampler.photon_scale,
-        #                                                                    bg_scale=self.data_simulator.mol_sampler.bg_scale,
-        #                                                                    batch_size=p_pred.shape[0])
-
-        # new version, faster
         molecule_array, inference_dict = ailoc.common.gmm_to_localizations(p_pred=p_pred,
                                                                            xyzph_pred=xyzph_pred,
                                                                            xyzph_sig_pred=xyzph_sig_pred,
@@ -432,6 +402,7 @@ class SyncLoc_LocLearning(ailoc.common.XXLoc):
         """
 
         self._network.to('cpu')
+        self.evaluation_dataset = None
         self._network.tam.embedding_layer.attn_mask = None
         self.optimizer = None
         self.scheduler = None
@@ -724,13 +695,13 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
                                                                   over_cut=8)
                 sub_fov_molecule_list = []
                 for i_fov in range(len(sub_fov_xy_list)):
-                    # with autocast():
-                    molecule_list_tmp, inference_dict_tmp = ailoc.common.data_analyze(loc_model=self,
-                                                                                      data=sub_fov_data_list[i_fov],
-                                                                                      sub_fov_xy=sub_fov_xy_list[i_fov],
-                                                                                      camera=self.data_simulator.camera,
-                                                                                      batch_size=batch_size,
-                                                                                      retain_infer_map=False)
+                    with torch.cuda.amp.autocast():
+                        molecule_list_tmp, inference_dict_tmp = ailoc.common.data_analyze(loc_model=self,
+                                                                                          data=sub_fov_data_list[i_fov],
+                                                                                          sub_fov_xy=sub_fov_xy_list[i_fov],
+                                                                                          camera=self.data_simulator.camera,
+                                                                                          batch_size=batch_size,
+                                                                                          retain_infer_map=False)
                     sub_fov_molecule_list.append(molecule_list_tmp)
 
                 # merge the localizations in each sub-FOV to whole FOV, filter repeated localizations in over cut region
@@ -771,7 +742,7 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
     def online_train(self,
                      batch_size=2,
                      max_iterations=50000,
-                     eval_freq=500,
+                     eval_freq=1000,
                      file_name=None,
                      real_data=None,
                      num_sample=100,
@@ -828,7 +799,8 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
                 if self._iter_train > self.warmup:
                     if (self._iter_train-1) % 1000 == 0 and self._iter_train > self.warmup:
                         # calculate the z weight due to non-uniform z distribution
-                        self.real_data_z_weight = self.get_real_data_z_prior(real_data, self.context_size*batch_size)
+                        self.real_data_z_weight = self.get_real_data_z_prior(real_data,
+                                                                             self.context_size*batch_size)
 
                     if (self._iter_train-1) % wake_interval == 0:
                         loss_wake = self.wake_train(real_data,
@@ -1020,8 +992,9 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
 
         self._network.to('cpu')
         self._network.tam.embedding_layer.attn_mask = None
-        self.optimizer_net = None
-        self.scheduler_net = None
+        self.evaluation_dataset = None
+        self.optimizer = None
+        self.scheduler = None
         self.optimizer_psf = None
         self.scheduler_psf = None
         self._data_simulator = None
