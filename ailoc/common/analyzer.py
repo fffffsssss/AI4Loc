@@ -144,6 +144,8 @@ def split_fov(data, fov_xy=None, sub_fov_size=128, over_cut=8):
     # enforce the image size to be multiple of 4, pad with estimated background adu. fov_xy_start should be modified
     # according to the padding size, and sub_fov_xy for sub-area images should be modified too.
     factor = 4
+    pad_h = 0
+    pad_w = 0
     if (h % factor != 0) or (w % factor != 0):
         empty_area_adu = ailoc.common.get_mean_percentile(data, percentile=50)
         if h % factor != 0:
@@ -187,9 +189,9 @@ def split_fov(data, fov_xy=None, sub_fov_size=128, over_cut=8):
                                     x_end - 1 + fov_xy_start[0],
                                     y_start + fov_xy_start[1],
                                     y_end - 1 + fov_xy_start[1]))
-            original_sub_fov_xy_list.append((x_origin_start + fov_xy_start[0],
+            original_sub_fov_xy_list.append((x_origin_start + fov_xy_start[0] + pad_w,
                                              x_origin_end - 1 + fov_xy_start[0],
-                                             y_origin_start + fov_xy_start[1],
+                                             y_origin_start + fov_xy_start[1] + pad_h,
                                              y_origin_end - 1 + fov_xy_start[1]))
 
     return sub_fov_data_list, sub_fov_xy_list, original_sub_fov_xy_list
@@ -533,6 +535,7 @@ class SmlmDataAnalyzer:
                 preds_array,
                 pixel_size=self.pixel_size_xy,
                 rescale_bins=20,
+                threshold=0.2,
             )
             tmp_path = os.path.dirname(self.output_path) + '/' + os.path.basename(self.output_path).split('.csv')[0] + '_rescale.csv'
             ailoc.common.write_csv_array(
