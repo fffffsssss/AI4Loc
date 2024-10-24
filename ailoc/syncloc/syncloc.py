@@ -7,6 +7,7 @@ import datetime
 import random
 from tqdm import tqdm
 import copy
+import collections
 
 import ailoc.common
 import ailoc.simulation
@@ -146,7 +147,7 @@ class SyncLoc_LocLearning(ailoc.common.XXLoc):
             self.evaluation_recorder['iter_time'][self._iter_train] = avg_iter_time
 
             if self._iter_train > 1000:
-                print('----------------------------------------------------------------------------------------------')
+                print('-' * 200)
                 self.online_evaluate(batch_size=batch_size)
 
             self.print_recorder(max_iterations)
@@ -319,7 +320,7 @@ class SyncLoc_LocLearning(ailoc.common.XXLoc):
 
         with open(file_name, 'wb') as f:
             torch.save(self, f)
-        print(f"TransLoc instance saved to {file_name}")
+        print(f"SyncLoc instance saved to {file_name}")
 
     def check_training_psf(self, num_z_step=21):
         """
@@ -421,10 +422,20 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
 
         self.warmup = 5000
 
-        self.real_data_z_weight = [np.ones(5)*0.2, np.array([-np.inf, -0.6, -0.2, 0.2, 0.6, np.inf])]
+        self.z_bins = 10
+        self.real_data_z_weight = [np.ones(self.z_bins) * (1/self.z_bins),
+                                   np.linspace(-1, 1, self.z_bins+1)]
+        # self.real_data_z_weight = [np.ones(5)*0.2, np.array([-np.inf, -0.6, -0.2, 0.2, 0.6, np.inf])]
+
+        # z_bins = 20
+        # self.intervals = np.linspace(self.data_simulator.mol_sampler.z_range[0],
+        #                         self.data_simulator.mol_sampler.z_range[1],
+        #                         num=z_bins + 1)
+        # self.target_z_counts = {interval: 100 for interval in zip(self.intervals[:-1], self.intervals[1:])}
 
         # self.optimizer_psf = torch.optim.AdamW([self.learned_psf.zernike_coef], lr=25*6e-4)
-        self.optimizer_psf = torch.optim.Adam([self.learned_psf.zernike_coef], lr=0.01*5)
+        self.optimizer_psf = torch.optim.Adam([self.learned_psf.zernike_coef], lr=0.01*self.z_bins)
+        # self.optimizer_psf = torch.optim.Adam([self.learned_psf.zernike_coef], lr=0.01)
         # self.optimizer_psf = torch.optim.SGD([self.learned_psf.zernike_coef], lr=0.1)
         # self.optimizer_psf = torch.optim.LBFGS([self.learned_psf.zernike_coef], lr=0.1, max_iter=1)
         self.scheduler_psf = torch.optim.lr_scheduler.StepLR(self.optimizer_psf, step_size=1000, gamma=0.9)
@@ -451,6 +462,102 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
 
         return recorder
 
+    def online_train(self,
+                     batch_size=2,
+                     max_iterations=50000,
+                     eval_freq=1000,
+                     file_name=None,
+                     real_data=None,
+                     num_sample=100,
+                     wake_interval=1,
+                     max_recon_psfs=5000,
+                     online_build_eval_set=True):
+        """
+        Train the network.
+
+        Args:
+            batch_size (int): batch size
+            max_iterations (int): maximum number of iterations in sleep phase
+            eval_freq (int): every eval_freq iterations the network will be saved
+                and evaluated on the evaluation dataset to check the current performance
+            file_name (str): the name of the file to save the network
+            real_data (np.ndarray): real data to be used in wake phase
+            num_sample (int): number of samples for posterior based expectation estimation
+            wake_interval (int): do one wake iteration every wake_interval sleep iterations
+            max_recon_psfs (int): maximum number of reconstructed psfs, considering the GPU memory usage
+            online_build_eval_set (bool): whether to build the evaluation set online using the current learned psf,
+                if False, the evaluation set should be manually built before training
+        """
+
+        file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'SyncLoc_SL.pt' if file_name is None else file_name
+        self.scheduler.T_max = max_iterations
+        # self.scheduler_psf.T_max = (max_iterations - self.warmup)//wake_interval
+
+        assert real_data is not None, 'real data is not provided'
+
+        self.prepare_sample_real_data(real_data)
+
+        print('-' * 200)
+        print('Start training...')
+
+        if self._iter_train > 0:
+            print('training from checkpoint, the recent performance is:')
+            self.print_recorder(max_iterations)
+
+            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer,
+                                                                        T_max=max_iterations,
+                                                                        last_epoch=self._iter_train)
+            # self.scheduler_psf = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_psf,
+            #                                                                 T_max=(max_iterations - self.warmup)//wake_interval,
+            #                                                                 last_epoch=(self._iter_train-self.warmup)//wake_interval)
+
+        while self._iter_train < max_iterations:
+            t0 = time.time()
+            total_loss_sleep = []
+            total_loss_wake = []
+            for i in range(eval_freq):
+                loss_sleep = self.sleep_train(batch_size=batch_size)
+                total_loss_sleep.append(loss_sleep)
+                if self._iter_train > self.warmup:
+                    if (self._iter_train-1) % 1000 == 0 and self._iter_train > self.warmup:
+                        # calculate the z weight due to non-uniform z distribution
+                        self.real_data_z_weight = self.get_real_data_z_prior(real_data,
+                                                                             self.context_size*batch_size)
+                        # self.updata_partitioned_library(real_data, self.context_size*batch_size)
+
+                    if (self._iter_train-1) % wake_interval == 0:
+                        loss_wake = self.wake_train(real_data,
+                                                    batch_size * self.context_size,
+                                                    num_sample,
+                                                    max_recon_psfs)
+                        # loss_wake = self.physics_learning(batch_size * self.context_size,
+                        #                                   num_sample,
+                        #                                   max_recon_psfs)
+                        total_loss_wake.append(loss_wake) if loss_wake is not np.nan else None
+
+                if self._iter_train % 100 == 0:
+                    self.evaluation_recorder['learned_psf_zernike'][
+                        self._iter_train] = self.learned_psf.zernike_coef.detach().cpu().numpy()
+
+            torch.cuda.empty_cache()
+
+            avg_iter_time = 1000 * (time.time() - t0) / eval_freq
+            avg_loss_sleep = np.mean(total_loss_sleep)
+            avg_loss_wake = np.mean(total_loss_wake) if len(total_loss_wake) > 0 else np.nan
+            self.evaluation_recorder['loss_sleep'][self._iter_train] = avg_loss_sleep
+            self.evaluation_recorder['loss_wake'][self._iter_train] = avg_loss_wake
+            self.evaluation_recorder['iter_time'][self._iter_train] = avg_iter_time
+
+            if self._iter_train > 1000:
+                print('-' * 200)
+                self.build_evaluation_dataset(napari_plot=False) if online_build_eval_set else None
+                self.online_evaluate(batch_size=batch_size)
+
+            self.print_recorder(max_iterations)
+            self.save(file_name)
+
+        print('training finished!')
+
     def sleep_train(self, batch_size):
         train_data, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt, _ = \
             self.data_simulator.sample_training_data(batch_size=batch_size,
@@ -471,40 +578,6 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
         self._iter_train += 1
 
         return loss.detach().cpu().numpy()
-
-    def wake_loss(self, real_data,
-                  reconstruction,
-                  delta_map_sample,
-                  xyzph_map_sample,
-                  xyzph_pred,
-                  xyzph_sig_pred,
-                  weight_per_img):
-
-        num_sample = reconstruction.shape[1]
-        log_p_x_given_h = ailoc.syncloc.compute_log_p_x_given_h(data=real_data[:, None].expand(-1, num_sample, -1, -1),
-                                                                model=reconstruction)
-        # log_q_h_given_x = ailoc.syncloc.compute_log_q_h_given_x(xyzph_pred,
-        #                                                         xyzph_sig_pred,
-        #                                                         delta_map_sample,
-        #                                                         xyzph_map_sample)
-        with torch.no_grad():
-            log_q_h_given_x = ailoc.syncloc.compute_log_q_h_given_x(xyzph_pred,
-                                                                    xyzph_sig_pred,
-                                                                    delta_map_sample,
-                                                                    xyzph_map_sample)
-            importance = log_p_x_given_h - log_q_h_given_x
-            importance_norm = torch.exp(importance - importance.logsumexp(dim=-1, keepdim=True))
-            elbo_record = - torch.mean(torch.sum(importance_norm * log_p_x_given_h, dim=-1, keepdim=True))
-            # elbo_record = - torch.mean(torch.sum(importance_norm * (log_p_x_given_h + log_q_h_given_x), dim=-1, keepdim=True))
-
-        # elbo = torch.sum(importance_norm * (log_p_x_given_h + log_q_h_given_x), dim=-1, keepdim=True)
-        elbo = torch.sum(importance_norm * log_p_x_given_h, dim=-1, keepdim=True)
-        if weight_per_img is not None:
-            total_loss = - torch.mean(elbo * weight_per_img[:, None])
-        else:
-            total_loss = - torch.mean(elbo)
-
-        return total_loss, elbo_record
 
     def wake_train(self, real_data, batch_size, num_sample=50, max_recon_psfs=5000):
         """
@@ -636,6 +709,40 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
 
         return elbo_record.detach().cpu().numpy()
 
+    def wake_loss(self, real_data,
+                  reconstruction,
+                  delta_map_sample,
+                  xyzph_map_sample,
+                  xyzph_pred,
+                  xyzph_sig_pred,
+                  weight_per_img):
+
+        num_sample = reconstruction.shape[1]
+        log_p_x_given_h = ailoc.syncloc.compute_log_p_x_given_h(data=real_data[:, None].expand(-1, num_sample, -1, -1),
+                                                                model=reconstruction)
+        # log_q_h_given_x = ailoc.syncloc.compute_log_q_h_given_x(xyzph_pred,
+        #                                                         xyzph_sig_pred,
+        #                                                         delta_map_sample,
+        #                                                         xyzph_map_sample)
+        with torch.no_grad():
+            log_q_h_given_x = ailoc.syncloc.compute_log_q_h_given_x(xyzph_pred,
+                                                                    xyzph_sig_pred,
+                                                                    delta_map_sample,
+                                                                    xyzph_map_sample)
+            importance = log_p_x_given_h - log_q_h_given_x
+            importance_norm = torch.exp(importance - importance.logsumexp(dim=-1, keepdim=True))
+            elbo_record = - torch.mean(torch.sum(importance_norm * log_p_x_given_h, dim=-1, keepdim=True))
+            # elbo_record = - torch.mean(torch.sum(importance_norm * (log_p_x_given_h + log_q_h_given_x), dim=-1, keepdim=True))
+
+        # elbo = torch.sum(importance_norm * (log_p_x_given_h + log_q_h_given_x), dim=-1, keepdim=True)
+        elbo = torch.sum(importance_norm * log_p_x_given_h, dim=-1, keepdim=True)
+        if weight_per_img is not None:
+            total_loss = - torch.mean(elbo * weight_per_img[:, None])
+        else:
+            total_loss = - torch.mean(elbo)
+
+        return total_loss, elbo_record
+
     def sample_posterior(self, p_pred, xyzph_pred, xyzph_sig_pred, bg_pred, num_sample):
         with torch.no_grad():
             batch_size, h, w = p_pred.shape[0], p_pred.shape[-2], p_pred.shape[-1]
@@ -680,6 +787,7 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
         return real_data_sample.astype(np.float32)
 
     def get_real_data_z_prior(self, real_data, batch_size):
+        print('-' * 200)
         print('Using the current network to estimate the z prior of the real data...')
         self.network.eval()
         with torch.no_grad():
@@ -716,8 +824,8 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
             try:
                 z_pdf = list(np.histogram(molecule_list[:, 3],
                                           range=self.data_simulator.mol_sampler.z_range,
-                                          bins=5, density=True))
-                z_pdf[0] *= (self.data_simulator.mol_sampler.z_range[1]-self.data_simulator.mol_sampler.z_range[0])/5
+                                          bins=self.z_bins, density=True))
+                z_pdf[0] *= (self.data_simulator.mol_sampler.z_range[1]-self.data_simulator.mol_sampler.z_range[0])/self.z_bins
                 z_pdf[0] = np.clip(z_pdf[0], a_min=1e-3, a_max=None)
                 z_weight = copy.deepcopy(z_pdf)
                 z_weight[0] = (1/z_weight[0])/np.sum(1/z_weight[0])
@@ -738,99 +846,6 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
 
         self.network.train()
         return z_weight
-
-    def online_train(self,
-                     batch_size=2,
-                     max_iterations=50000,
-                     eval_freq=1000,
-                     file_name=None,
-                     real_data=None,
-                     num_sample=100,
-                     wake_interval=1,
-                     max_recon_psfs=5000,
-                     online_build_eval_set=True):
-        """
-        Train the network.
-
-        Args:
-            batch_size (int): batch size
-            max_iterations (int): maximum number of iterations in sleep phase
-            eval_freq (int): every eval_freq iterations the network will be saved
-                and evaluated on the evaluation dataset to check the current performance
-            file_name (str): the name of the file to save the network
-            real_data (np.ndarray): real data to be used in wake phase
-            num_sample (int): number of samples for posterior based expectation estimation
-            wake_interval (int): do one wake iteration every wake_interval sleep iterations
-            max_recon_psfs (int): maximum number of reconstructed psfs, considering the GPU memory usage
-            online_build_eval_set (bool): whether to build the evaluation set online using the current learned psf,
-                if False, the evaluation set should be manually built before training
-        """
-
-        file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'SyncLoc_SL.pt' if file_name is None else file_name
-        self.scheduler.T_max = max_iterations
-        # self.scheduler_psf.T_max = (max_iterations - self.warmup)//wake_interval
-
-        assert real_data is not None, 'real data is not provided'
-
-        # real_dataset = ailoc.common.SmlmTiffDataset(real_data)
-
-        self.prepare_sample_real_data(real_data)
-
-        print('Start training...')
-
-        if self._iter_train > 0:
-            print('training from checkpoint, the recent performance is:')
-            self.print_recorder(max_iterations)
-
-            self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer,
-                                                                        T_max=max_iterations,
-                                                                        last_epoch=self._iter_train)
-            # self.scheduler_psf = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_psf,
-            #                                                                 T_max=(max_iterations - self.warmup)//wake_interval,
-            #                                                                 last_epoch=(self._iter_train-self.warmup)//wake_interval)
-
-        while self._iter_train < max_iterations:
-            t0 = time.time()
-            total_loss_sleep = []
-            total_loss_wake = []
-            for i in range(eval_freq):
-                loss_sleep = self.sleep_train(batch_size=batch_size)
-                total_loss_sleep.append(loss_sleep)
-                if self._iter_train > self.warmup:
-                    if (self._iter_train-1) % 1000 == 0 and self._iter_train > self.warmup:
-                        # calculate the z weight due to non-uniform z distribution
-                        self.real_data_z_weight = self.get_real_data_z_prior(real_data,
-                                                                             self.context_size*batch_size)
-
-                    if (self._iter_train-1) % wake_interval == 0:
-                        loss_wake = self.wake_train(real_data,
-                                                    batch_size * self.context_size,
-                                                    num_sample,
-                                                    max_recon_psfs)
-                        total_loss_wake.append(loss_wake) if loss_wake is not np.nan else None
-
-                if self._iter_train % 100 == 0:
-                    self.evaluation_recorder['learned_psf_zernike'][
-                        self._iter_train] = self.learned_psf.zernike_coef.detach().cpu().numpy()
-
-            torch.cuda.empty_cache()
-
-            avg_iter_time = 1000 * (time.time() - t0) / eval_freq
-            avg_loss_sleep = np.mean(total_loss_sleep)
-            avg_loss_wake = np.mean(total_loss_wake) if len(total_loss_wake) > 0 else np.nan
-            self.evaluation_recorder['loss_sleep'][self._iter_train] = avg_loss_sleep
-            self.evaluation_recorder['loss_wake'][self._iter_train] = avg_loss_wake
-            self.evaluation_recorder['iter_time'][self._iter_train] = avg_iter_time
-
-            if self._iter_train > 1000:
-                print('----------------------------------------------------------------------------------------------')
-                self.build_evaluation_dataset(napari_plot=False) if online_build_eval_set else None
-                self.online_evaluate(batch_size=batch_size)
-
-            self.print_recorder(max_iterations)
-            self.save(file_name)
-
-        print('training finished!')
 
     @staticmethod
     def crop_patches(delta_map_sample,
@@ -955,6 +970,331 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
                torch.stack(xyzph_pred_crop), \
                torch.stack(xyzph_sig_pred_crop), \
                torch.stack(z_weight_crop) if z_weight is not None else None
+
+    @staticmethod
+    def count_intervals(roi_list, intervals):
+        counts = collections.Counter()
+        for roi in roi_list:
+            for mol in roi:
+                z = mol[3]
+                for i in range(len(intervals) - 1):
+                    if intervals[i] <= z < intervals[i + 1]:
+                        counts[(intervals[i], intervals[i + 1])] += 1
+                        break
+        return counts
+
+    def z_partition(self, roi_list, current_counts, target_counts, intervals, replacement=True):
+        """
+        Partition the input roi_list,
+        select ROIs from the input to construct a new_roi_list to approach the target z interval counts
+        """
+
+        # vectorized for better computation
+        target_array = np.array([target_counts[interval] for interval in target_counts])
+
+        # calculate all roi's interval count for quick selection
+        roi_counts_list = []
+        for i, roi in enumerate(roi_list):
+            tmp_counts = self.count_intervals([roi], intervals)
+            tmp_counts_list = [tmp_counts[interval] for interval in target_counts]  # single roi interval counts
+            tmp_counts_list.append(i)  # add the roi number at the end
+            roi_counts_list.append(np.array(tmp_counts_list))  # transform the list into array
+        roi_counts_array = np.array(roi_counts_list)  # collect all roi counts array for fast computation
+
+        # Create the new list
+        new_roi_list = []
+        new_roi_counts = collections.Counter() + current_counts
+
+        while True:
+            # calculate the current state and the score
+            new_roi_array = np.array([new_roi_counts[interval] for interval in target_counts])
+            best_score = np.sum((target_array - new_roi_array) ** 2)
+            # calculate current roi list plus all candidate roi, and the score
+            tmp_roi_array = new_roi_array + roi_counts_array[:, :-1]
+            tmp_roi_score = np.sum((target_array - tmp_roi_array) ** 2, axis=1)
+
+            # Check if any improvement,
+            if any(tmp_roi_score < best_score):
+                # get the best roi
+                roi_indices = np.where(tmp_roi_score == tmp_roi_score.min())[0]
+                best_roi_array_idx = roi_indices[np.random.randint(0, roi_indices.size)]
+                best_roi_list_idx = roi_counts_array[best_roi_array_idx][-1]
+                best_roi = roi_list[best_roi_list_idx]
+
+                # update the new roi list and counts
+                new_roi_counts.update(self.count_intervals([best_roi], intervals))
+                new_roi_list.append(best_roi)
+
+                # remove the selected roi from the roi counts array
+                if not replacement:
+                    roi_counts_array = np.delete(roi_counts_array, best_roi_array_idx, axis=0)
+            else:
+                # print('no better roi found')
+                break
+
+            if sum(new_roi_counts.values()) >= sum(target_counts.values()):
+                # print('found number satisfies')
+                break
+
+        return new_roi_list
+
+    def organize_roi_mol_list(self, molecule_list):
+        """
+        Given molecule list, first group the molecule list by ROI number.
+        then filter the ROIs with lower detection probability and higher localization uncertainty.
+        Return ROI list, with each item a list of molecule array
+        """
+
+        # group by ROI number
+        roi_mol_dict = {}
+        for molecule in molecule_list:
+            if molecule[0] not in roi_mol_dict.keys():
+                roi_mol_dict[molecule[0]] = [molecule]
+            else:
+                roi_mol_dict[molecule[0]].append(molecule)
+
+        # for each ROI, calculate some parameters to filter
+        roi_param_dict = {}
+        for key in roi_mol_dict.keys():
+            tmp_mol_list = np.array(roi_mol_dict[key])
+            tmp_roi_idx = tmp_mol_list[0, 0]  # the idx to track the ROI
+            tmp_num_mol = tmp_mol_list.shape[0]
+            tmp_avg_p = tmp_mol_list[:, 5].mean()
+            tmp_avg_sigma = np.sqrt(
+                tmp_mol_list[:, 6].mean() ** 2 + tmp_mol_list[:, 7].mean() ** 2 + tmp_mol_list[:, 8].mean() ** 2)
+            roi_param_dict[tmp_roi_idx] = [tmp_roi_idx, tmp_num_mol, tmp_avg_p, tmp_avg_sigma]
+        roi_param_array = np.array(list(roi_param_dict.values()))
+
+        # filter the ROIs
+        mask = ((roi_param_array[:, 1] <= np.percentile(roi_param_array[:, 1], 80)) &
+                (roi_param_array[:, 2] > np.percentile(roi_param_array[:, 2], 1)) &
+                (roi_param_array[:, 3] < np.percentile(roi_param_array[:, 3], 99)))
+        selected_roi_idx = roi_param_array[mask][:, 0]
+        roi_mol_list = [roi_mol_dict[key] for key in selected_roi_idx]
+
+        return roi_mol_list
+
+    def updata_partitioned_library(self, roi_library, train_batch_size):
+        """
+        given the multiple ROIs with single or multi emitters,
+        update the z-partitioned ROI library for physics learning.
+        This creates a more balanced z distributed roi library from the preprocessed ROIs.
+        """
+
+        t0 = time.time()
+        print('-' * 200)
+        print('Using the current network to update the partitioned ROI library...')
+        partitioned_library = {}
+        partitioned_library['sparse'] = np.array([])
+        partitioned_library['sparse_z_counts'] = collections.Counter()
+        partitioned_library['dense'] = np.array([])
+        partitioned_library['dense_z_counts'] = collections.Counter()
+        partitioned_library['total_z_counts'] = collections.Counter()
+        with torch.cuda.amp.autocast():
+            # first using the current network to analyze the sparse ROIs and partition them
+            if roi_library['sparse'][2] != 0:
+                batch_size = max(1,
+                                 (train_batch_size * self.dict_sampler_params['train_size'] ** 2) //
+                                 (self.attn_length *
+                                  roi_library['sparse'][0].shape[-1]
+                                  * roi_library['sparse'][0].shape[-2])
+                                 )
+                sparse_mol_list = []
+                for i in range(int(np.ceil(roi_library['sparse'][0].shape[0] / batch_size))):
+                    molecule_array_tmp, _ = self.analyze(
+                        ailoc.common.gpu(roi_library['sparse'][0][i * batch_size: (i + 1) * batch_size]),
+                        self.data_simulator.camera
+                    )
+                    if len(molecule_array_tmp) > 0:
+                        molecule_array_tmp[:, 0] += i * batch_size
+                        sparse_mol_list += molecule_array_tmp.tolist()
+
+                # organize the molecule list for sparse ROIs and filter some bad ROIs
+                sparse_roi_mol_list = self.organize_roi_mol_list(sparse_mol_list)
+
+                # partition the ROIs using the predicted molecule list
+                partitioned_sparse_roi_mol_list = self.z_partition(sparse_roi_mol_list,
+                                                                   partitioned_library['total_z_counts'],
+                                                                   self.target_z_counts,
+                                                                   self.intervals,
+                                                                   replacement=True)
+
+                # update the z counts
+                partitioned_library['sparse_z_counts'] = self.count_intervals(partitioned_sparse_roi_mol_list,
+                                                                              self.intervals)
+                partitioned_library['total_z_counts'].update(partitioned_library['sparse_z_counts'])
+
+                # build the partitioned library
+                partitioned_roi_list = []
+                for mol_list in partitioned_sparse_roi_mol_list:
+                    roi_idx = int(mol_list[0][0] - 1)
+                    partitioned_roi_list.append(roi_library['sparse'][0][roi_idx: roi_idx + 1])
+                if len(partitioned_roi_list) > 0:
+                    partitioned_library['sparse'] = np.concatenate(partitioned_roi_list)
+
+            # if partitioned library doesn't satisfy the target_z_counts, use the dense ROIs to fill
+            if sum(partitioned_library['total_z_counts'].values()) < sum(self.target_z_counts.values()):
+                batch_size = max(1,
+                                 (train_batch_size * self.dict_sampler_params['train_size'] ** 2) //
+                                 (self.attn_length *
+                                  roi_library['dense'][0].shape[-1]
+                                  * roi_library['dense'][0].shape[-2])
+                                 )
+                dense_mol_list = []
+                for i in range(int(np.ceil(roi_library['dense'][0].shape[0] / batch_size))):
+                    molecule_array_tmp, _ = self.analyze(
+                        ailoc.common.gpu(roi_library['dense'][0][i * batch_size: (i + 1) * batch_size]),
+                        self.data_simulator.camera
+                    )
+                    if len(molecule_array_tmp) > 0:
+                        molecule_array_tmp[:, 0] += i * batch_size
+                        dense_mol_list += molecule_array_tmp.tolist()
+
+                # organize the molecule list for dense ROIs and filter some bad ROIs
+                dense_roi_mol_list = self.organize_roi_mol_list(dense_mol_list)
+
+                # partition the ROIs using the predicted molecule list
+                partitioned_dense_roi_mol_list = self.z_partition(dense_roi_mol_list,
+                                                                  partitioned_library['total_z_counts'],
+                                                                  self.target_z_counts,
+                                                                  self.intervals,
+                                                                  replacement=True)
+
+                partitioned_library['dense_z_counts'] = self.count_intervals(partitioned_dense_roi_mol_list,
+                                                                             self.intervals)
+                partitioned_library['total_z_counts'].update(partitioned_library['dense_z_counts'])
+
+                # build the partitioned library
+                partitioned_roi_list = []
+                for mol_list in partitioned_dense_roi_mol_list:
+                    roi_idx = int(mol_list[0][0] - 1)
+                    partitioned_roi_list.append(roi_library['dense'][0][roi_idx: roi_idx + 1])
+                if len(partitioned_roi_list) > 0:
+                    partitioned_library['dense'] = np.concatenate(partitioned_roi_list)
+
+        # calculate the sparse signal portion of the partitioned library
+        partitioned_library['sparse_portion'] = (sum(partitioned_library['sparse_z_counts'].values()) /
+                                                 sum(partitioned_library['total_z_counts'].values()))
+
+        self.partitioned_library = partitioned_library
+        print(f'Partitioned ROI library updated, cost {time.time() - t0}s,\n'
+              f'select {len(partitioned_library["sparse"])} sparse ROIs '
+              f'and {len(partitioned_library["dense"])} dense ROIs, \n'
+              f'Total signals Z counts: \n'
+              f'{[interval for interval in self.target_z_counts]}\n'
+              f'{[partitioned_library["total_z_counts"][interval] for interval in self.target_z_counts]}')
+
+    def physics_learning(self, batch_size, num_sample=50, max_recon_psfs=5000):
+        """
+        for each physics learning iteration, using the current network to localization enough signals, and then
+        use this signals and posterior samples to update the PSF model
+        """
+
+        # randomly select the sparse or dense roi library for learning
+        sparse_prob = self.partitioned_library['sparse_portion']
+        sparse_flag = random.random() < sparse_prob
+        if sparse_flag:
+            lib_length = len(self.partitioned_library['sparse'])
+            sample_batch_size = max(1,
+                                    (batch_size * self.dict_sampler_params['train_size'] ** 2) //
+                                    (self.attn_length *
+                                     self.partitioned_library['sparse'].shape[-1]
+                                     * self.partitioned_library['sparse'].shape[-2])
+                                    )
+        else:
+            lib_length = len(self.partitioned_library['dense'])
+            sample_batch_size = max(1,
+                                    (batch_size * self.dict_sampler_params['train_size'] ** 2) //
+                                    (self.attn_length *
+                                     self.partitioned_library['dense'].shape[-1]
+                                     * self.partitioned_library['dense'].shape[-2])
+                                    )
+
+        real_data_sample_list = []
+        delta_map_sample_list = []
+        xyzph_map_sample_list = []
+        bg_sample_list = []
+        xyzph_pred_list = []
+        xyzph_sig_pred_list = []
+        num_psfs = 0
+
+        self.network.eval()
+        with torch.no_grad():
+            while num_psfs < max_recon_psfs:
+                # random select data in the library
+                start_idx = np.random.randint(0, max(0, lib_length-sample_batch_size)+1)
+                end_idx = start_idx + sample_batch_size
+                if sparse_flag:
+                    real_data_sampled = ailoc.common.gpu(self.partitioned_library['sparse'][start_idx: end_idx])
+                else:
+                    real_data_sampled = ailoc.common.gpu(self.partitioned_library['dense'][start_idx: end_idx])
+
+                p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(real_data_sampled,
+                                                                             self.data_simulator.camera)
+                delta_map_sample, xyzph_map_sample, bg_sample = self.sample_posterior(p_pred,
+                                                                                      xyzph_pred,
+                                                                                      xyzph_sig_pred,
+                                                                                      bg_pred,
+                                                                                      num_sample)
+
+                if len(delta_map_sample.nonzero()) > 0.05 * p_pred.shape[0] * p_pred.shape[1] * p_pred.shape[
+                    2] * num_sample:
+                    print('too many non-zero elements in delta_map_sample, the network probably diverges, '
+                          'consider decreasing the PSF learning rate to make the network more stable')
+                    return np.nan
+
+                real_data_sampled = self.data_simulator.camera.backward(real_data_sampled)
+                if self.temporal_attn and self.attn_length // 2 > 0:
+                    # real_data_sampled = real_data_sampled[(self.attn_length // 2): -(self.attn_length // 2)]
+                    real_data_sampled = real_data_sampled[:, (self.attn_length // 2)]
+
+                real_data_sample_list.append(real_data_sampled)
+                delta_map_sample_list.append(delta_map_sample)
+                xyzph_map_sample_list.append(xyzph_map_sample)
+                bg_sample_list.append(bg_sample)
+                xyzph_pred_list.append(xyzph_pred)
+                xyzph_sig_pred_list.append(xyzph_sig_pred)
+
+                num_psfs += len(delta_map_sample.nonzero())
+
+        self.network.train()
+
+        real_data_sample_list = torch.cat(real_data_sample_list, dim=0)
+        delta_map_sample_list = torch.cat(delta_map_sample_list, dim=0)
+        xyzph_map_sample_list = torch.cat(xyzph_map_sample_list, dim=1)
+        bg_sample_list = torch.cat(bg_sample_list, dim=0)
+        xyzph_pred_list = torch.cat(xyzph_pred_list, dim=0)
+        xyzph_sig_pred_list = torch.cat(xyzph_sig_pred_list, dim=0)
+
+        # calculate the p_theta(x|h), q_phi(h|x) to compute the loss and optimize the psf using Adam
+        self.learned_psf._pre_compute()
+        reconstruction = self.data_simulator.reconstruct_posterior(self.learned_psf,
+                                                                   delta_map_sample_list,
+                                                                   xyzph_map_sample_list,
+                                                                   bg_sample_list, )
+
+        loss, elbo_record = self.wake_loss(real_data_sample_list,
+                                           reconstruction,
+                                           delta_map_sample_list,
+                                           xyzph_map_sample_list,
+                                           xyzph_pred_list,
+                                           xyzph_sig_pred_list,
+                                           None)
+        self.optimizer_psf.zero_grad()
+        # self.optimizer.zero_grad()
+        loss.backward()
+        self.optimizer_psf.step()
+        self.scheduler_psf.step()
+        # self.optimizer.step()
+
+        # update the psf simulator
+        if isinstance(self.data_simulator.psf_model, ailoc.simulation.VectorPSFTorch):
+            self.data_simulator.psf_model.zernike_coef = self.learned_psf.zernike_coef.detach()
+            self.data_simulator.psf_model._pre_compute()
+        elif isinstance(self.data_simulator.psf_model, ailoc.simulation.VectorPSFCUDA):
+            self.data_simulator.psf_model.zernike_coef = self.learned_psf.zernike_coef.detach().cpu().numpy()
+
+        return elbo_record.detach().cpu().numpy()
 
     def print_recorder(self, max_iterations):
         try:

@@ -29,7 +29,7 @@ def gpu(x, data_type=torch.float32):
     """
 
     if not isinstance(x, torch.Tensor):
-        return torch.tensor(x, device='cuda', dtype=data_type)
+        return torch.tensor(x+.0, device='cuda', dtype=data_type)
     return x.to(device='cuda', dtype=data_type)
 
 
@@ -271,7 +271,8 @@ def read_first_size_gb_tiff(image_path, size_gb=4):
         else:
             index_img = int(size_gb / occu_mem * total_shape[0])
         images = tif.asarray(key=range(0, index_img), series=0)
-    print("read first %d images" % (images.shape[0]))
+    print('-' * 200)
+    print(f"read first {images.shape} images")
     return images
 
 
@@ -302,12 +303,6 @@ def cmpdata_napari(data1, data2):
     napari.run()
 
 
-def plot_image(image, cmap='turbo'):
-    plt.figure(figsize=(10, 10))
-    plt.imshow(ailoc.common.cpu(image), cmap=cmap)
-    plt.show()
-
-
 def fig2data(fig):
     """
     fig = plt.figure()
@@ -333,6 +328,7 @@ def fig2data(fig):
 
 
 def print_learning_params(psf_params_dict, camera_params_dict, sampler_params_dict):
+    print('-' * 70, 'learning parameters', '-' * 100)
     for params_dict in [psf_params_dict, camera_params_dict, sampler_params_dict]:
         for keys in params_dict.keys():
             if keys == 'zernike_mode':
