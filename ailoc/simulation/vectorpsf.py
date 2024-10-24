@@ -597,7 +597,10 @@ class VectorPSFTorch(VectorPSF):
         fresnels = fresnelsmedcov * fresnelscovimm
 
         # apodization
-        apod = 1 / torch.sqrt(costhetaimm)
+        # apod = 1 / torch.sqrt(costhetaimm)  # previous version, for the simulated test dataset, should be deprecated
+        # apod = 1 / torch.sqrt(costhetamed)
+        apod = torch.sqrt(costhetaimm) / costhetamed  # Sjoerd Stallinga version
+
         # define aperture
         aperturemask = torch.where((xpupil ** 2 + ypupil ** 2).real < 1.0, 1.0, 0.0)
         self.amplitude = aperturemask * apod

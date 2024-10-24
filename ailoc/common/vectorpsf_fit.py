@@ -146,6 +146,10 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
     photons_fitted = nn.parameter.Parameter(ailoc.common.gpu(torch.zeros(n_zstack * n_beads)))
     bg_fitted = nn.parameter.Parameter(ailoc.common.gpu(torch.zeros(n_zstack * n_beads)))
 
+    # # use shared photons and bg for all z positions
+    # photons_fitted = nn.parameter.Parameter(ailoc.common.gpu(torch.zeros(1 * n_beads)))
+    # bg_fitted = nn.parameter.Parameter(ailoc.common.gpu(torch.zeros(1 * n_beads)))
+
     # initialize the parameters
     x_image_linspace = ailoc.common.gpu(torch.linspace(-(roi_size-1) * psf_params_dict['pixel_size_xy'][0] / 2,
                                                        (roi_size-1) * psf_params_dict['pixel_size_xy'][0] / 2,
@@ -157,6 +161,11 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
     with torch.no_grad():
         bg_fitted += data_stacked.view(n_zstack * n_beads, -1).min(dim=1).values
         photons_fitted += torch.sum((data_stacked-bg_fitted[:, None, None]), dim=(1, 2))/1000
+
+        # # use shared photons and bg for all z positions
+        # bg_fitted += data_stacked.view(n_zstack * n_beads, -1).min()
+        # photons_fitted += torch.mean(torch.sum((data_stacked - bg_fitted[:, None, None]), dim=(1, 2))) / 1000
+
         for i in range(n_beads):
             slice_tmp = slice(i*n_zstack, (i+1)*n_zstack)
             x_fitted[i] += torch.sum(x_mesh*torch.mean(data_stacked[slice_tmp], dim=0))/(photons_fitted.mean()*1000)
@@ -240,12 +249,20 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
 
         assert torch.min(mu) >= 0, 'fitting failed, mu should be positive'
         if photons_fitted.min() <= 0 or bg_fitted.min() <= 0:
-            print('photons or bg <= 0, using torch.clamp and regularization')
+            # print('photons or bg <= 0, using torch.clamp and regularization')
             indices_photons = torch.nonzero(photons_fitted <= 0)
             indices_bg = torch.nonzero(bg_fitted <= 0)
             model = torch.distributions.Poisson(mu)
+
+            # # torch api for poisson loss and regularization v2
+            # loss = -model.log_prob(data_stacked).sum() + \
+            #        1 * ((photons_fitted[indices_photons]**2).sum() + (bg_fitted[indices_bg]**2).sum())
+
+            # torch api for poisson loss and regularization
             loss = -model.log_prob(data_stacked).sum() - \
                    lambda_reg * (photons_fitted[indices_photons].sum() + bg_fitted[indices_bg].sum())
+
+            # # analytical poisson loss form and regularization
             # loss = -torch.sum(data_stacked * torch.log(mu) - mu - torch.lgamma(data_stacked + 1)) - \
             #        lambda_reg*(photons_fitted[indices_photons].sum() + bg_fitted[indices_bg].sum())
         else:
