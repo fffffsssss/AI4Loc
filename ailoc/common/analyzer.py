@@ -404,6 +404,7 @@ class SmlmDataAnalyzer:
         self.pixel_size_xy = ailoc.common.cpu(loc_model.data_simulator.psf_model.pixel_size_xy)
         self.ui_print_signal = ui_print_signal
 
+        print('-' * 200)
         print_message_tmp = f'the file to save the predictions is: {self.output_path}'
         print(print_message_tmp)
         self.ui_print_signal.emit(print_message_tmp) if self.ui_print_signal is not None else None
@@ -446,7 +447,7 @@ class SmlmDataAnalyzer:
                           self.fov_xy_start[1] * self.pixel_size_xy[1],
                           (self.fov_xy_start[1] + self.tiff_dataset.tiff_shape[-2]) * self.pixel_size_xy[1])
 
-    def divide_and_conquer(self, degrid=False):
+    def divide_and_conquer(self, degrid=True):
         """
         Analyze a large tiff file through loading images into the RAM by time block, each time block will be
         divided into sub-FOVs and analyzed separately.
@@ -454,7 +455,7 @@ class SmlmDataAnalyzer:
         Args:
             degrid: If true, adjust the xy offsets to reduce grid artifacts in the
                 difficult conditions (low SNR, high density, etc.), replace the original
-                xnm and ynm with x_rescale and y_rescale, this does not affect the localization metric
+                xnm and ynm with x_rescale and y_rescale, this does not affect the evaluation metric
         Returns:
             np.ndarray: return the localization results.
         """
@@ -521,7 +522,7 @@ class SmlmDataAnalyzer:
                                              write_mode='append localizations')
 
         preds_array = ailoc.common.read_csv_array(self.output_path)
-        if degrid:  # todo: wait for determining the degrid method
+        if degrid:
             # histogram equalization for grid artifacts removal
             time_start = time.time()
 

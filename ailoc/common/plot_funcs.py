@@ -545,6 +545,28 @@ def plot_psf_stack(psfs, z_pos, cmap='gray'):
     plt.show()
 
 
+def plot_image_stack(stack_a,cmap='magma'):
+    num_z = stack_a.shape[0]
+    nrows = min(int(np.ceil(num_z / 7)), 7)
+    n_img_plot = min(num_z, 49)
+
+    fig, ax_arr = plt.subplots(nrows, 7,
+                               figsize=(7 * 2, 2 * nrows),
+                               constrained_layout=True)
+    ax = []
+    plts = []
+    for i in ax_arr:
+        try:
+            for j in i:
+                ax.append(j)
+        except:
+            ax.append(i)
+
+    for i in range(n_img_plot):
+        plts.append(ax[i].imshow(ailoc.common.cpu(stack_a)[i], cmap=cmap))
+    plt.show()
+
+
 def plot_image_stack_difference(stack_a,stack_b,cmap='magma'):
     stack_a = ailoc.common.cpu(stack_a)
     stack_b = ailoc.common.cpu(stack_b)
@@ -569,4 +591,11 @@ def plot_image_stack_difference(stack_a,stack_b,cmap='magma'):
         image_tmp = np.concatenate([a_tmp, b_tmp, mismatch_tmp], axis=1)
         plts.append(ax[i].imshow(image_tmp, cmap=cmap))
         plt.colorbar(mappable=plts[-1],ax=ax[i],fraction=0.046, pad=0.04)
+    plt.show()
+
+
+def plot_image(image, cmap='turbo'):
+    plt.figure(figsize=(10, 10))
+    plt.imshow(ailoc.common.cpu(image), cmap=cmap)
+    plt.colorbar()
     plt.show()

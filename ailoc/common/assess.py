@@ -281,6 +281,7 @@ def test_single_emitter_accuracy(loc_model,
     xyz_crlb_np = ailoc.common.cpu(xyz_crlb)
 
     # generate the test data
+    print('-' * 200)
     print('{}{}{}'.format('simulating ', num_z_step * num_repeat, ' single emitter images for test'))
     if local_context or temporal_attn:
         xemit = ailoc.common.gpu(torch.ones(num_z_step*num_repeat) * (xy_range[0]+xy_range[1])/2)  # unit nm

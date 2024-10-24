@@ -357,6 +357,8 @@ class SyncLocNet(nn.Module):
         return p_pred, xyzph_pred, xyzph_sig_pred, bg_pred
 
     def get_parameter_number(self):
+        print('-' * 200)
+        print('Testing network parameters and multiply-accumulate operations (MACs)')
         # print(f'Total network parameters: {sum(p.numel() for p in self.parameters() if p.requires_grad)/1e6:.2f}M')
 
         dummy_input = torch.randn(1, self.train_context_size, 64, 64).cuda()

@@ -104,6 +104,6 @@ if __name__ == '__main__':
     xyzph_pred = torch.rand(16, 4, 64, 64, requires_grad=True)
     xyzph_sig_pred = torch.rand(16, 4, 64, 64)
     delta_map_sample = torch.distributions.Bernoulli(torch.ones(16, 40, 64, 64)*0.5).sample()
-    xyzph_map_sample = torch.rand(16, 40, 4, 64, 64)
+    xyzph_map_sample = torch.rand(4, 16, 40, 64, 64)
     loss = compute_log_q_h_given_x(xyzph_pred, xyzph_sig_pred, delta_map_sample, xyzph_map_sample)
     print(loss.detach().numpy())

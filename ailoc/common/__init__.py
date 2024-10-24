@@ -8,5 +8,6 @@ from ailoc.common.analyzer import *
 from ailoc.common.assess import *
 from ailoc.common.notebook_gui import *
 from ailoc.common.vectorpsf_fit import *
+from ailoc.common.preprocess import *
 
 
