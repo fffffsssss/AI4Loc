@@ -171,7 +171,6 @@ def build_roi_library(images,
         ailoc.common.plot_image_stack(sparse_rois[:, attn_length//2, :, :])
     print('plot example dense ROIs')
     ailoc.common.plot_image_stack(dense_rois[:, attn_length // 2, :, :])
-    print('-' * 200)
 
     return roi_library
 

@@ -175,6 +175,7 @@ class Simulator:
                 psf_patches = psf_model.simulate(x, y, z, photons, zernike_coefs) \
                     if zernike_coefs is not None else psf_model.simulate(x, y, z, photons)
             elif isinstance(psf_model, ailoc.simulation.VectorPSFTorch):
+                # todo: add robust training to psftorch
                 psf_patches = psf_model.simulate_parallel(x, y, z, photons)
             else:
                 raise NotImplementedError('PSF model not supported.')

@@ -57,15 +57,15 @@ class PreNormDrop(nn.Module):
 
 
 class SelfAttention(nn.Module):
-    def __init__(self, dim, heads=8, qkv_bias=True, qk_scale=None, dropout_rate=0.0):
+    def __init__(self, dim, heads=8, bias=True, qk_scale=None, dropout_rate=0.0):
         super().__init__()
         self.num_heads = heads
         self.head_dim = dim // heads
         self.scale = qk_scale or self.head_dim ** -0.5
 
-        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.qkv = nn.Linear(dim, dim * 3, bias=bias)
         self.attn_drop = nn.Dropout(dropout_rate)
-        self.proj = nn.Linear(dim, dim)
+        self.proj = nn.Linear(dim, dim, bias=bias)
         self.proj_drop = nn.Dropout(dropout_rate)
 
     def forward(self, x, attn_mask):
@@ -93,14 +93,60 @@ class SelfAttention(nn.Module):
         return x
 
 
+class MultiHeadSelfAttention(nn.Module):
+    def __init__(self, dim, heads=8, qkv_bias=True, qk_scale=None, dropout_rate=0.0):
+        super().__init__()
+        self.embed_dim = dim
+        self.num_heads = 8
+        self.dropout = nn.Dropout(dropout_rate)
+        self.head_dim = self.embed_dim // self.num_heads
+        self.scale = qk_scale or self.head_dim ** -0.5
+
+        if self.head_dim * self.num_heads != self.embed_dim:
+            raise ValueError("embed_dim must be divisible by num_heads")
+
+        self.qkv = nn.Linear(self.embed_dim, self.embed_dim * 3, bias=qkv_bias)
+        self.q_mh_proj = nn.Linear(self.embed_dim, self.num_heads * self.head_dim, bias=qkv_bias)
+        self.k_mh_proj = nn.Linear(self.embed_dim, self.num_heads * self.head_dim, bias=qkv_bias)
+        self.v_mh_proj = nn.Linear(self.embed_dim, self.num_heads * self.head_dim, bias=qkv_bias)
+        self.out_proj = nn.Linear(self.embed_dim, self.embed_dim, bias=qkv_bias)
+
+    def forward(self, x, attn_mask):
+        batch_size, seq_length, d_model = x.shape
+        qkv = (
+            self.qkv(x)
+            .reshape(batch_size, seq_length, 3, self.embed_dim)
+            .permute(2, 0, 1, 3)
+        )
+        q, k, v = (
+            qkv[0],
+            qkv[1],
+            qkv[2],
+        )
+        q = self.q_mh_proj(q).reshape(batch_size, seq_length, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        k = self.k_mh_proj(k).reshape(batch_size, seq_length, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+        v = self.v_mh_proj(v).reshape(batch_size, seq_length, self.num_heads, self.head_dim).permute(0, 2, 1, 3)
+
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = attn.masked_fill(attn_mask == 1, -torch.inf)
+
+        attn = attn.softmax(dim=-1)
+        attn = self.dropout(attn)
+
+        x = (attn @ v).transpose(1, 2).reshape(batch_size, seq_length, d_model)
+        x = self.out_proj(x)
+        x = self.dropout(x)
+        return x
+
+
 class FeedForward(nn.Module):
-    def __init__(self, dim, hidden_dim, dropout_rate):
+    def __init__(self, dim, hidden_dim, dropout_rate, bias=True):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(dim, hidden_dim),
+            nn.Linear(dim, hidden_dim, bias),
             nn.GELU(),
             nn.Dropout(p=dropout_rate),
-            nn.Linear(hidden_dim, dim),
+            nn.Linear(hidden_dim, dim, bias),
             nn.Dropout(p=dropout_rate),
         )
 
@@ -163,6 +209,7 @@ class TransLayer(nn.Module):
                 [
                     ailoc.syncloc.Residual(
                         fn=SelfAttention(dim=dim, heads=heads, dropout_rate=attn_dropout_rate),
+                        # fn=MultiHeadSelfAttention(dim=dim, heads=heads, dropout_rate=attn_dropout_rate),
                     ),
                     nn.LayerNorm(dim),
                     ailoc.syncloc.Residual(

@@ -1,3 +1,4 @@
+import warnings
 import torch
 import numpy as np
 import time
@@ -426,6 +427,8 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
         self.real_data_z_weight = [np.ones(self.z_bins) * (1/self.z_bins),
                                    np.linspace(-1, 1, self.z_bins+1)]
         # self.real_data_z_weight = [np.ones(5)*0.2, np.array([-np.inf, -0.6, -0.2, 0.2, 0.6, np.inf])]
+        self.photon_threshold = 3000/self.data_simulator.mol_sampler.photon_scale
+        self.p_var_threshold = 0.00125  # p=0.5, var=0.25,  density=0.005, 0.25*0.005
 
         # z_bins = 20
         # self.intervals = np.linspace(self.data_simulator.mol_sampler.z_range[0],
@@ -495,7 +498,7 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
 
         assert real_data is not None, 'real data is not provided'
 
-        self.prepare_sample_real_data(real_data)
+        self.prepare_sample_real_data(real_data, batch_size)
 
         print('-' * 200)
         print('Start training...')
@@ -521,13 +524,12 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
                 if self._iter_train > self.warmup:
                     if (self._iter_train-1) % 1000 == 0 and self._iter_train > self.warmup:
                         # calculate the z weight due to non-uniform z distribution
-                        self.real_data_z_weight = self.get_real_data_z_prior(real_data,
-                                                                             self.context_size*batch_size)
+                        self.get_real_data_z_prior(real_data, self.sample_batch_size)
                         # self.updata_partitioned_library(real_data, self.context_size*batch_size)
 
                     if (self._iter_train-1) % wake_interval == 0:
                         loss_wake = self.wake_train(real_data,
-                                                    batch_size * self.context_size,
+                                                    self.sample_batch_size,
                                                     num_sample,
                                                     max_recon_psfs)
                         # loss_wake = self.physics_learning(batch_size * self.context_size,
@@ -628,8 +630,11 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
                                                   real_data_sampled,
                                                   xyzph_map_sample,
                                                   bg_sample,
+                                                  p_pred,
                                                   xyzph_pred,
                                                   xyzph_sig_pred,
+                                                  self.photon_threshold,
+                                                  self.p_var_threshold,
                                                   crop_size=self.data_simulator.mol_sampler.train_size,
                                                   max_psfs=max_recon_psfs,
                                                   z_weight=self.real_data_z_weight)
@@ -648,6 +653,12 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
                 infer_round += 1
                 num_psfs += len(delta_map_sample_crop.nonzero())
         self.network.train()
+
+        if len(real_data_sampled_crop_list) == 0:
+            warnings.warn('No valid ROI was extracted; '
+                          'the quality of the network or the raw data may be poor, '
+                          'skip the current wake iteration')
+            return np.nan
 
         real_data_sampled_crop_list = torch.cat(real_data_sampled_crop_list, dim=0)
         delta_map_sample_crop_list = torch.cat(delta_map_sample_crop_list, dim=0)
@@ -762,12 +773,14 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
 
         return delta, xyzph_sample, bg_sample
 
-    def prepare_sample_real_data(self, real_data,):
+    def prepare_sample_real_data(self, real_data, batch_size):
+        self.sample_batch_size = self.context_size * batch_size
+
         n, h, w = real_data.shape
-        assert n >= self.context_size and h >= self.data_simulator.mol_sampler.train_size \
+        assert n >= self.sample_batch_size and h >= self.data_simulator.mol_sampler.train_size \
                and w >= self.data_simulator.mol_sampler.train_size, 'real data is too small'
 
-        self.sample_window_size = min(min(h // 4 * 4, w // 4 * 4), 128)
+        self.sample_window_size = min(min(h // 4 * 4, w // 4 * 4), 256)
 
         self.h_sample_prob = real_data[:, :h - self.sample_window_size + 1, :].mean(axis=(0, 2)) / \
                              np.sum(real_data[:, :h - self.sample_window_size + 1, :].mean(axis=(0, 2)))
@@ -788,7 +801,8 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
 
     def get_real_data_z_prior(self, real_data, batch_size):
         print('-' * 200)
-        print('Using the current network to estimate the z prior of the real data...')
+        print(f'Using the current network to estimate the z prior of the real data {real_data.shape}...')
+
         self.network.eval()
         with torch.no_grad():
             n, h, w = real_data.shape
@@ -845,15 +859,18 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
                 print(z_weight[0])
 
         self.network.train()
-        return z_weight
+        self.real_data_z_weight = z_weight
 
     @staticmethod
     def crop_patches(delta_map_sample,
                      real_data,
                      xyzph_map_sample,
                      bg_sample,
+                     p_pred,
                      xyzph_pred,
                      xyzph_sig_pred,
+                     photon_threshold,
+                     p_var_threshold,
                      crop_size,
                      max_psfs,
                      z_weight=None):
@@ -925,23 +942,38 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
                 except ValueError:
                     pass
 
-            real_data_crop.append(real_data[frame_num,
-                                  h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]])
+            tmp_p_pred_crop = p_pred[frame_num,
+                              h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]]
+            tmp_real_data_crop = real_data[frame_num, h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]]
+            tmp_delta_map_sample_crop = delta_map_sample[frame_num, :,
+                                         h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]]
+            tmp_xyzph_map_sample_crop = xyzph_map_sample[:, frame_num, :,
+                                         h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]]
+            tmp_bg_sample_crop = bg_sample[frame_num,
+                                  h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]]
+            tmp_xyzph_pred_crop = xyzph_pred[frame_num, :,
+                                   h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]]
+            tmp_xyzph_sig_pred_crop = xyzph_sig_pred[frame_num, :,
+                                       h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]]
 
-            delta_map_sample_crop.append(delta_map_sample[frame_num, :,
-                                         h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]])
+            # check the crop area quality to ensure a better PSF learning
+            tmp_delta_inds = tuple(tmp_delta_map_sample_crop[0].nonzero().transpose(1, 0))
+            tmp_p_pred_var = (tmp_p_pred_crop - tmp_p_pred_crop**2).mean()
+            tmp_photons = tmp_xyzph_pred_crop[3][tmp_delta_inds]
+            # flag_1 filters the average photons
+            # flag_2 filters the detection probability
+            flag_1 = (tmp_photons.mean() >= photon_threshold)
+            flag_2 = (tmp_p_pred_var < p_var_threshold)
+            if not (flag_1 & flag_2):
+                continue
+                # ailoc.common.plot_image_stack(torch.concatenate([tmp_real_data_crop[None], tmp_p_pred_crop[None], tmp_delta_map_sample_crop[0:1]]))
 
-            xyzph_map_sample_crop.append(xyzph_map_sample[:, frame_num, :,
-                                         h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]])
-
-            bg_sample_crop.append(bg_sample[frame_num,
-                                  h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]])
-
-            xyzph_pred_crop.append(xyzph_pred[frame_num, :,
-                                   h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]])
-
-            xyzph_sig_pred_crop.append(xyzph_sig_pred[frame_num, :,
-                                       h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]])
+            real_data_crop.append(tmp_real_data_crop)
+            delta_map_sample_crop.append(tmp_delta_map_sample_crop)
+            xyzph_map_sample_crop.append(tmp_xyzph_map_sample_crop)
+            bg_sample_crop.append(tmp_bg_sample_crop)
+            xyzph_pred_crop.append(tmp_xyzph_pred_crop)
+            xyzph_sig_pred_crop.append(tmp_xyzph_sig_pred_crop)
 
             num_psfs += len(delta_map_sample_crop[-1].nonzero())
 
@@ -962,6 +994,9 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
                     z_crop = ailoc.common.cpu(xyzph_pred_crop[-1][2][delta_inds_for_z])
                     z_weight_tmp = np.average(z_weight[0][np.digitize(z_crop, z_weight[1])-1])
                     z_weight_crop.append(ailoc.common.gpu(z_weight_tmp))
+
+        if len(real_data_crop) == 0:
+            return None, None, None, None, None, None, None
 
         return torch.stack(real_data_crop), \
                torch.stack(delta_map_sample_crop), \

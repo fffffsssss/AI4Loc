@@ -128,6 +128,7 @@ def plot_synclearning_record(model):
     plt.show(block=True)
 
     # plot the pseudo-color image of the zernike phase and save it as a gif
+    print('-' * 200)
     print('Plot the phase learning process, this may take a while')
     zernike_phase_list = []
     for zernike_tmp in recorder['learned_psf_zernike'].items():
@@ -548,10 +549,11 @@ def plot_psf_stack(psfs, z_pos, cmap='gray'):
 def plot_image_stack(stack_a,cmap='magma'):
     num_z = stack_a.shape[0]
     nrows = min(int(np.ceil(num_z / 7)), 7)
+    ncols = min(num_z, 7)
     n_img_plot = min(num_z, 49)
 
-    fig, ax_arr = plt.subplots(nrows, 7,
-                               figsize=(7 * 2, 2 * nrows),
+    fig, ax_arr = plt.subplots(nrows, ncols,
+                               figsize=(ncols * 2, 2 * nrows),
                                constrained_layout=True)
     ax = []
     plts = []
@@ -564,6 +566,7 @@ def plot_image_stack(stack_a,cmap='magma'):
 
     for i in range(n_img_plot):
         plts.append(ax[i].imshow(ailoc.common.cpu(stack_a)[i], cmap=cmap))
+        plt.colorbar(mappable=plts[-1], ax=ax[i], fraction=0.046, pad=0.04)
     plt.show()
 
 
