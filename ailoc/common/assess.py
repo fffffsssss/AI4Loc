@@ -300,7 +300,7 @@ def test_single_emitter_accuracy(loc_model,
     photons_emit = ailoc.common.gpu(torch.ones(num_z_step*num_repeat) * photon)
     bgs_emit = ailoc.common.gpu(torch.ones(num_z_step*num_repeat) * bg)
 
-    test_psfs = ailoc.common.cpu(psf_model.simulate_parallel(xemit, yemit, zemit, photons_emit) +
+    test_psfs = ailoc.common.cpu(psf_model.simulate(xemit, yemit, zemit, photons_emit) +
                                  bgs_emit[:, None, None])
     # pad the size of test_data to be multiple of 4
     test_psfs_padded, sub_fov_xy_list, _ = ailoc.common.split_fov(test_psfs, sub_fov_size=128)

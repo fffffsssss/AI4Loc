@@ -426,23 +426,11 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
         self.z_bins = 10
         self.real_data_z_weight = [np.ones(self.z_bins) * (1/self.z_bins),
                                    np.linspace(-1, 1, self.z_bins+1)]
-        # self.real_data_z_weight = [np.ones(5)*0.2, np.array([-np.inf, -0.6, -0.2, 0.2, 0.6, np.inf])]
         self.photon_threshold = 3000/self.data_simulator.mol_sampler.photon_scale
         self.p_var_threshold = 0.00125  # p=0.5, var=0.25,  density=0.005, 0.25*0.005
 
-        # z_bins = 20
-        # self.intervals = np.linspace(self.data_simulator.mol_sampler.z_range[0],
-        #                         self.data_simulator.mol_sampler.z_range[1],
-        #                         num=z_bins + 1)
-        # self.target_z_counts = {interval: 100 for interval in zip(self.intervals[:-1], self.intervals[1:])}
-
-        # self.optimizer_psf = torch.optim.AdamW([self.learned_psf.zernike_coef], lr=25*6e-4)
         self.optimizer_psf = torch.optim.Adam([self.learned_psf.zernike_coef], lr=0.01*self.z_bins)
-        # self.optimizer_psf = torch.optim.Adam([self.learned_psf.zernike_coef], lr=0.01)
-        # self.optimizer_psf = torch.optim.SGD([self.learned_psf.zernike_coef], lr=0.1)
-        # self.optimizer_psf = torch.optim.LBFGS([self.learned_psf.zernike_coef], lr=0.1, max_iter=1)
         self.scheduler_psf = torch.optim.lr_scheduler.StepLR(self.optimizer_psf, step_size=1000, gamma=0.9)
-        # self.scheduler_psf = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_psf, T_max=30000)
 
     @staticmethod
     def _init_recorder():
@@ -494,7 +482,6 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
 
         file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'SyncLoc_SL.pt' if file_name is None else file_name
         self.scheduler.T_max = max_iterations
-        # self.scheduler_psf.T_max = (max_iterations - self.warmup)//wake_interval
 
         assert real_data is not None, 'real data is not provided'
 
@@ -510,9 +497,6 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
             self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer,
                                                                         T_max=max_iterations,
                                                                         last_epoch=self._iter_train)
-            # self.scheduler_psf = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer_psf,
-            #                                                                 T_max=(max_iterations - self.warmup)//wake_interval,
-            #                                                                 last_epoch=(self._iter_train-self.warmup)//wake_interval)
 
         while self._iter_train < max_iterations:
             t0 = time.time()
@@ -668,30 +652,7 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
         xyzph_sig_pred_crop_list = torch.cat(xyzph_sig_pred_crop_list, dim=0)
         z_weight_crop_list = torch.cat(z_weight_crop_list, dim=0)
 
-        # # calculate the p_theta(x|h), q_phi(h|x) to compute the loss and optimize the psf using LBFGS
-        # def closure():
-        #     self.optimizer_net.zero_grad()
-        #     self.learned_psf._pre_compute()
-        #     reconstruction = self.data_simulator.reconstruct_posterior(self.learned_psf,
-        #                                                                delta_map_sample_crop_list,
-        #                                                                xyzph_map_sample_crop_list,
-        #                                                                bg_sample_crop_list, )
-        #
-        #     self.optimizer_psf.zero_grad()
-        #     wake_loss = self.wake_loss_v2(real_data_sampled_crop_list,
-        #                                   reconstruction,
-        #                                   delta_map_sample_crop_list,
-        #                                   xyzph_map_sample_crop_list,
-        #                                   xyzph_pred_crop_list,
-        #                                   xyzph_sig_pred_crop_list,
-        #                                   z_weight_crop_list)
-        #     wake_loss.backward()
-        #     return wake_loss.detach()
-        # loss = closure()
-        # self.optimizer_psf.step(closure)
-
         # calculate the p_theta(x|h), q_phi(h|x) to compute the loss and optimize the psf using Adam
-        self.learned_psf._pre_compute()
         reconstruction = self.data_simulator.reconstruct_posterior(self.learned_psf,
                                                                    delta_map_sample_crop_list,
                                                                    xyzph_map_sample_crop_list,
@@ -705,16 +666,13 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
                                            xyzph_sig_pred_crop_list,
                                            z_weight_crop_list)
         self.optimizer_psf.zero_grad()
-        # self.optimizer.zero_grad()
         loss.backward()
         self.optimizer_psf.step()
         self.scheduler_psf.step()
-        # self.optimizer.step()
 
         # update the psf simulator
         if isinstance(self.data_simulator.psf_model, ailoc.simulation.VectorPSFTorch):
             self.data_simulator.psf_model.zernike_coef = self.learned_psf.zernike_coef.detach()
-            self.data_simulator.psf_model._pre_compute()
         elif isinstance(self.data_simulator.psf_model, ailoc.simulation.VectorPSFCUDA):
             self.data_simulator.psf_model.zernike_coef = self.learned_psf.zernike_coef.detach().cpu().numpy()
 
@@ -757,14 +715,11 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
     def sample_posterior(self, p_pred, xyzph_pred, xyzph_sig_pred, bg_pred, num_sample):
         with torch.no_grad():
             batch_size, h, w = p_pred.shape[0], p_pred.shape[-2], p_pred.shape[-1]
-            # delta = ailoc.common.gpu(
-            #     ailoc.common.sample_prob_old(
-            #         ailoc.common.cpu(p_pred), batch_size))[:, None].expand(-1, num_sample, -1, -1)
             delta = ailoc.common.gpu(ailoc.common.sample_prob(p_pred,
                                                               batch_size))[:, None].expand(-1, num_sample, -1, -1)
-            xyzph_sample = torch.distributions.Normal(loc=(xyzph_pred.permute([1, 0, 2, 3])[:, :, None]).expand(-1, -1, num_sample, -1, -1),
-                                                      scale=(xyzph_sig_pred.permute([1, 0, 2, 3])[:, :, None]).expand(-1, -1, num_sample, -1, -1)).sample()
-            # xyzph_sample = (xyzph_pred.detach().permute([1, 0, 2, 3])[:, :, None]).expand(-1, -1, num_sample, -1, -1)
+            xyzph_sample = torch.distributions.Normal(
+                loc=(xyzph_pred.permute([1, 0, 2, 3])[:, :, None]).expand(-1, -1, num_sample, -1, -1),
+                scale=(xyzph_sig_pred.permute([1, 0, 2, 3])[:, :, None]).expand(-1, -1, num_sample, -1, -1)).sample()
             xyzph_sample[0] = torch.clamp(xyzph_sample[0], min=-self.learned_psf.psf_size//2, max=self.learned_psf.psf_size//2)
             xyzph_sample[1] = torch.clamp(xyzph_sample[1], min=-self.learned_psf.psf_size//2, max=self.learned_psf.psf_size//2)
             xyzph_sample[2] = torch.clamp(xyzph_sample[2], min=-3.0, max=3.0)

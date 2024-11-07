@@ -281,26 +281,23 @@ class VectorPSFTorch(VectorPSF):
 
         self.na = torch.tensor(psf_params['na'], device='cuda', dtype=self.data_type)
         self.wavelength = torch.tensor(psf_params['wavelength'], device='cuda', dtype=self.data_type)
-        self.refmed = torch.tensor(psf_params['refmed'], device='cuda', dtype=self.data_type, requires_grad=req_grad)
-        self.refcov = torch.tensor(psf_params['refcov'], device='cuda', dtype=self.data_type, requires_grad=req_grad)
-        self.refimm = torch.tensor(psf_params['refimm'], device='cuda', dtype=self.data_type, requires_grad=req_grad)
+        self.refmed = torch.tensor(psf_params['refmed'], device='cuda', dtype=self.data_type,)
+        self.refcov = torch.tensor(psf_params['refcov'], device='cuda', dtype=self.data_type,)
+        self.refimm = torch.tensor(psf_params['refimm'], device='cuda', dtype=self.data_type,)
         self.zernike_mode = torch.tensor(psf_params['zernike_mode'], device='cuda', dtype=self.data_type)
         self.zernike_coef = torch.tensor(psf_params['zernike_coef'], device='cuda', dtype=self.data_type,
                                          requires_grad=req_grad)
         self.zernike_coef_map = None
-        self.objstage0 = torch.tensor(psf_params['objstage0'], device='cuda', dtype=self.data_type,
-                                      requires_grad=req_grad)
+        self.objstage0 = torch.tensor(psf_params['objstage0'], device='cuda', dtype=self.data_type,)
         try:
-            self.zemit0 = torch.tensor(psf_params['zemit0'], device='cuda', dtype=self.data_type, requires_grad=req_grad)
+            self.zemit0 = torch.tensor(psf_params['zemit0'], device='cuda', dtype=self.data_type, )
         except KeyError:
             self.zemit0 = torch.tensor(-psf_params['objstage0']/psf_params['refimm']*psf_params['refmed'],
                                        device='cuda',
-                                       dtype=self.data_type,
-                                       requires_grad=req_grad)
+                                       dtype=self.data_type,)
 
         self.pixel_size_xy = torch.tensor(psf_params['pixel_size_xy'], device='cuda', dtype=self.data_type)
-        self.otf_rescale_xy = torch.tensor(psf_params['otf_rescale_xy'], device='cuda', dtype=self.data_type,
-                                           requires_grad=req_grad)
+        self.otf_rescale_xy = torch.tensor(psf_params['otf_rescale_xy'], device='cuda', dtype=self.data_type,)
         self.npupil = psf_params['npupil']
         self.psf_size = psf_params['psf_size']
 
@@ -405,6 +402,48 @@ class VectorPSFTorch(VectorPSF):
 
         return dataout
 
+    def czt_parallel(self, datain, A, B, D):
+        """
+        Execute the chirp-z transform
+
+        Args:
+            datain (torch.Tensor): input data, 2D array
+            A (torch.Tensor): chirp parameter, 1D array
+            B (torch.Tensor): chirp parameter, 1D array
+            D (torch.Tensor): chirp parameter, 1D array
+
+        Returns:
+            torch.Tensor: output data, 2D array
+        """
+
+        N = A.shape[1]
+        M = B.shape[1]
+        L = D.shape[1]
+        K = datain.shape[-2]
+        n_mol = datain.shape[-3]
+
+        # torch.repeat_interleave is too slow
+        # t0 = time.time()
+        # Amt = torch.repeat_interleave(A, K, 0)
+        # Bmt = torch.repeat_interleave(B, K, 0)
+        # Dmt = torch.repeat_interleave(D, K, 0)
+        # print('torch czt: ', time.time() - t0)
+        Amt = A.expand(K, N)
+        Bmt = B.expand(K, M)
+        Dmt = D.expand(K, L)
+
+        cztin = torch.zeros([2, 3, n_mol, K, L], dtype=self.complex_type, device='cuda')
+        cztin[:, :, :, :, 0:N] = Amt[None, None, None] * datain
+        try:
+            tmp = Dmt * torch.fft.fft(cztin, dim=-1)
+        except:
+            print('fft error')
+        cztout = torch.fft.ifft(tmp, dim=-1)
+
+        dataout = Bmt[None, None, None] * cztout[:, :, :, :, 0:M]
+
+        return dataout
+
     def prechirpz(self, xsize, qsize, N, M):
         """
         Calculate the auxiliary vectors for chirp-z.
@@ -474,8 +513,8 @@ class VectorPSFTorch(VectorPSF):
         return A, B, D
 
     # old version
-    @deprecated(reason="use the parallel version _pre_compute instead")
-    def _pre_compute_old(self):
+    @deprecated(reason="the same as matlab code, using for loop is slow")
+    def _pre_compute_v1(self):
         """
         Compute the common intermediate variables in advance, this can save time for PSFs simulation
         """
@@ -572,8 +611,9 @@ class VectorPSFTorch(VectorPSF):
                 int_focus += 1 / 3 * (torch.abs(fieldmatrix_norm[itel, jtel])) ** 2
         self.norm_intensity = torch.sum(int_focus)
 
-    # parallel version
-    def _pre_compute(self):
+    @deprecated(reason="parallel version of v1, but not compatible with simulate v3, where zernike phase "
+                       "is not computed in advance")
+    def _pre_compute_v2(self):
         """
         Compute the common intermediate variables in advance, this can save time for PSFs simulation
         """
@@ -665,7 +705,90 @@ class VectorPSFTorch(VectorPSF):
         int_focus += 1 / 3 * torch.sum(torch.abs(fieldmatrix_norm) ** 2, dim=(0, 1, 2))
         self.norm_intensity = torch.sum(int_focus)
 
-    def simulate(self, x, y, z, photons, objstage=None):
+    def _pre_compute(self):
+        """
+        Compute the common intermediate variables in advance, this can save time for PSFs simulation
+        """
+        # pupil radius (in diffraction units) and pupil coordinate sampling
+        pupil_size = 1.0
+        dxypupil = 2 * pupil_size / self.npupil
+        xypupil = torch.arange(-pupil_size + dxypupil / 2, pupil_size, dxypupil, device='cuda', dtype=self.data_type)
+        [xpupil, ypupil] = torch.meshgrid(xypupil, xypupil, indexing='ij')
+        ypupil = torch.complex(ypupil, torch.zeros_like(ypupil))
+        xpupil = torch.complex(xpupil, torch.zeros_like(xpupil))
+
+        # calculation of relevant Fresnel-coefficients for the interfaces
+        costhetamed = torch.sqrt(1.0 - (xpupil ** 2 + ypupil ** 2) * (self.na ** 2) / (self.refmed ** 2))
+        costhetacov = torch.sqrt(1.0 - (xpupil ** 2 + ypupil ** 2) * (self.na ** 2) / (self.refcov ** 2))
+        costhetaimm = torch.sqrt(1.0 - (xpupil ** 2 + ypupil ** 2) * (self.na ** 2) / (self.refimm ** 2))
+        fresnelpmedcov = 2 * self.refmed * costhetamed / (self.refmed * costhetacov + self.refcov * costhetamed)
+        fresnelsmedcov = 2 * self.refmed * costhetamed / (self.refmed * costhetamed + self.refcov * costhetacov)
+        fresnelpcovimm = 2 * self.refcov * costhetacov / (self.refcov * costhetaimm + self.refimm * costhetacov)
+        fresnelscovimm = 2 * self.refcov * costhetacov / (self.refcov * costhetacov + self.refimm * costhetaimm)
+        fresnelp = fresnelpmedcov * fresnelpcovimm
+        fresnels = fresnelsmedcov * fresnelscovimm
+
+        # apodization
+        # apod = 1 / torch.sqrt(costhetaimm)  # previous version, for the simulated test dataset, should be deprecated
+        # apod = 1 / torch.sqrt(costhetamed)
+        apod = torch.sqrt(costhetaimm) / costhetamed  # Sjoerd Stallinga version
+
+        # define aperture
+        aperturemask = torch.where((xpupil ** 2 + ypupil ** 2).real < 1.0, 1.0, 0.0)
+        self.amplitude = aperturemask * apod
+
+        # setting of vectorial functions
+        phi = torch.atan2(torch.real(ypupil), torch.real(xpupil))
+        cosphi = torch.cos(phi)
+        sinphi = torch.sin(phi)
+        costheta = costhetamed
+        sintheta = torch.sqrt(1 - costheta ** 2)
+
+        pvec = torch.empty([3, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
+        pvec[0] = fresnelp * costheta * cosphi
+        pvec[1] = fresnelp * costheta * sinphi
+        pvec[2] = -fresnelp * sintheta
+        svec = torch.empty([3, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
+        svec[0] = -fresnels * sinphi
+        svec[1] = fresnels * cosphi
+        svec[2] = 0 * cosphi
+
+        self.polarizationvector = torch.empty([2, 3, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
+        self.polarizationvector[0,] = cosphi * pvec - sinphi * svec
+        self.polarizationvector[1,] = sinphi * pvec + cosphi * svec
+
+        self.wavevector = torch.empty([2, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
+        self.wavevector[0] = 2 * np.pi * self.na / self.wavelength * xpupil
+        self.wavevector[1] = 2 * np.pi * self.na / self.wavelength * ypupil
+        self.wavevectorzimm = 2 * np.pi * self.refimm / self.wavelength * costhetaimm
+        self.wavevectorzmed = 2 * np.pi * self.refmed / self.wavelength * costhetamed
+
+        # calculate aberration function
+        normfac = torch.sqrt(
+            2 * (self.zernike_mode[:, 0] + 1) / (1 + torch.where(self.zernike_mode[:, 1] == 0, 1.0, 0.0)))
+        self.allzernikes = self.get_zernike(self.zernike_mode, xpupil, ypupil) * normfac[:, None, None] * aperturemask[None]
+
+        # czt transform(fft the pupil)
+        xrange = self.pixel_size_xy[0] * self.psf_size / 2
+        yrange = self.pixel_size_xy[1] * self.psf_size / 2
+        imagesizex = xrange * self.na / self.wavelength
+        imagesizey = yrange * self.na / self.wavelength
+
+        # calculate the auxiliary vectors for chirp-z, pixelsize_xy should be inverse to match row and column
+        self.ax, self.bx, self.dx = self.prechirpz(pupil_size, imagesizey, self.npupil, self.psf_size)
+        self.ay, self.by, self.dy = self.prechirpz(pupil_size, imagesizex, self.npupil, self.psf_size)
+
+        # calculate intensity normalization function using the PSF at focus
+        pupilfunction_norm = self.amplitude[None, None, None] * self.polarizationvector[:, :, None]
+        inter_image_norm = torch.transpose(self.czt_parallel(pupilfunction_norm, self.ax, self.bx, self.dx), -1, -2)
+        fieldmatrix_norm = torch.transpose(self.czt_parallel(inter_image_norm, self.ay, self.by, self.dy), -1, -2)
+
+        int_focus = torch.zeros([self.psf_size, self.psf_size], dtype=self.data_type, device='cuda')
+        int_focus += 1 / 3 * torch.sum(torch.abs(fieldmatrix_norm) ** 2, dim=(0, 1, 2))
+        self.norm_intensity = torch.sum(int_focus)
+
+    @deprecated(reason="the same as matlab code, using for loop is slow")
+    def simulate_v1(self, x, y, z, photons, objstage=None):
         """
         Run the simulation to generate the vector PSFs with the given positions
 
@@ -723,49 +846,9 @@ class VectorPSFTorch(VectorPSF):
 
         return psfs_out
 
-    def czt_parallel(self, datain, A, B, D):
-        """
-        Execute the chirp-z transform
-
-        Args:
-            datain (torch.Tensor): input data, 2D array
-            A (torch.Tensor): chirp parameter, 1D array
-            B (torch.Tensor): chirp parameter, 1D array
-            D (torch.Tensor): chirp parameter, 1D array
-
-        Returns:
-            torch.Tensor: output data, 2D array
-        """
-
-        N = A.shape[1]
-        M = B.shape[1]
-        L = D.shape[1]
-        K = datain.shape[-2]
-        n_mol = datain.shape[-3]
-
-        # torch.repeat_interleave is too slow
-        # t0 = time.time()
-        # Amt = torch.repeat_interleave(A, K, 0)
-        # Bmt = torch.repeat_interleave(B, K, 0)
-        # Dmt = torch.repeat_interleave(D, K, 0)
-        # print('torch czt: ', time.time() - t0)
-        Amt = A.expand(K, N)
-        Bmt = B.expand(K, M)
-        Dmt = D.expand(K, L)
-
-        cztin = torch.zeros([2, 3, n_mol, K, L], dtype=self.complex_type, device='cuda')
-        cztin[:, :, :, :, 0:N] = Amt[None, None, None] * datain
-        try:
-            tmp = Dmt * torch.fft.fft(cztin, dim=-1)
-        except:
-            print('fft error')
-        cztout = torch.fft.ifft(tmp, dim=-1)
-
-        dataout = Bmt[None, None, None] * cztout[:, :, :, :, 0:M]
-
-        return dataout
-
-    def simulate_parallel(self, x, y, z, photons, objstage=None):
+    @deprecated(reason="parallel version of v1, but not compatible with simulate v3, where zernike phase "
+                       "is not computed in advance")
+    def simulate_v2(self, x, y, z, photons, objstage=None):
         """
         Run the simulation to generate the vector PSFs with the given positions
 
@@ -853,6 +936,91 @@ class VectorPSFTorch(VectorPSF):
 
         return psfs_out
 
+    def simulate(self, x, y, z, photons, objstage=None, zernike_coefs=None):
+        """
+        Run the simulation to generate the vector PSFs with the given positions
+
+        Args:
+            x (torch.Tensor): x positions of the PSFs, unit nm
+            y (torch.Tensor): y positions of the PSFs, unit nm
+            z (torch.Tensor): z positions of the PSFs, unit nm
+            photons (torch.Tensor): photon counts of the PSFs, unit photons
+            objstage (torch.Tensor): objective stage positions relative to the cover-slip (0),
+                the closer to the sample, the smaller this value is (-), unit nm
+            zernike_coefs (torch.Tensor or None): if not None, each psf can be assigned a different zernike
+                coefficients from this array with shape (npsf, 21), otherwise use the common class
+                property self.zernike_coef, unit nm
+
+        Returns:
+            torch.Tensor: PSFs, unit photons
+        """
+
+        n_mol = x.shape[0]
+        if n_mol == 0:
+            return torch.zeros([0, self.psf_size, self.psf_size], device='cuda', dtype=torch.float32)
+
+        objstage = torch.zeros(x.shape[0], dtype=self.data_type, device='cuda') if objstage is None else objstage
+
+        if zernike_coefs is None:
+            zernike_phase = torch.exp(1j * 2 * np.pi *
+                                      torch.sum(self.zernike_coef[:, None, None] * self.allzernikes, dim=0)
+                                      / self.wavelength)
+            pupilmatrix = (self.amplitude[None, None] *
+                           zernike_phase[None, None] *
+                           self.polarizationvector)[:, :, None]
+
+        # batch_size in parallel to save GPU memory
+        slice_list = []
+        batch_size = 100
+        for i in np.arange(0, n_mol, batch_size):
+            slice_list.append(slice(i, min(i + batch_size, n_mol)))
+
+        psfs_out = torch.zeros([n_mol, self.psf_size, self.psf_size], device='cuda', dtype=torch.float32)
+        for slice_tmp in slice_list:
+            if zernike_coefs is not None:
+                zernike_phase = torch.exp(1j * 2 * np.pi *
+                                          torch.sum(zernike_coefs[slice_tmp, :, None, None] * self.allzernikes[None], dim=1)
+                                          / self.wavelength)
+                pupilmatrix = (zernike_phase[None, None] *
+                               self.polarizationvector[:, :, None] *
+                               self.amplitude[None, None, None])
+
+            length_tmp = slice_tmp.stop - slice_tmp.start
+            position_phase = torch.empty([length_tmp, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
+
+            idx = torch.where(z[slice_tmp] + self.zemit0 >= 0)[0]
+            phase_xyz_tmp = -y[slice_tmp][idx][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx][:, None, None] * \
+                            self.wavevector[1][None] + \
+                            (z[slice_tmp][idx] + self.zemit0)[:, None, None] * self.wavevectorzmed[None]
+            position_phase[idx, :, :] = torch.exp(
+                1j * (phase_xyz_tmp + (objstage[slice_tmp][idx][:, None, None] + self.objstage0) *
+                      self.wavevectorzimm[None]))
+
+            idx = torch.where(z[slice_tmp] + self.zemit0 < 0)[0]
+            phase_xyz_tmp = -y[slice_tmp][idx][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx][:, None, None] * \
+                            self.wavevector[1][None]
+            position_phase[idx, :, :] = torch.exp(
+                1j * (phase_xyz_tmp + (objstage[slice_tmp][idx][:, None, None] + self.objstage0 + z[slice_tmp][idx][:, None, None]
+                                       + self.zemit0) * self.wavevectorzimm[None]))
+
+            pupil_tmp = position_phase[None, None] * pupilmatrix
+            inter_image = torch.transpose(self.czt_parallel(pupil_tmp, self.ay, self.by, self.dy), -1, -2)
+            field_matrix = torch.transpose(self.czt_parallel(inter_image, self.ax, self.bx, self.dx), -1, -2)
+
+            psfs_out[slice_tmp] += 1 / 3 * torch.sum((torch.abs(field_matrix[:, :])) ** 2, dim=(0, 1))
+
+        # intensity normalization
+        psfs_out /= self.norm_intensity
+
+        # otf rescale
+        if self.otf_rescale_xy[0] or self.otf_rescale_xy[1] != 0:
+            psfs_out = self.otf_rescale(psfdata=psfs_out, sigma_xy=self.otf_rescale_xy)
+
+        # multiply with the photon number
+        psfs_out *= photons[:, None, None]
+
+        return psfs_out
+
     def compute_crlb(self, x, y, z, photons, bgs):
         """
         Calculate the CRLB of this PSF model at give positions, photons and backgrounds.
@@ -869,37 +1037,9 @@ class VectorPSFTorch(VectorPSF):
         """
 
         n_mol = x.shape[0]
-        # TODO: global fitting based on shared control flag, not implemented yet
-        # num_zernike = self.zernike_mode.shape[0]
-        # # shared flag about each parameter type, 1 for shared and 0 for not shared
-        # shared_flag = np.concatenate((np.ones(num_zernike), np.array([0, 0, 0, 0, 0])), axis=0)
-        # num_pars = int((num_zernike + 5) * n_mol - shared_flag.sum() * (n_mol - 1))
-        # # parameter map: [shared, parameter type, relevant channel]
-        # param_map = np.zeros((num_pars, 3), dtype=int)
-        # n = 0
-        # for i in range(len(shared_flag)):
-        #     if shared_flag[i] == 1:
-        #         # first column represents this parameter is shared or not
-        #         param_map[n, 0] = 1
-        #         # second column represents the type of the parameter, 1:num_zernike for zernike,
-        #         # num_zernike+1:num_zernike+5 for x,y,z,photons,background
-        #         param_map[n, 1] = i + 1
-        #         # third column represents the index of the data related to this parameter,
-        #         # 0 means all data are relevant
-        #         param_map[n, 2] = 0
-        #         n += 1
-        #     elif shared_flag[i] == 0:
-        #         # if not shared, means there are n_mol parameters of this type
-        #         for j in range(n_mol):
-        #             # the same as above
-        #             param_map[n, 0] = 0
-        #             param_map[n, 1] = i + 1
-        #             param_map[n, 2] = j + 1
-        #             n += 1
 
         # calculate the derivatives
-        # [dudt, model] = self._compute_derivative(x, y, z, photons, bgs)
-        [dudt, model] = self._compute_derivative_parallel(x, y, z, photons, bgs)
+        [dudt, model] = self._compute_derivative(x, y, z, photons, bgs)
         # dudt = self._torch_jacobian_derivative(x, y, z, photons, bgs)
 
         # calculate hessian matrix, here only consider not shared parameters: x, y, z, photons, background
@@ -983,7 +1123,8 @@ class VectorPSFTorch(VectorPSF):
 
         return xyz_crlb, model
 
-    def _compute_derivative(self, x, y, z, photons, bgs):
+    @deprecated(reason='the same as matlab code, using for loop is slow')
+    def _compute_derivative_v1(self, x, y, z, photons, bgs):
         """
         Calculate the analytical derivatives of the PSFs at given parameters with respect to x,y,z,photons,bg
         """
@@ -1058,7 +1199,8 @@ class VectorPSFTorch(VectorPSF):
         ders_out[:, :, :, 4] = torch.ones_like(psfs)
         return ders_out, psfs_out
 
-    def _compute_derivative_parallel(self, x, y, z, photons, bgs):
+    @deprecated(reason='parallel version of v1, but not compatible with the _pre_compute_v3 and simulate_v3')
+    def _compute_derivative_v2(self, x, y, z, photons, bgs):
         """
         Calculate the analytical derivatives of the PSFs at given parameters with respect to x,y,z,photons,bg
         """
@@ -1114,6 +1256,91 @@ class VectorPSFTorch(VectorPSF):
             pupil_tmp_z = torch.empty([2, 3, length_tmp, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
             pupil_tmp_z[:, :, idx_0] = 1j * self.wavevectorzmed * position_phase[idx_0] * self.pupilmatrix[:, :, None]
             pupil_tmp_z[:, :, idx_1] = 1j * self.wavevectorzimm * position_phase[idx_1] * self.pupilmatrix[:, :, None]
+            inter_image_z = torch.transpose(self.czt_parallel(pupil_tmp_z, self.ay, self.by, self.dy), -1, -2)
+            field_matrix_z = torch.transpose(self.czt_parallel(inter_image_z, self.ax, self.bx, self.dx), -1, -2)
+            psfs_ders[slice_tmp, :, :, 2] += 2 / 3 * torch.sum(torch.real(torch.conj(field_matrix) * field_matrix_z),
+                                                               dim=(0, 1))
+        psfs /= self.norm_intensity
+        psfs_ders /= self.norm_intensity
+
+        # otf rescale
+        if self.otf_rescale_xy[0] or self.otf_rescale_xy[1] != 0:
+            psfs = self.otf_rescale(psfdata=psfs, sigma_xy=self.otf_rescale_xy)
+            psfs_ders[:, :, :, 0] = self.otf_rescale(psfdata=psfs_ders[:, :, :, 0], sigma_xy=self.otf_rescale_xy)
+            psfs_ders[:, :, :, 1] = self.otf_rescale(psfdata=psfs_ders[:, :, :, 1], sigma_xy=self.otf_rescale_xy)
+            psfs_ders[:, :, :, 2] = self.otf_rescale(psfdata=psfs_ders[:, :, :, 2], sigma_xy=self.otf_rescale_xy)
+
+        psfs_out = ailoc.common.gpu(psfs * photons[:, None, None] + bgs[:, None, None])
+        ders_out = torch.zeros([n_mol, self.psf_size, self.psf_size, 5], device='cuda', dtype=self.data_type)
+        ders_out[:, :, :, 0:3] = psfs_ders * photons[:, None, None, None]
+        ders_out[:, :, :, 3] = psfs
+        ders_out[:, :, :, 4] = torch.ones_like(psfs)
+
+        return ders_out, psfs_out
+
+    def _compute_derivative(self, x, y, z, photons, bgs):
+        """
+        Calculate the analytical derivatives of the PSFs at given parameters with respect to x,y,z,photons,bg
+        """
+
+        n_mol = x.shape[0]
+        objstage = torch.zeros(x.shape[0], dtype=self.data_type, device='cuda')
+
+        zernike_phase = torch.exp(1j * 2 * np.pi *
+                                  torch.sum(self.zernike_coef[:, None, None]*self.allzernikes, dim=0)
+                                  / self.wavelength)
+        pupilmatrix = (self.amplitude[None, None] *
+                       zernike_phase[None, None] *
+                       self.polarizationvector)[:, :, None]
+
+        # batch_size in parallel to save GPU memory
+        slice_list = []
+        batch_size = 100
+        for i in np.arange(0, n_mol, batch_size):
+            slice_list.append(slice(i, min(i + batch_size, n_mol)))
+
+        psfs = torch.zeros([n_mol, self.psf_size, self.psf_size], device='cuda', dtype=self.data_type)
+        psfs_ders = torch.zeros([n_mol, self.psf_size, self.psf_size, 3], device='cuda', dtype=self.data_type)
+        for slice_tmp in slice_list:
+            length_tmp = slice_tmp.stop - slice_tmp.start
+            position_phase = torch.empty([length_tmp, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
+
+            idx_0 = torch.where(z[slice_tmp] + self.zemit0 >= 0)[0]
+            phase_xyz_tmp = -y[slice_tmp][idx_0][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx_0][:, None, None] * \
+                            self.wavevector[1][None] + \
+                            (z[slice_tmp][idx_0] + self.zemit0)[:, None, None] * self.wavevectorzmed[None]
+            position_phase[idx_0, :, :] = torch.exp(
+                1j * (phase_xyz_tmp + (objstage[slice_tmp][idx_0][:, None, None] + self.objstage0) *
+                      self.wavevectorzimm[None]))
+
+            idx_1 = torch.where(z[slice_tmp] + self.zemit0 < 0)[0]
+            phase_xyz_tmp = -y[slice_tmp][idx_1][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx_1][:, None, None] * \
+                            self.wavevector[1][None]
+            position_phase[idx_1, :, :] = torch.exp(
+                1j * (phase_xyz_tmp + (objstage[slice_tmp][idx_1][:, None, None] + self.objstage0 + z[slice_tmp][idx_1][:, None, None]
+                                       + self.zemit0) * self.wavevectorzimm[None]))
+
+            pupil_tmp = position_phase[None, None] * pupilmatrix
+            inter_image = torch.transpose(self.czt_parallel(pupil_tmp, self.ay, self.by, self.dy), -1, -2)
+            field_matrix = torch.transpose(self.czt_parallel(inter_image, self.ax, self.bx, self.dx), -1, -2)
+            psfs[slice_tmp] += 1 / 3 * torch.sum((torch.abs(field_matrix[:, :])) ** 2, dim=(0, 1))
+
+            # derivatives with respect to x,y,z
+            pupil_tmp_x = -1j * self.wavevector[1] * position_phase[None, None] * pupilmatrix
+            inter_image_x = torch.transpose(self.czt_parallel(pupil_tmp_x, self.ay, self.by, self.dy), -1, -2)
+            field_matrix_x = torch.transpose(self.czt_parallel(inter_image_x, self.ax, self.bx, self.dx), -1, -2)
+            psfs_ders[slice_tmp, :, :, 0] += 2 / 3 * torch.sum(torch.real(torch.conj(field_matrix) * field_matrix_x),
+                                                               dim=(0, 1))
+
+            pupil_tmp_y = -1j * self.wavevector[0] * position_phase[None, None] * pupilmatrix
+            inter_image_y = torch.transpose(self.czt_parallel(pupil_tmp_y, self.ay, self.by, self.dy), -1, -2)
+            field_matrix_y = torch.transpose(self.czt_parallel(inter_image_y, self.ax, self.bx, self.dx), -1, -2)
+            psfs_ders[slice_tmp, :, :, 1] += 2 / 3 * torch.sum(torch.real(torch.conj(field_matrix) * field_matrix_y),
+                                                               dim=(0, 1))
+
+            pupil_tmp_z = torch.empty([2, 3, length_tmp, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
+            pupil_tmp_z[:, :, idx_0] = 1j * self.wavevectorzmed * position_phase[idx_0] * pupilmatrix
+            pupil_tmp_z[:, :, idx_1] = 1j * self.wavevectorzimm * position_phase[idx_1] * pupilmatrix
             inter_image_z = torch.transpose(self.czt_parallel(pupil_tmp_z, self.ay, self.by, self.dy), -1, -2)
             field_matrix_z = torch.transpose(self.czt_parallel(inter_image_z, self.ax, self.bx, self.dx), -1, -2)
             psfs_ders[slice_tmp, :, :, 2] += 2 / 3 * torch.sum(torch.real(torch.conj(field_matrix) * field_matrix_z),

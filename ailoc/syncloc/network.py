@@ -197,8 +197,8 @@ class U_NeXt_v2(nn.Module):
 
 class SyncLocNet(nn.Module):
     """
-    The TransLocNet consists of a U-NeXt based feature extraction module(FEM), an optional temporal
-    Transformer module(TTM) and an output head. The output representation is inspired by the DECODE.
+    The TransLocNet consists of a U-NeXt based feature extraction module(FEM), an optional transformer based
+    temporal attention module(TAM) and an output head. The output representation is inspired by the DECODE.
     """
 
     def __init__(self, temporal_attn=True, attn_length=3, train_context_size=12):

@@ -147,7 +147,7 @@ def split_fov(data, fov_xy=None, sub_fov_size=128, over_cut=8):
     pad_h = 0
     pad_w = 0
     if (h % factor != 0) or (w % factor != 0):
-        empty_area_adu = ailoc.common.get_mean_percentile(data, percentile=50)
+        empty_area_adu = ailoc.common.get_mean_percentile(data, percentile=10)
         if h % factor != 0:
             new_h = (h // factor + 1) * factor
             pad_h = new_h - h

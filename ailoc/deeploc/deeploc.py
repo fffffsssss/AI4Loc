@@ -137,7 +137,7 @@ class DeepLoc(ailoc.common.XXLoc):
             self.evaluation_recorder['iter_time'][self._iter_train] = avg_iter_time
 
             if self._iter_train > 1000:
-                print('----------------------------------------------------------------------------------------------')
+                print('-' * 200)
                 self.online_evaluate(batch_size=batch_size)
 
             self.print_recorder(max_iterations)
@@ -393,40 +393,6 @@ class DeepLoc(ailoc.common.XXLoc):
             ax[i].scatter(pix_gt[:, 1], pix_gt[:, 0], s=5, c='m', marker='x')
 
         plt.show()
-
-        # if self.data_simulator.mol_sampler.local_context:
-        #     fig, ax = plt.subplots(2, 2, constrained_layout=True)
-        #     img_tmp = ax[0, 0].imshow(ailoc.common.cpu(data_cam)[0, 0], cmap=cmap)
-        #     plt.colorbar(mappable=img_tmp, ax=ax[0, 0], fraction=0.046, pad=0.04)
-        #     ax[0, 0].set_title('last frame')
-        #
-        #     img_tmp = ax[0, 1].imshow(ailoc.common.cpu(data_cam)[0, 1], cmap=cmap)
-        #     plt.colorbar(mappable=img_tmp, ax=ax[0, 1], fraction=0.046, pad=0.04)
-        #     ax[0, 1].set_title('middle frame')
-        #
-        #     img_tmp = ax[1, 0].imshow(ailoc.common.cpu(data_cam)[0, 2], cmap=cmap)
-        #     plt.colorbar(mappable=img_tmp, ax=ax[1, 0], fraction=0.046, pad=0.04)
-        #     ax[1, 0].set_title('next frame')
-        #
-        #     img_tmp = ax[1, 1].imshow(ailoc.common.cpu(data_cam)[0, 1], cmap=cmap)
-        #     plt.colorbar(mappable=img_tmp, ax=ax[1, 1], fraction=0.046, pad=0.04)
-        #     pix_gt = ailoc.common.cpu(p_map_gt[0].nonzero())
-        #     ax[1, 1].scatter(pix_gt[:, 1], pix_gt[:, 0], s=10, c='m', marker='x')
-        #     ax[1, 1].set_title('ground truth \non middle frame')
-        #
-        #     plt.show()
-        # else:
-        #     fig, ax = plt.subplots(1, 2, constrained_layout=True)
-        #     img_tmp = ax[0].imshow(ailoc.common.cpu(data_cam)[0, 0], cmap=cmap)
-        #     plt.colorbar(mappable=img_tmp, ax=ax[0], fraction=0.046, pad=0.04)
-        #     ax[0].set_title('frame')
-        #
-        #     img_tmp = ax[1].imshow(ailoc.common.cpu(data_cam)[0, 0], cmap=cmap)
-        #     plt.colorbar(mappable=img_tmp, ax=ax[1], fraction=0.046, pad=0.04)
-        #     pix_gt = ailoc.common.cpu(p_map_gt[0].nonzero())
-        #     ax[1].scatter(pix_gt[:, 1], pix_gt[:, 0], s=10, c='m', marker='x')
-        #     ax[1].set_title('ground truth \non middle frame')
-        #     plt.show()
 
     def print_recorder(self, max_iterations):
         try:

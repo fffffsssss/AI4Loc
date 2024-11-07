@@ -14,48 +14,6 @@ import ailoc.common
 import ailoc.simulation
 
 
-def segment_local_max_smlm_data(images, camera, filter_sigma, roi_size, threshold_abs):
-    # # TODO: maybe we can use single molecule data to estimate the photon range and zernike aberrations
-    # #  training density, etc.
-
-    molecule_images = []
-    for i in range(images.shape[0]):
-        raw_images = ailoc.common.gpu(images[i].astype(np.float32))
-        raw_images_photons = ailoc.common.cpu(camera.backward(raw_images))
-        # remove the nonuniform background for better local max extraction, maybe unnecessary
-        bg = skimage.restoration.rolling_ball(raw_images_photons, radius=roi_size // 2)
-        images_bg = np.clip(raw_images_photons - bg, a_min=0, a_max=None)
-
-        images_bg_filtered = skimage.filters.gaussian(images_bg, sigma=filter_sigma)
-        peak_coords = skimage.feature.peak_local_max(images_bg_filtered,
-                                                     min_distance=roi_size // 2,
-                                                     # threshold_rel=threshold_rel,
-                                                     threshold_abs=threshold_abs,
-                                                     exclude_border=True)
-
-        # # Display the results
-        # fig, ax = plt.subplots()
-        # # img_tmp = ax.imshow(raw_images_photons, cmap='gray')
-        # img_tmp = ax.imshow(images_bg_filtered, cmap='gray')
-        # for i in range(peak_coords.shape[0]):
-        #     rect = plt.Rectangle((peak_coords[i, 1] - roi_size // 2, peak_coords[i, 0] - roi_size // 2), roi_size,
-        #                          roi_size,
-        #                          edgecolor='r', facecolor='none')
-        #     ax.add_patch(rect)
-        # # ax.plot(peak_coords[:, 1], peak_coords[:, 0], 'rx')
-        # # ax.axis('off')
-        # plt.colorbar(mappable=img_tmp, ax=ax, fraction=0.046, pad=0.04)
-        # plt.show()
-
-        for peak_coord in peak_coords:
-            x, y = peak_coord
-            mol_seg = raw_images_photons[int(x - roi_size / 2):int(x + roi_size / 2),
-                                         int(y - roi_size / 2):int(y + roi_size / 2)]
-            molecule_images.append(mol_seg)
-
-    return np.vstack(molecule_images)
-
-
 def segment_local_max_beads(params_dict: dict) -> dict:
     # set parameters
     raw_images = ailoc.common.gpu(params_dict['raw_images'].astype(np.float32))
@@ -244,8 +202,7 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
 
         optimizer.zero_grad()
 
-        psf_torch_fitted._pre_compute()
-        mu = psf_torch_fitted.simulate_parallel(x_tmp, y_tmp, z_tmp, photons_tmp, objstage_tmp) + bg_tmp[:, None, None]
+        mu = psf_torch_fitted.simulate(x_tmp, y_tmp, z_tmp, photons_tmp, objstage_tmp) + bg_tmp[:, None, None]
 
         assert torch.min(mu) >= 0, 'fitting failed, mu should be positive'
         if photons_fitted.min() <= 0 or bg_fitted.min() <= 0:
@@ -293,7 +250,7 @@ def zernike_calibrate_3d_beads_stack(params_dict: dict) -> dict:
     photons_tmp = photons_fitted * 1000
     bg_tmp = bg_fitted
 
-    mu = psf_torch_fitted.simulate_parallel(x_tmp, y_tmp, z_tmp, photons_tmp, objstage_tmp) + bg_tmp[:, None, None]
+    mu = psf_torch_fitted.simulate(x_tmp, y_tmp, z_tmp, photons_tmp, objstage_tmp) + bg_tmp[:, None, None]
 
     psf_params_fitted = psf_params_dict.copy()
     psf_params_fitted['zernike_coef'] = psf_torch_fitted.zernike_coef.detach().cpu().numpy()

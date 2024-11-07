@@ -433,7 +433,7 @@ def est_z0_zrange(psf_params_dict, sampler_params_dict):
 
     # calculate the psfs at different positions
     init_psf_model = ailoc.simulation.VectorPSFTorch(psf_params)
-    init_psfs = ailoc.common.cpu(init_psf_model.simulate_parallel(x_eval, y_eval, z_eval, photon_eval))
+    init_psfs = ailoc.common.cpu(init_psf_model.simulate(x_eval, y_eval, z_eval, photon_eval))
 
     # find the brightest position, add the offset (relative to the range center) to zemit0
     max_idx = np.argmax(np.max(init_psfs, axis=(-1, -2)))
@@ -456,14 +456,14 @@ def est_z0_zrange(psf_params_dict, sampler_params_dict):
     )
 
     psfs_left = ailoc.common.cpu(
-        psf_model_1.simulate_parallel(x_eval[0:max_extended_step_num],
+        psf_model_1.simulate(x_eval[0:max_extended_step_num],
                                       y_eval[0:max_extended_step_num],
                                       left_adjusts,
                                       photon_eval[0:max_extended_step_num])
     )
 
     psfs_right = ailoc.common.cpu(
-        psf_model_1.simulate_parallel(x_eval[0:max_extended_step_num],
+        psf_model_1.simulate(x_eval[0:max_extended_step_num],
                                       y_eval[0:max_extended_step_num],
                                       right_adjusts,
                                       photon_eval[0:max_extended_step_num])

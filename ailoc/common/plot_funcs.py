@@ -136,14 +136,18 @@ def plot_synclearning_record(model):
             continue
         with torch.no_grad():
             model.learned_psf.zernike_coef = ailoc.common.gpu(zernike_tmp[1])
-            model.learned_psf._pre_compute()
+            # model.learned_psf._pre_compute()
             nz = 9
             x = ailoc.common.gpu(torch.zeros(nz))
             y = ailoc.common.gpu(torch.zeros(nz))
             z = ailoc.common.gpu(torch.linspace(*model.data_simulator.mol_sampler.z_range, nz))
             photons = ailoc.common.gpu(torch.ones(nz))
-            psf = ailoc.common.cpu(model.learned_psf.simulate_parallel(x, y, z, photons))
-            phase_tmp = ailoc.common.cpu(torch.real(torch.log(model.learned_psf.zernike_phase)/1j))
+            psf = ailoc.common.cpu(model.learned_psf.simulate(x, y, z, photons))
+            phase_tmp = ailoc.common.cpu(torch.real(torch.log(
+                torch.exp(1j * 2 * np.pi * torch.sum(model.learned_psf.zernike_coef[:, None, None] *
+                                                     model.learned_psf.allzernikes, dim=0) /
+                          model.learned_psf.wavelength)
+            )/1j))
 
         # Create a pseudo-color plot of the depth slice
         fig = plt.figure(figsize=(9, 6), dpi=150, constrained_layout=True)
