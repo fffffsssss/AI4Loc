@@ -12,12 +12,12 @@ import collections
 
 import ailoc.common
 import ailoc.simulation
-import ailoc.syncloc
+import ailoc.lunar
 
 
-class SyncLoc_LocLearning(ailoc.common.XXLoc):
+class Lunar_LocLearning(ailoc.common.XXLoc):
     """
-    TransLoc class, can only process spatially invariant PSF, its performance should be similar to DECODE.
+    LUNAR class, Localization Using Neural-physics Adaptive Reconstruction
     """
 
     def __init__(self, psf_params_dict, camera_params_dict, sampler_params_dict):
@@ -37,7 +37,7 @@ class SyncLoc_LocLearning(ailoc.common.XXLoc):
         assert self.attn_length % 2 == 1, 'attn_length should be odd'
         # add frames at the beginning and end to provide context
         self.context_size = sampler_params_dict['context_size'] + 2*(self.attn_length//2) if self.temporal_attn else sampler_params_dict['context_size']
-        self._network = ailoc.syncloc.SyncLocNet(
+        self._network = ailoc.lunar.LunarNet(
             self.temporal_attn,
             self.attn_length,
             self.context_size,
@@ -85,10 +85,10 @@ class SyncLoc_LocLearning(ailoc.common.XXLoc):
         Loss function.
         """
 
-        count_loss = torch.mean(ailoc.syncloc.count_loss(p_pred, p_gt))
-        loc_loss = torch.mean(ailoc.syncloc.loc_loss(p_pred, xyzph_pred, xyzph_sig_pred, xyzph_array_gt, mask_array_gt))
-        sample_loss = torch.mean(ailoc.syncloc.sample_loss(p_pred, p_gt))
-        bg_loss = torch.mean(ailoc.syncloc.bg_loss(bg_pred, bg_gt))
+        count_loss = torch.mean(ailoc.lunar.count_loss(p_pred, p_gt))
+        loc_loss = torch.mean(ailoc.lunar.loc_loss(p_pred, xyzph_pred, xyzph_sig_pred, xyzph_array_gt, mask_array_gt))
+        sample_loss = torch.mean(ailoc.lunar.sample_loss(p_pred, p_gt))
+        bg_loss = torch.mean(ailoc.lunar.bg_loss(bg_pred, bg_gt))
 
         total_loss = count_loss + loc_loss + sample_loss + bg_loss
 
@@ -106,7 +106,7 @@ class SyncLoc_LocLearning(ailoc.common.XXLoc):
             file_name (str): the name of the file to save the network
         """
 
-        file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'SyncLoc_LL.pt' if file_name is None else file_name
+        file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'LUNAR_LL.pt' if file_name is None else file_name
         self.scheduler.T_max = max_iterations
         print('Start training...')
 
@@ -316,12 +316,12 @@ class SyncLoc_LocLearning(ailoc.common.XXLoc):
 
     def save(self, file_name):
         """
-        Save the whole TransLoc instance, including the network, optimizer, recorder, etc.
+        Save the whole LUNAR instance, including the network, optimizer, recorder, etc.
         """
 
         with open(file_name, 'wb') as f:
             torch.save(self, f)
-        print(f"SyncLoc instance saved to {file_name}")
+        print(f"LUNAR instance saved to {file_name}")
 
     def check_training_psf(self, num_z_step=21):
         """
@@ -411,9 +411,9 @@ class SyncLoc_LocLearning(ailoc.common.XXLoc):
         self._data_simulator = None
 
 
-class SyncLoc_SyncLearning(SyncLoc_LocLearning):
+class Lunar_SyncLearning(Lunar_LocLearning):
     """
-    SyncLoc class, simultaneously learning the localization network and the PSF model.
+    LUNAR class, simultaneously learning the localization network and the PSF model.
     """
 
     def __init__(self, psf_params_dict, camera_params_dict, sampler_params_dict):
@@ -480,7 +480,7 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
                 if False, the evaluation set should be manually built before training
         """
 
-        file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'SyncLoc_SL.pt' if file_name is None else file_name
+        file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'LUNAR_SL.pt' if file_name is None else file_name
         self.scheduler.T_max = max_iterations
 
         assert real_data is not None, 'real data is not provided'
@@ -687,14 +687,14 @@ class SyncLoc_SyncLearning(SyncLoc_LocLearning):
                   weight_per_img):
 
         num_sample = reconstruction.shape[1]
-        log_p_x_given_h = ailoc.syncloc.compute_log_p_x_given_h(data=real_data[:, None].expand(-1, num_sample, -1, -1),
+        log_p_x_given_h = ailoc.lunar.compute_log_p_x_given_h(data=real_data[:, None].expand(-1, num_sample, -1, -1),
                                                                 model=reconstruction)
-        # log_q_h_given_x = ailoc.syncloc.compute_log_q_h_given_x(xyzph_pred,
+        # log_q_h_given_x = ailoc.lunar.compute_log_q_h_given_x(xyzph_pred,
         #                                                         xyzph_sig_pred,
         #                                                         delta_map_sample,
         #                                                         xyzph_map_sample)
         with torch.no_grad():
-            log_q_h_given_x = ailoc.syncloc.compute_log_q_h_given_x(xyzph_pred,
+            log_q_h_given_x = ailoc.lunar.compute_log_q_h_given_x(xyzph_pred,
                                                                     xyzph_sig_pred,
                                                                     delta_map_sample,
                                                                     xyzph_map_sample)

@@ -1,6 +1,8 @@
-perlin-numpy @ git+https://github.com/pvigier/perlin-numpy@5e26837db14042e51166eb6cad4c0df2c1907016
-thop @ git+https://github.com/Lyken17/pytorch-OpCounter.git@43c064afb71383501e41eaef9e8c8407265cf77f
-torch==2.1.1
+-f https://download.pytorch.org/whl/torch_stable.html
+torch==2.1.1+cu121
+torchaudio==2.1.1+cu121
+torchvision==0.16.1+cu121
+numpy==1.24.4
 PyQt5==5.15.9
 napari==0.4.18
 matplotlib==3.7.2
@@ -12,3 +14,5 @@ stackview==0.6.4
 einops==0.7.0
 imagecodecs==2023.8.12
 tifffile==2023.8.12
+thop
+perlin-numpy @ git+https://github.com/pvigier/perlin-numpy.git

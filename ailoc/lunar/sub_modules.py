@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from einops import rearrange
 
-import ailoc.syncloc
+import ailoc.lunar
 
 
 class Residual(nn.Module):
@@ -12,7 +12,7 @@ class Residual(nn.Module):
         self.fn = fn
 
     def forward(self, x, attn_mask=None):
-        x = x + self.fn(x, attn_mask) if isinstance(self.fn, ailoc.syncloc.SelfAttention) or isinstance(self.fn, ailoc.syncloc.MultiHeadSelfAttention) else x + self.fn(x)
+        x = x + self.fn(x, attn_mask) if isinstance(self.fn, ailoc.lunar.SelfAttention) or isinstance(self.fn, ailoc.lunar.MultiHeadSelfAttention) else x + self.fn(x)
         return x
 
 

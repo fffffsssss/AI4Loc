@@ -5,7 +5,7 @@ import thop
 import time
 
 import ailoc.common
-import ailoc.syncloc
+import ailoc.lunar
 
 
 class Out_Head(nn.Module):
@@ -15,19 +15,19 @@ class Out_Head(nn.Module):
 
     def __init__(self, c_input, kernel_size=3):
         super().__init__()
-        self.res_conv = ailoc.syncloc.Residual(
+        self.res_conv = ailoc.lunar.Residual(
             nn.Sequential(
-                ailoc.syncloc.Conv2d_GELU(in_channels=c_input,
+                ailoc.lunar.Conv2d_GELU(in_channels=c_input,
                                            out_channels=c_input,
                                            kernel_size=kernel_size,
                                            stride=1,
                                            padding=kernel_size // 2),
-                ailoc.syncloc.Conv2d_GELU(in_channels=c_input,
+                ailoc.lunar.Conv2d_GELU(in_channels=c_input,
                                            out_channels=c_input,
                                            kernel_size=kernel_size,
                                            stride=1,
                                            padding=kernel_size // 2),
-                ailoc.syncloc.Conv2d_GELU(in_channels=c_input,
+                ailoc.lunar.Conv2d_GELU(in_channels=c_input,
                                            out_channels=c_input,
                                            kernel_size=kernel_size,
                                            stride=1,
@@ -35,48 +35,48 @@ class Out_Head(nn.Module):
             )
         )
 
-        self.p_out = nn.Sequential(ailoc.syncloc.Conv2d_GELU(in_channels=c_input,
+        self.p_out = nn.Sequential(ailoc.lunar.Conv2d_GELU(in_channels=c_input,
                                                               out_channels=c_input,
                                                               kernel_size=kernel_size,
                                                               stride=1,
                                                               padding=kernel_size // 2),
-                                   ailoc.syncloc.Conv2d(in_channels=c_input,
+                                   ailoc.lunar.Conv2d(in_channels=c_input,
                                                          out_channels=1,
                                                          kernel_size=1,
                                                          stride=1,
                                                          padding=0))
         nn.init.constant_(self.p_out[1][0].bias, -6.)  # -6
 
-        self.xyzph_out = nn.Sequential(ailoc.syncloc.Conv2d_GELU(in_channels=c_input,
+        self.xyzph_out = nn.Sequential(ailoc.lunar.Conv2d_GELU(in_channels=c_input,
                                                                   out_channels=c_input,
                                                                   kernel_size=kernel_size,
                                                                   stride=1,
                                                                   padding=kernel_size // 2),
-                                       ailoc.syncloc.Conv2d(in_channels=c_input,
+                                       ailoc.lunar.Conv2d(in_channels=c_input,
                                                              out_channels=4,
                                                              kernel_size=1,
                                                              stride=1,
                                                              padding=0))
         nn.init.zeros_(self.xyzph_out[1][0].bias)
 
-        self.xyzphs_out = nn.Sequential(ailoc.syncloc.Conv2d_GELU(in_channels=c_input,
+        self.xyzphs_out = nn.Sequential(ailoc.lunar.Conv2d_GELU(in_channels=c_input,
                                                                    out_channels=c_input,
                                                                    kernel_size=kernel_size,
                                                                    stride=1,
                                                                    padding=kernel_size // 2),
-                                        ailoc.syncloc.Conv2d(in_channels=c_input,
+                                        ailoc.lunar.Conv2d(in_channels=c_input,
                                                               out_channels=4,
                                                               kernel_size=1,
                                                               stride=1,
                                                               padding=0))
         nn.init.zeros_(self.xyzphs_out[1][0].bias)
 
-        self.bg_out = nn.Sequential(ailoc.syncloc.Conv2d_GELU(in_channels=c_input,
+        self.bg_out = nn.Sequential(ailoc.lunar.Conv2d_GELU(in_channels=c_input,
                                                                out_channels=c_input,
                                                                kernel_size=kernel_size,
                                                                stride=1,
                                                                padding=kernel_size // 2),
-                                    ailoc.syncloc.Conv2d(in_channels=c_input,
+                                    ailoc.lunar.Conv2d(in_channels=c_input,
                                                           out_channels=1,
                                                           kernel_size=1,
                                                           stride=1,
@@ -109,14 +109,14 @@ class U_NeXt(nn.Module):
 
         # first are two warm up layers
         self.input_head = nn.Sequential(
-            ailoc.syncloc.Conv2d(c_input, c_output, 3, 1, 3//2),
-            ailoc.syncloc.Conv2d_GELU(c_output, c_output, 3, 1, 3//2))
+            ailoc.lunar.Conv2d(c_input, c_output, 3, 1, 3//2),
+            ailoc.lunar.Conv2d_GELU(c_output, c_output, 3, 1, 3//2))
 
         #  down sampling blocks
         curr_c = c_output
         self.down_sample = nn.ModuleList()
         for i in range(self.n_stages):
-            self.down_sample.append(ailoc.syncloc.DownSampleBlock(curr_c, curr_c * 2, kernel_size))
+            self.down_sample.append(ailoc.lunar.DownSampleBlock(curr_c, curr_c * 2, kernel_size))
             curr_c *= 2
 
         # up sampling blocks
@@ -128,10 +128,10 @@ class U_NeXt(nn.Module):
                 tail = []
                 for j in range(6):
                     tail.append(
-                        ailoc.syncloc.ConvNextBlock(curr_c//2, curr_c//2, kernel_size),
+                        ailoc.lunar.ConvNextBlock(curr_c//2, curr_c//2, kernel_size),
                     )
                 tail = nn.Sequential(*tail)
-            self.up_sample.append(ailoc.syncloc.UpSampleBlock(curr_c, curr_c // 2, kernel_size, tail))
+            self.up_sample.append(ailoc.lunar.UpSampleBlock(curr_c, curr_c // 2, kernel_size, tail))
             curr_c //= 2
 
     def forward(self, x):
@@ -164,20 +164,20 @@ class U_NeXt_v2(nn.Module):
 
         # first are two warm up layers
         self.input_head = nn.Sequential(
-            ailoc.syncloc.Conv2d(c_input, c_output, 3, 1, 3//2),
-            ailoc.syncloc.Conv2d_GELU(c_output, c_output, 3, 1, 3//2))
+            ailoc.lunar.Conv2d(c_input, c_output, 3, 1, 3//2),
+            ailoc.lunar.Conv2d_GELU(c_output, c_output, 3, 1, 3//2))
 
         #  down sampling blocks
         curr_c = c_output
         self.down_sample = nn.ModuleList()
         for i in range(self.n_stages):
-            self.down_sample.append(ailoc.syncloc.DownSampleBlock_v2(curr_c, curr_c * 2, kernel_size))
+            self.down_sample.append(ailoc.lunar.DownSampleBlock_v2(curr_c, curr_c * 2, kernel_size))
             curr_c *= 2
 
         # up sampling blocks
         self.up_sample = nn.ModuleList()
         for i in range(n_stages):
-            self.up_sample.append(ailoc.syncloc.UpSampleBlock_v2(curr_c, curr_c // 2, kernel_size))
+            self.up_sample.append(ailoc.lunar.UpSampleBlock_v2(curr_c, curr_c // 2, kernel_size))
             curr_c //= 2
 
     def forward(self, x):
@@ -195,9 +195,9 @@ class U_NeXt_v2(nn.Module):
         return x
 
 
-class SyncLocNet(nn.Module):
+class LunarNet(nn.Module):
     """
-    The TransLocNet consists of a U-NeXt based feature extraction module(FEM), an optional transformer based
+    The LUNARNet consists of a U-NeXt based feature extraction module(FEM), an optional transformer based
     temporal attention module(TAM) and an output head. The output representation is inspired by the DECODE.
     """
 
@@ -225,15 +225,15 @@ class SyncLocNet(nn.Module):
         #                               ker_size=3).cuda()
 
         # layer norm for transformer based tam
-        self.fem_norm = ailoc.syncloc.LayerNorm(self.n_features, data_format="channels_first").cuda()
+        self.fem_norm = ailoc.lunar.LayerNorm(self.n_features, data_format="channels_first").cuda()
 
         # # layer norm for Unext based tam
-        # self.fem_norm = ailoc.syncloc.LayerNorm(self.n_features*3, data_format="channels_first").cuda()
+        # self.fem_norm = ailoc.lunar.LayerNorm(self.n_features*3, data_format="channels_first").cuda()
 
         if self.temporal_attn:
             # temporal attention module
             patch_size = 1
-            self.tam = ailoc.syncloc.TransformerBlock(
+            self.tam = ailoc.lunar.TransformerBlock(
                 seq_length=train_context_size,
                 attn_length=attn_length,
                 c_input=self.n_features,

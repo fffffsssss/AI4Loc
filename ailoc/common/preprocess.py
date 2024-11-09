@@ -22,22 +22,22 @@ def build_roi_library(images,
                       attn_length=1):
     """
     Given raw SMLM data, use DoG and maximum finding to build a library of ROIs for synchronized learning
-    of SyncLoc. Each ROI does not need to have only one single molecule, but can have multiple molecules.
+    of LUNAR. Each ROI does not need to have only one single molecule, but can have multiple molecules.
     But this function will preferentially select the sparser roi, then the overlapping roi.
 
     Args:
         images (np.ndarray): SMLM data in photon unit, shape (n, h, w)
         raw_images (np.ndarray): SMLM data in adu unit, shape (n, h, w)
-        psf_params_dict (dict): use the initial PSF parameters of SyncLoc to automatically determine the
+        psf_params_dict (dict): use the initial PSF parameters of LUNAR to automatically determine the
             ROI extraction parameters
-        sampler_params_dict (dict): use the initial sampler parameters of SyncLoc to automatically determine the
+        sampler_params_dict (dict): use the initial sampler parameters of LUNAR to automatically determine the
             ROI extraction parameters
         max_candi_num (int): maximum number of candidate signals to extract from raw data after border removal
         min_signal_num (int): minimum number of extracted signals in ROI library
         sparse_first (bool): whether to select the sparse ROI first, if False, directly extract ROIs with
            multiple signals
         attn_length (int): default is 1 for 2D ROIs,
-            for SyncLoc should be consistent with the syncloc.attn_length (normally 7)
+            for LUNAR should be consistent with the lunar.attn_length (normally 7)
 
     Returns:
         Dict: Dictionary containing the sparse and dense ROI library

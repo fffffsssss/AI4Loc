@@ -3,7 +3,7 @@ from torch import nn
 from einops import rearrange
 import math
 
-import ailoc.syncloc
+import ailoc.lunar
 import ailoc.common
 
 
@@ -187,14 +187,14 @@ class TransLayer(nn.Module):
         # for _ in range(depth):
         #     layers.extend(
         #         [
-        #             ailoc.syncloc.Residual(
+        #             ailoc.lunar.Residual(
         #                 PreNormDrop(
         #                     dim=dim,
         #                     dropout_rate=input_dropout_rate,
         #                     fn=SelfAttention(dim=dim, heads=heads, dropout_rate=attn_dropout_rate),
         #                 )
         #             ),
-        #             ailoc.syncloc.Residual(
+        #             ailoc.lunar.Residual(
         #                 PreNorm(
         #                     dim=dim,
         #                     fn=FeedForward(dim=dim, hidden_dim=mlp_dim, dropout_rate=input_dropout_rate)
@@ -207,12 +207,12 @@ class TransLayer(nn.Module):
         for _ in range(depth):
             layers.extend(
                 [
-                    ailoc.syncloc.Residual(
+                    ailoc.lunar.Residual(
                         fn=SelfAttention(dim=dim, heads=heads, dropout_rate=attn_dropout_rate),
                         # fn=MultiHeadSelfAttention(dim=dim, heads=heads, dropout_rate=attn_dropout_rate),
                     ),
                     nn.LayerNorm(dim),
-                    ailoc.syncloc.Residual(
+                    ailoc.lunar.Residual(
                         fn=FeedForward(dim=dim, hidden_dim=mlp_dim, dropout_rate=ff_dropout_rate)
                     ),
                     nn.LayerNorm(dim),
@@ -431,14 +431,14 @@ class ContextAggregation(nn.Module):
         layers = []
         layers.extend(
             [
-                ailoc.syncloc.ConvNextBlock(c_in=in_channels,
+                ailoc.lunar.ConvNextBlock(c_in=in_channels,
                                              c_out=out_channels,
                                              kernel_size=kernel_size, ),
             ]
         )
         layers.extend(
             [
-                ailoc.syncloc.ConvNextBlock(c_in=out_channels,
+                ailoc.lunar.ConvNextBlock(c_in=out_channels,
                                              c_out=out_channels,
                                              kernel_size=kernel_size, ) for _ in range(depth - 1)
             ]
