@@ -15,7 +15,7 @@ class DeepLoc(ailoc.common.XXLoc):
     DeepLoc class, can only process spatially invariant PSF, its performance should be similar to DECODE.
     """
 
-    def __init__(self, psf_params_dict, camera_params_dict, sampler_params_dict):
+    def __init__(self, psf_params_dict, camera_params_dict, sampler_params_dict, attn_length=3):
         self.dict_psf_params, self.dict_camera_params, self.dict_sampler_params = \
             psf_params_dict, camera_params_dict, sampler_params_dict
 
@@ -26,9 +26,8 @@ class DeepLoc(ailoc.common.XXLoc):
         self.local_context = self.dict_sampler_params['local_context']
         # attn_length only useful when local_context=True, should be odd,
         # using the same number of frames before and after the target frame
-        self.attn_length = 3
+        self.attn_length = attn_length
         assert self.attn_length % 2 == 1, 'attn_length should be odd'
-        assert self.attn_length > 1, 'attn_length should be larger than 1'
         # add frames at the beginning and end to provide context
         self.context_size = sampler_params_dict['context_size'] + 2*(self.attn_length//2) if self.local_context else sampler_params_dict['context_size']
         self._network = ailoc.deeploc.DeepLocNet(self.local_context,

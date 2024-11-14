@@ -20,7 +20,7 @@ class Lunar_LocLearning(ailoc.common.XXLoc):
     LUNAR class, Localization Using Neural-physics Adaptive Reconstruction
     """
 
-    def __init__(self, psf_params_dict, camera_params_dict, sampler_params_dict):
+    def __init__(self, psf_params_dict, camera_params_dict, sampler_params_dict, attn_length=7):
         self.dict_psf_params, self.dict_camera_params, self.dict_sampler_params = \
             psf_params_dict, camera_params_dict, sampler_params_dict
 
@@ -33,7 +33,7 @@ class Lunar_LocLearning(ailoc.common.XXLoc):
         except KeyError:
             self.temporal_attn = False
         # should be odd, using the same number of frames before and after the target frame
-        self.attn_length = 7
+        self.attn_length = attn_length
         assert self.attn_length % 2 == 1, 'attn_length should be odd'
         # add frames at the beginning and end to provide context
         self.context_size = sampler_params_dict['context_size'] + 2*(self.attn_length//2) if self.temporal_attn else sampler_params_dict['context_size']
@@ -619,8 +619,9 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                                                   xyzph_sig_pred,
                                                   self.photon_threshold,
                                                   self.p_var_threshold,
-                                                  crop_size=self.data_simulator.mol_sampler.train_size,
+                                                  crop_size=self.data_simulator.psf_model.psf_size*2,
                                                   max_psfs=max_recon_psfs,
+                                                  curr_num_psfs=num_psfs,
                                                   z_weight=self.real_data_z_weight)
                 if real_data_sampled_crop is None:
                     infer_round += 1
@@ -828,6 +829,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                      p_var_threshold,
                      crop_size,
                      max_psfs,
+                     curr_num_psfs,
                      z_weight=None):
         """
         Crop the psf_patches on the canvas according to the delta map,
@@ -859,7 +861,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
 
         num_psfs = 0
         while len(delta_idx_list) > 0:
-            if num_psfs >= max_psfs:
+            if num_psfs+curr_num_psfs >= max_psfs:
                 break
 
             # random select a delta
