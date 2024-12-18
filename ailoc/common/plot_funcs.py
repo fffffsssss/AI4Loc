@@ -150,18 +150,18 @@ def plot_synclearning_record(model):
             )/1j))
 
         # Create a pseudo-color plot of the depth slice
-        fig = plt.figure(figsize=(9, 6), dpi=150, constrained_layout=True)
-        fig.suptitle(f'iterations: {zernike_tmp[0]}')
+        fig = plt.figure(figsize=(9, 6), dpi=300, constrained_layout=True)
+        fig.suptitle(f'Iterations: {zernike_tmp[0]}')
         gs = fig.add_gridspec(1, 2)
         ax1 = fig.add_subplot(gs[0, 0])
         im = ax1.imshow(phase_tmp, cmap='turbo')
         fig.colorbar(im, ax=ax1, fraction=0.05)
-        ax1.set_title('zernike phase')
+        ax1.set_title('Pupil phase')
 
         gs01 = gs[0, 1].subgridspec(nz//3, 3)
         for i in range(nz):
             ax2 = fig.add_subplot(gs01[i])
-            ax2.imshow(psf[i, :, :], cmap='gray')
+            ax2.imshow(psf[i, :, :], cmap='turbo')
             ax2.set_title(f'{ailoc.common.cpu(z[i])} nm')
 
         # # old plots, only plot the zernike phase
@@ -246,13 +246,20 @@ def plot_single_frame_inference(inference_dict, loc_model):
     ax2[0,0].set_title('raw data')
 
     cmap = 'magma'
-    plt.colorbar(mappable=ax2[0,1].imshow(datas[0], cmap=cmap), ax=ax2[0,1], fraction=0.046, pad=0.04)
+
+    vmin = min(datas[0].min(), reconstruction.min())
+    vmax = max(datas[0].max(), reconstruction.max())
+
+    plt.colorbar(mappable=ax2[0,1].imshow(datas[0], cmap=cmap, vmin=vmin, vmax=vmax),
+                 ax=ax2[0,1], fraction=0.046, pad=0.04)
     ax2[0,1].set_title('raw data')
 
-    plt.colorbar(mappable=ax2[1,0].imshow(reconstruction, cmap=cmap), ax=ax2[1,0], fraction=0.046, pad=0.04)
+    plt.colorbar(mappable=ax2[1,0].imshow(reconstruction, cmap=cmap, vmin=vmin, vmax=vmax),
+                 ax=ax2[1,0], fraction=0.046, pad=0.04)
     ax2[1,0].set_title('reconstruction')
 
-    plt.colorbar(mappable=ax2[1,1].imshow(datas[0]-reconstruction, cmap=cmap), ax=ax2[1,1], fraction=0.046, pad=0.04)
+    plt.colorbar(mappable=ax2[1,1].imshow(datas[0]-reconstruction, cmap=cmap),
+                 ax=ax2[1,1], fraction=0.046, pad=0.04)
     ax2[1,1].set_title('residual')
 
     plt.show(block=True)

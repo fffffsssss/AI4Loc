@@ -470,14 +470,23 @@ def est_z0_zrange(psf_params_dict, sampler_params_dict):
     )
 
     # calculate the peak SBR at different z
-    peak_sbr_left = np.max(psfs_left / bg_avg, axis=(-1, -2))
-    peak_sbr_right = np.max(psfs_right / bg_avg, axis=(-1, -2))
+    # peak_sbr_left = np.max(psfs_left / bg_avg, axis=(-1, -2))
+    # peak_sbr_right = np.max(psfs_right / bg_avg, axis=(-1, -2))
+    peak_sbr_left = np.zeros(max_extended_step_num)
+    peak_sbr_right = np.zeros(max_extended_step_num)
+    for i in range(max_extended_step_num):
+        flat_array_left = psfs_left[i].flatten() / bg_avg
+        indices_left = flat_array_left.argsort()[-20 ** 2:][::-1]
+        peak_sbr_left[i] = np.mean(flat_array_left[indices_left])
+        flat_array_right = psfs_right[i].flatten() / bg_avg
+        indices_right = flat_array_right.argsort()[-20 ** 2:][::-1]
+        peak_sbr_right[i] = np.mean(flat_array_right[indices_right])
 
     # use the SBR threshold to determine the extended range
-    sbr_threshold = 0.5
+    sbr_threshold = 0.1
     left_side = left_adjusts[np.where(peak_sbr_left > sbr_threshold)[0][0]].item() \
         if np.any(peak_sbr_left > sbr_threshold) else init_z_range[0]
-    right_side = right_adjusts[np.where(peak_sbr_right > 0.5)[0][-1]].item() \
+    right_side = right_adjusts[np.where(peak_sbr_right > sbr_threshold)[0][-1]].item() \
         if np.any(peak_sbr_right > sbr_threshold) else init_z_range[1]
     sampler_params['z_range'] = (left_side, right_side)
 

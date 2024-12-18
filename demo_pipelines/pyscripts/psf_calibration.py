@@ -16,36 +16,36 @@ def beads_stack_calibrate():
     """
 
     # load bead stack
-    beads_file_name = "../../datasets/sw_npc_20211028/beads/astigmatism/astigmatism_beads_2um_20nm_512x512_hamm_1/astigmatism_beads_2um_20nm_512x512_hamm_1_MMStack_Default.ome.tif"
+    beads_file_name = "../../datasets/dmo4Spectrin_sw20220923/crop_beads/1.tif"
 
     # set psf parameters
     zernike_aber = np.array([2, -2, 0, 2, 2, 0, 3, -1, 0, 3, 1, 0, 4, 0, 0, 3, -3, 0, 3, 3, 0,
                              4, -2, 0, 4, 2, 0, 5, -1, 0, 5, 1, 0, 6, 0, 0, 4, -4, 0, 4, 4, 0,
                              5, -3, 0, 5, 3, 0, 6, -2, 0, 6, 2, 0, 7, 1, 0, 7, -1, 0, 8, 0, 0],
                             dtype=np.float32).reshape([21, 3])
-    psf_params_dict = {'na': 1.5,
+    psf_params_dict = {'na': 1.35,
                        'wavelength': 670,  # unit: nm
-                       'refmed': 1.518,
+                       'refmed': 1.406,
                        'refcov': 1.524,
-                       'refimm': 1.518,
+                       'refimm': 1.406,
                        'zernike_mode': zernike_aber[:, 0:2],
                        'zernike_coef': zernike_aber[:, 2],
                        'objstage0': 0,
                        'pixel_size_xy': (108, 108),
                        'otf_rescale_xy': (0.5, 0.5),  # this is an empirical value, which maybe due to the pixelation
                        'npupil': 64,
-                       'psf_size': 25}
+                       'psf_size': 61}
 
     # set camera parameters
     camera_params_dict = {'camera_type': 'scmos',
-                          'qe': 0.81,
-                          'spurious_charge': 0.002,
+                          'qe': 0.95,
+                          'spurious_charge': 0.01,
                           'read_noise_sigma': 1.6,
-                          'e_per_adu': 0.47,
+                          'e_per_adu': 1.2,
                           'baseline': 100.0}
 
     # set calibration parameters
-    calib_params_dict = {'z_step': 20,
+    calib_params_dict = {'z_step': 100,
                          'filter_sigma': 3,
                          'threshold_abs': 20,
                          'fit_brightest': True,}
