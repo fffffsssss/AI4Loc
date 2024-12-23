@@ -426,6 +426,8 @@ class Lunar_SyncLearning(Lunar_LocLearning):
         self.z_bins = 10
         self.real_data_z_weight = [np.ones(self.z_bins) * (1/self.z_bins),
                                    np.linspace(-1, 1, self.z_bins+1)]
+
+        self.use_threshold = False
         self.photon_threshold = 3000/self.data_simulator.mol_sampler.photon_scale
         self.p_var_threshold = 0.00125  # p=0.5, var=0.25,  density=0.005, 0.25*0.005
 
@@ -617,6 +619,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                                                   p_pred,
                                                   xyzph_pred,
                                                   xyzph_sig_pred,
+                                                  self.use_threshold,
                                                   self.photon_threshold,
                                                   self.p_var_threshold,
                                                   crop_size=self.data_simulator.psf_model.psf_size*2,
@@ -825,6 +828,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                      p_pred,
                      xyzph_pred,
                      xyzph_sig_pred,
+                     use_threshold,
                      photon_threshold,
                      p_var_threshold,
                      crop_size,
@@ -914,16 +918,17 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                                        h_range_tmp[0]: h_range_tmp[1], w_range_tmp[0]: w_range_tmp[1]]
 
             # check the crop area quality to ensure a better PSF learning
-            tmp_delta_inds = tuple(tmp_delta_map_sample_crop[0].nonzero().transpose(1, 0))
-            tmp_p_pred_var = (tmp_p_pred_crop - tmp_p_pred_crop**2).mean()
-            tmp_photons = tmp_xyzph_pred_crop[3][tmp_delta_inds]
-            # flag_1 filters the average photons
-            # flag_2 filters the detection probability
-            flag_1 = (tmp_photons.mean() >= photon_threshold)
-            flag_2 = (tmp_p_pred_var < p_var_threshold)
-            if not (flag_1 & flag_2):
-                continue
-                # ailoc.common.plot_image_stack(torch.concatenate([tmp_real_data_crop[None], tmp_p_pred_crop[None], tmp_delta_map_sample_crop[0:1]]))
+            if use_threshold:
+                tmp_delta_inds = tuple(tmp_delta_map_sample_crop[0].nonzero().transpose(1, 0))
+                tmp_p_pred_var = (tmp_p_pred_crop - tmp_p_pred_crop**2).mean()
+                tmp_photons = tmp_xyzph_pred_crop[3][tmp_delta_inds]
+                # flag_1 filters the average photons
+                # flag_2 filters the detection probability
+                flag_1 = (tmp_photons.mean() >= photon_threshold)
+                flag_2 = (tmp_p_pred_var < p_var_threshold)
+                if not (flag_1 & flag_2):
+                    continue
+                    # ailoc.common.plot_image_stack(torch.concatenate([tmp_real_data_crop[None], tmp_p_pred_crop[None], tmp_delta_map_sample_crop[0:1]]))
 
             real_data_crop.append(tmp_real_data_crop)
             delta_map_sample_crop.append(tmp_delta_map_sample_crop)
