@@ -468,7 +468,7 @@ def rescale_offset(preds_array, pixel_size=None, rescale_bins=20, threshold=0.2)
             y uncertainty, z uncertainty, photon uncertainty, x_offset, y_offset].
         rescale_bins (int): The bias scales with the uncertainty of the localization. All molecules
             are binned according to their predicted uncertainty. Detections within different bins are then
-            rescaled seperately. This specifies the number of bins.
+            rescaled separately. This specifies the number of bins.
         pixel_size (list of int): [int int], the pixel size in the xy plane.
         threshold (float): the threshold of the uncertainty to rescale, if the uncertainty relative to pixel size
             is larger than the threshold, the xy offset will be rescaled.
