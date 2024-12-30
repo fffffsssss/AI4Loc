@@ -650,13 +650,13 @@ class sCMOSParamWidget(widgets.GridspecLayout):
                                                     max=1,
                                                     step=0.1,)
         self[0, 0] = self.qe_receiver
-        self.spurious_charge_receiver = widgets.BoundedFloatText(description='Spur charge:',
+        self.spurious_charge_receiver = widgets.BoundedFloatText(description='SpurCharge:',
                                                                  value=0.002,
                                                                  min=0,
                                                                  max=1,
                                                                  step=0.001,)
         self[0, 1] = self.spurious_charge_receiver
-        self.readout_noise_receiver = widgets.BoundedFloatText(description='Read noise:',
+        self.readout_noise_receiver = widgets.BoundedFloatText(description='ReadNoise:',
                                                                value=1.6,
                                                                min=0,
                                                                max=1000,
@@ -686,19 +686,19 @@ class EMCCDParamWidget(widgets.GridspecLayout):
                                                     max=1,
                                                     step=0.1,)
         self[0, 0] = self.qe_receiver
-        self.spurious_charge_receiver = widgets.BoundedFloatText(description='Spur charge:',
+        self.spurious_charge_receiver = widgets.BoundedFloatText(description='SpurCharge:',
                                                                  value=0.002,
                                                                  min=0,
                                                                  max=1,
                                                                  step=0.001,)
         self[0, 1] = self.spurious_charge_receiver
-        self.emgain_receiver = widgets.BoundedFloatText(description='EM gain:',
+        self.emgain_receiver = widgets.BoundedFloatText(description='EM Gain:',
                                                         value=300,
                                                         min=1,
                                                         max=1000,
                                                         step=1,)
         self[1, 0] = self.emgain_receiver
-        self.readout_noise_receiver = widgets.BoundedFloatText(description='Read noise:',
+        self.readout_noise_receiver = widgets.BoundedFloatText(description='ReadNoise:',
                                                                value=74.4,
                                                                min=0,
                                                                max=1000,
@@ -729,7 +729,7 @@ class SetCamParamWidget:
         self.camera_params_label = widgets.Label(value='Camera parameters', style={'font_weight': 'bold'})
         self.select_cam_dropdown = widgets.Dropdown(options=['Idea Camera', 'sCMOS', 'EMCCD'],
                                                     value='sCMOS',
-                                                    description='Camera type:',
+                                                    description='CameraType:',
                                                     )
         self.select_cam_dropdown.observe(self.select_cam, names='value')
         self.idea_param_receiver = IdeaCamParamWidget()
@@ -808,14 +808,19 @@ class SetSamplerParamWidget(widgets.GridspecLayout):
     def __init__(self):
         super(SetSamplerParamWidget, self).__init__(6, 2)
 
-        self.local_context_receiver = widgets.Checkbox(description='Local context',
+        self.temporal_receiver = widgets.Checkbox(description='Temporal attention/Local context',
                                                        value=True,
                                                        indent=False,)
-        self.robust_training_receiver = widgets.Checkbox(description='Robust training',
-                                                         value=True,
+        self.robust_training_receiver = widgets.Checkbox(description='RobustTraining',
+                                                         value=False,
                                                          indent=False,)
-        self.train_size_receiver = widgets.BoundedIntText(description='Train size:',
-                                                          value=64,
+        self.context_size_receiver = widgets.BoundedIntText(description='ContextSize:',
+                                                           value=8,
+                                                           min=1,
+                                                           max=1024,
+                                                           step=1,)
+        self.train_size_receiver = widgets.BoundedIntText(description='TrainSize:',
+                                                          value=128,
                                                           min=32,
                                                           max=1024,
                                                           step=4,)
@@ -824,12 +829,12 @@ class SetSamplerParamWidget(widgets.GridspecLayout):
                                                           min=1,
                                                           max=1000,
                                                           step=1,)
-        self.num_eval_data_receiver = widgets.BoundedIntText(description='Eval images:',
-                                                             value=1000,
+        self.eval_batch_size_receiver = widgets.BoundedIntText(description='EvalBatch:',
+                                                             value=100,
                                                              min=1,
                                                              max=10000,
                                                              step=1,)
-        self.photon_range_receiver = widgets.HBox([widgets.Label(value='Photon range:'),
+        self.photon_range_receiver = widgets.HBox([widgets.Label(value='PhotonRange:'),
                                                    widgets.IntRangeSlider(
                                                                           value=[1000, 10000],
                                                                           min=0,
@@ -839,7 +844,7 @@ class SetSamplerParamWidget(widgets.GridspecLayout):
                                                                           readout=True,
                                                                           readout_format='d',)
                                                    ])
-        self.z_range_receiver = widgets.HBox([widgets.Label(value='Z range:'),
+        self.z_range_receiver = widgets.HBox([widgets.Label(value='Z Range:'),
                                               widgets.IntRangeSlider(
                                                   value=[-700, 700],
                                                   min=-3000,
@@ -849,7 +854,7 @@ class SetSamplerParamWidget(widgets.GridspecLayout):
                                                   readout=True,
                                                   readout_format='d', )
                                               ])
-        self.bg_range_receiver = widgets.IntRangeSlider(description='BG range:',
+        self.bg_range_receiver = widgets.IntRangeSlider(description='BG Range:',
                                                         value=[50, 100],
                                                         min=0,
                                                         max=300,
@@ -857,17 +862,18 @@ class SetSamplerParamWidget(widgets.GridspecLayout):
                                                         orientation='horizontal',
                                                         readout=True,
                                                         readout_format='d',)
-        self.bg_perlin_receiver = widgets.Checkbox(description='BG perlin',
+        self.bg_perlin_receiver = widgets.Checkbox(description='BG Perlin',
                                                    value=True,
                                                    indent=False, )
 
         # layout
         self[0, :] = widgets.Label(value='Sampler parameters', style={'font_weight': 'bold'})
-        self[1, 0] = self.local_context_receiver
+        self[1, 0] = self.temporal_receiver
         self[1, 1] = self.robust_training_receiver
-        self[2, 0] = self.train_size_receiver
-        self[2, 1] = self.num_em_avg_receiver
-        self[3, :] = self.num_eval_data_receiver
+        self[2, 0] = self.context_size_receiver
+        self[2, 1] = self.train_size_receiver
+        self[3, 0] = self.num_em_avg_receiver
+        self[3, 1] = self.eval_batch_size_receiver
         self[4, 0] = self.photon_range_receiver
         self[4, 1] = self.z_range_receiver
         self[5, 0] = self.bg_range_receiver
@@ -877,11 +883,13 @@ class SetSamplerParamWidget(widgets.GridspecLayout):
         self.sampler_params_dict = {}
 
     def get_sampler_params(self):
-        self.sampler_params_dict['local_context'] = self.local_context_receiver.value
+        self.sampler_params_dict['local_context'] = self.temporal_receiver.value
+        self.sampler_params_dict['temporal_attn'] = self.temporal_receiver.value
         self.sampler_params_dict['robust_training'] = self.robust_training_receiver.value
+        self.sampler_params_dict['context_size'] = self.context_size_receiver.value
         self.sampler_params_dict['train_size'] = self.train_size_receiver.value
         self.sampler_params_dict['num_em_avg'] = self.num_em_avg_receiver.value
-        self.sampler_params_dict['num_evaluation_data'] = self.num_eval_data_receiver.value
+        self.sampler_params_dict['eval_batch_size'] = self.eval_batch_size_receiver.value
         self.sampler_params_dict['photon_range'] = self.photon_range_receiver.children[1].value
         self.sampler_params_dict['z_range'] = self.z_range_receiver.children[1].value
         self.sampler_params_dict['bg_range'] = self.bg_range_receiver.value
@@ -894,7 +902,7 @@ class SetSamplerParamWidget(widgets.GridspecLayout):
         display(self)
 
 
-class DeepLocSetLearnParamWidget:
+class SetLearnParamWidget:
     def __init__(self):
         self.exp_file_receiver = SelectFilesButton(nofile_description='Optional: select the experiment file to estimate background range')
         self.calibration_file_receiver = SelectFilesButton(nofile_description='Select the calibration file')
@@ -908,21 +916,21 @@ class DeepLocSetLearnParamWidget:
         self.ok_button.on_click(self.set_learn_params)
         self.output_widget = widgets.Output()
 
-        self.deeploc_params_dict = {}
+        self.params_dict = {}
 
     def set_learn_params(self, b):
         psf_params_dict = self.psf_param_widget.get_psf_params()
         camera_params_dict = self.cam_param_widget.get_camera_params()
         sampler_params_dict = self.sampler_param_widget.get_sampler_params()
 
-        self.deeploc_params_dict['psf_params_dict'] = psf_params_dict
-        self.deeploc_params_dict['camera_params_dict'] = camera_params_dict
-        self.deeploc_params_dict['sampler_params_dict'] = sampler_params_dict
+        self.params_dict['psf_params_dict'] = psf_params_dict
+        self.params_dict['camera_params_dict'] = camera_params_dict
+        self.params_dict['sampler_params_dict'] = sampler_params_dict
 
         self.output_widget.clear_output()
         with self.output_widget:
             print('Check the parameters:')
-            dict_str = str(self.deeploc_params_dict).replace('\n', '')
+            dict_str = str(self.params_dict).replace('\n', '')
             print(dict_str)
             # print(self.deeploc_params_dict)
 
@@ -941,10 +949,10 @@ class DeepLocSetLearnParamWidget:
         display(self.output_widget)
 
 
-class DeepLocSetAnalyzerParamWidget:
+class SetAnalyzerParamWidget:
     def __init__(self):
-        self.select_deeploc_button = SelectFilesButton(nofile_description='Select DeepLoc model')
-        self.select_deeploc_button.observe(self.set_save_csv_button_initialdir, names='description')
+        self.select_network_button = SelectFilesButton(nofile_description='Select trained model')
+        self.select_network_button.observe(self.set_save_csv_button_initialdir, names='description')
 
         self.select_folder_receiver = widgets.Checkbox(value=True,
                                                        description='Select all tiff files under the folder',
@@ -999,11 +1007,11 @@ class DeepLocSetAnalyzerParamWidget:
         self.analyzer_param = {}
 
     def set_analyzer_params(self, b):
-        loc_model_path = self.select_deeploc_button.files
+        loc_model_path = self.select_network_button.files
         # load the completely trained model
         with open(loc_model_path, 'rb') as f:
-            deeploc_model = torch.load(f)
-        self.analyzer_param['deeploc_model'] = deeploc_model
+            loc_model = torch.load(f)
+        self.analyzer_param['loc_model'] = loc_model
         if self.select_folder_receiver.value:
             self.analyzer_param['tiff_path'] = os.path.dirname(self.select_data_button.files)
         else:
@@ -1017,18 +1025,16 @@ class DeepLocSetAnalyzerParamWidget:
 
         self.output_widget.clear_output()
         with self.output_widget:
-            print('DeepLoc analysis parameters: ')
+            print('Analysis parameters: ')
             print(self.analyzer_param)
-            print('Plot training process: ')
-            ailoc.common.plot_train_record(deeploc_model)
 
     def set_save_csv_button_initialdir(self, change):
-        if self.select_deeploc_button.files is None or self.select_data_button.files is None:
+        if self.select_network_button.files is None or self.select_data_button.files is None:
             self.save_csv_button.initialdir = '../../results/'
             self.save_csv_button.initialfile = 'predictions.csv'
         else:
-            self.save_csv_button.initialdir = os.path.dirname(self.select_deeploc_button.files)
-            loc_model_path = self.select_deeploc_button.files
+            self.save_csv_button.initialdir = os.path.dirname(self.select_network_button.files)
+            loc_model_path = self.select_network_button.files
             if self.select_folder_receiver.value:
                 image_path = os.path.dirname(self.select_data_button.files)
             else:
@@ -1038,7 +1044,7 @@ class DeepLocSetAnalyzerParamWidget:
             self.save_csv_button.initialfile = save_path
 
     def display_notebook_gui(self):
-        display(self.select_deeploc_button)
+        display(self.select_network_button)
         display(self.select_folder_receiver)
         display(self.select_data_button)
         display(self.save_csv_button)
