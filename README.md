@@ -7,7 +7,7 @@ This is the official implementation of the paper "Neural-physics reconstruction 
 distributed as a part of the AI4Loc framework.
 
 <p align="center">
-    <img src="docs/NPCmovie1~1.gif" height='200'>
+    <img src="docs/NPCmovie1~2.gif" height='200'>
     <img src="docs/Neuron_movie1~1.gif" height='200'>
 </p>
 
