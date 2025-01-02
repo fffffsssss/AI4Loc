@@ -1040,7 +1040,7 @@ class SetAnalyzerParamWidget:
             else:
                 image_path = self.select_data_button.files
             save_path = os.path.split(loc_model_path)[-1].split('.')[0] + \
-                        '_' + os.path.split(image_path)[-1].split('.')[0] + '_predictions.csv'
+                        '_' + os.path.basename(image_path) + '_predictions.csv'
             self.save_csv_button.initialfile = save_path
 
     def display_notebook_gui(self):

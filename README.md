@@ -61,7 +61,7 @@ The project files should be organized as the following hierarchy:
 │   ├── usages                           // general usage scipts for reference
 │   │   ├── notebook                     // notebook with GUI
 │   │   ├── pyscripts                    // python scripts
-│   ├── demo_notebooks                   // several demos to show how to use the framework
+│   ├── demos                            // several demos to show how to use the framework
 ```
 
 ## Demos
@@ -94,3 +94,8 @@ Note that the beads were collected two weeks before the NPC data.
 ### Demo 3: Whole-Cell Nup96 NPC Dataset
 Demo 3 is based on the whole-cell Nup96 NPC dataset with a 6 μm DMO Tetrapod PSF. 
 The script `demo3-exp_whole_cell_tetra6.py` trains LUNAR SL with a mismatched PSF.
+
+### Demo 4: Notebooks with GUI for Demo 2
+Demo 4 provides three Jupyter notebooks with graphical user interface (GUI) to demonstrate PSF calibration, model learning, and model inference. 
+This demo uses the same data as Demo 2. 
+A video is available to show the usage of these notebooks.

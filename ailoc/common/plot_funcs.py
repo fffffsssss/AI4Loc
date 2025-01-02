@@ -300,9 +300,9 @@ def create_3d_hist(preds, z_clip=None, pix_size=5, sigma=3, contrast_fac=10, cli
     n_val = len(storm_hue)
     storm_hue = np.interp(np.linspace(0, n_val, 256), np.arange(n_val), storm_hue)
 
-    x_pos = np.clip(np.array(preds)[:, 2], 0, np.inf)
-    y_pos = np.clip(np.array(preds)[:, 3], 0, np.inf)
-    z_pos = np.array(preds)[:, 4]
+    x_pos = np.clip(np.array(preds)[:, 1], 0, np.inf)
+    y_pos = np.clip(np.array(preds)[:, 2], 0, np.inf)
+    z_pos = np.array(preds)[:, 3]
 
     min_z = min(z_pos)
     max_z = max(z_pos)
@@ -375,8 +375,8 @@ def create_2d_hist(preds, pix_size=5, sigma=3, contrast_fac=2, clip_density=100)
         Histogram of 2D reconstruction
     """
 
-    x_pos = np.clip(np.array(preds)[:, 2], 0, np.inf)
-    y_pos = np.clip(np.array(preds)[:, 3], 0, np.inf)
+    x_pos = np.clip(np.array(preds)[:, 1], 0, np.inf)
+    y_pos = np.clip(np.array(preds)[:, 2], 0, np.inf)
 
     nx = int((np.max(x_pos)) // pix_size + 1)
     ny = int((np.max(y_pos)) // pix_size + 1)
