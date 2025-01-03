@@ -99,3 +99,8 @@ The script `demo3-exp_whole_cell_tetra6.py` trains LUNAR SL with a mismatched PS
 Demo 4 provides three Jupyter notebooks with graphical user interface (GUI) to demonstrate PSF calibration, model learning, and model inference. 
 This demo uses the same data as Demo 2. 
 A video is available to show the usage of these notebooks.
+
+<video width="640" height="360" controls>
+  <source src="docs/demo4_video_1~1.mp4" type="video/mp4">
+  Your browser does not support the video tag.
+</video>
