@@ -396,6 +396,9 @@ def lunar_synclearning():
                     phase_record,
                     duration=200)
 
+    # compare the learned PSF before and after training
+    ailoc.common.plot_start_end_psf(lunar_model)
+
     # analyze the experimental data
     image_path = os.path.dirname(experiment_file)  # can be a tiff file path or a folder path
     save_path = '../results/' + \

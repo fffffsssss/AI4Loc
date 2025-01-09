@@ -430,8 +430,8 @@ def lunar_synclearning_ckpoint():
 
 
 def lunar_analyze():
-    loc_model_path = '../../results/2024-09-23-23-37LUNAR_SL.pt'
-    image_path = '../../datasets/Lu_NPC_H2O_oil_4660nm_depth/U2OS-Nup96-snap-AF647_oil-ring0-15_H2O-upper_3D-lock_6'   # can be a tiff file path or a folder path
+    loc_model_path = '../../results/2024-12-27-15-45LUNAR_SL.pt'
+    image_path = '../../datasets/demo3-exp_whole_cell_tetra6'   # can be a tiff file path or a folder path
     save_path = '../../results/' + \
                 os.path.split(loc_model_path)[-1].split('.')[0] + \
                 '_'+os.path.split(image_path)[-1].split('.')[0]+'_predictions.csv'
@@ -439,6 +439,16 @@ def lunar_analyze():
     # load the completely trained model
     with open(loc_model_path, 'rb') as f:
         lunar_model = torch.load(f)
+
+    # # plot evaluation performance during the training
+    # phase_record = ailoc.common.plot_synclearning_record(lunar_model)
+    # # save the phase learned during the training
+    # imageio.mimsave('../../results/' + os.path.split(loc_model_path)[-1].split('.')[0] + '_phase.gif',
+    #                 phase_record,
+    #                 duration=200)
+
+    # compare the learned PSF before and after training
+    ailoc.common.plot_start_end_psf(lunar_model)
 
     lunar_analyzer = ailoc.common.SmlmDataAnalyzer(
         loc_model=lunar_model,
@@ -451,9 +461,7 @@ def lunar_analyze():
         num_workers=0
     )
 
-    # lunar_analyzer.check_single_frame_output(frame_num=12)
-    # lunar_analyzer.check_single_frame_output(frame_num=17)
-    # lunar_analyzer.check_single_frame_output(frame_num=32)
+    lunar_analyzer.check_single_frame_output(frame_num=17)
 
     preds_array, preds_rescale_array = lunar_analyzer.divide_and_conquer(degrid=True)
 
@@ -568,7 +576,7 @@ def lunar_competitive_analyze():
 if __name__ == '__main__':
     # lunar_loclearning()
     # lunar_loclearning_ckpoint()
-    lunar_synclearning()
+    # lunar_synclearning()
     # lunar_synclearning_ckpoint()
-    # lunar_analyze()
+    lunar_analyze()
     # lunar_competitive_analyze()

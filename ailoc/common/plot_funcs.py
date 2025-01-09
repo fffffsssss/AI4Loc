@@ -183,6 +183,93 @@ def plot_synclearning_record(model):
     return zernike_phase_list
 
 
+def plot_start_end_psf(model):
+    recorder = model.evaluation_recorder
+    # plot the comparison of learned PSFs at the beginning and end
+    # first find the beginning zernike
+    for zernike_tmp in recorder['learned_psf_zernike'].items():
+        if zernike_tmp[0] == model.warmup:
+            break
+    zernike_coef_start = ailoc.common.gpu(zernike_tmp[1])
+    zernike_coef_end = ailoc.common.gpu(recorder['learned_psf_zernike'][max(recorder['learned_psf_zernike'].keys())])
+    with torch.no_grad():
+        nz = 9
+        x = ailoc.common.gpu(torch.zeros(nz))
+        y = ailoc.common.gpu(torch.zeros(nz))
+        z = ailoc.common.gpu(torch.linspace(*model.data_simulator.mol_sampler.z_range, nz))
+
+        model.learned_psf.zernike_coef = ailoc.common.gpu(zernike_coef_start)
+        photons = ailoc.common.gpu(torch.ones(nz))
+        psf_start = ailoc.common.cpu(model.learned_psf.simulate(x, y, z, photons))
+        phase_start = ailoc.common.cpu(2 * np.pi *
+                                       torch.sum(model.learned_psf.zernike_coef[:, None, None] *
+                                                 model.learned_psf.allzernikes, dim=0) /
+                                       model.learned_psf.wavelength)
+
+        model.learned_psf.zernike_coef = ailoc.common.gpu(zernike_coef_end)
+        photons = ailoc.common.gpu(torch.ones(nz))
+        psf_end = ailoc.common.cpu(model.learned_psf.simulate(x, y, z, photons))
+        phase_end = ailoc.common.cpu(2 * np.pi *
+                                     torch.sum(model.learned_psf.zernike_coef[:, None, None] *
+                                               model.learned_psf.allzernikes, dim=0) /
+                                     model.learned_psf.wavelength)
+
+    psf_start_end_diff = np.concatenate([psf_start, psf_end, psf_end - psf_start], 1)
+    phase_start_end_diff = np.concatenate([phase_start, phase_end, phase_end - phase_start], 1)
+
+    # plot psfs
+    fig, ax = plt.subplots(1, 9, constrained_layout=True, figsize=(12, 3))
+    for i in range(nz):
+        ax_tmp = ax[i]
+        ax_tmp.imshow(psf_start_end_diff[i, :, :], cmap='turbo')
+        ax_tmp.set_title(f'{ailoc.common.cpu(z[i])} nm')
+    fig.suptitle(f'PSF start;end;difference')
+    plt.show()
+
+    # plot pupils
+    fig, ax = plt.subplots(1, 1, constrained_layout=True, figsize=(9, 3))
+    im = plt.imshow(phase_start_end_diff, cmap='turbo')
+    fig.colorbar(im, ax=ax, fraction=0.05)
+    ax.set_title('Pupil start;end;difference')
+    plt.show()
+
+    # plot the zernike coefficients
+    width = 0.35
+    zernike_mode = ailoc.common.cpu(model.learned_psf.zernike_mode)
+    figure, ax = plt.subplots(1, 1, constrained_layout=True, figsize=(10, 8))
+    aberrations_names = []
+    for i in range(zernike_mode.shape[0]):
+        aberrations_names.append(
+            f"{zernike_mode[i, 0]:.0f}, {zernike_mode[i, 1]:.0f}")
+    plt.xticks(np.arange(zernike_mode.shape[0]),
+               labels=aberrations_names, rotation=30, fontsize=12)
+    bar_start = ax.bar(np.arange(zernike_mode.shape[0])-width/2, ailoc.common.cpu(zernike_coef_start),
+                     width=width, color='orange',
+                     edgecolor='k')
+    bar_end = ax.bar(np.arange(zernike_mode.shape[0])+width/2, ailoc.common.cpu(zernike_coef_end),
+                     width=width, color='olive',
+                     edgecolor='k')
+    plt.yticks(fontsize=12)
+
+    def autolabel(rects):
+        y_axis_length = rects.datavalues.max() - rects.datavalues.min()
+        for rect in rects:
+            height = rect.get_height()
+            plt.text(rect.get_x() + 0.1, y_axis_length / 100 + height if height > 0 else height - y_axis_length / 40,
+                     '%.1f' % height,
+                     fontsize=10 - 2)
+
+    # autolabel(bar_start)
+    # autolabel(bar_end)
+    ax.tick_params(axis='both',
+                   direction='out'
+                   )
+    ax.set_ylabel('Zernike coefficients (nm)', fontsize=16)
+    ax.set_xlabel('Zernike modes', fontsize=16)
+    plt.legend(['start', 'end'], fontsize=16)
+    plt.show()
+
+
 def plot_single_frame_inference(inference_dict, loc_model):
     """
     Plot the results of a single frame inference.

@@ -463,6 +463,9 @@ def lunar_synclearning():
                     phase_record,
                     duration=200)
 
+    # compare the learned PSF before and after training
+    ailoc.common.plot_start_end_psf(lunar_model)
+
     # test single emitter localization accuracy with CRLB
     _,_,_, = ailoc.common.test_single_emitter_accuracy(
         loc_model=lunar_model,
