@@ -1,6 +1,6 @@
 import numpy as np
 import sys
-sys.path.append('../../')
+sys.path.append('../')
 import logging
 logger = logging.getLogger()
 logger.setLevel(logging.ERROR)

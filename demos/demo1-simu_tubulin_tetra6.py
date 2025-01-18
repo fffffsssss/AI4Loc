@@ -84,7 +84,7 @@ def deeploc_loclearning():
         'context_size': 8,  # for each batch unit, simulate several frames share the same photophysics and bg to train
         'train_size': 128,
         'num_em_avg': 10,
-        'eval_batch_size': 100,
+        'eval_batch_size': 100,  # the evaluation set (same as training) used to track the performance during training
         'photon_range': (1000, 10000),
         'z_range': (-3000, 3000),
         'bg_range': (40, 60),  # will be automatically adjusted if provided experimental images
