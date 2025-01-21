@@ -18,7 +18,7 @@ import ailoc.common
 import ailoc.simulation
 ailoc.common.setup_seed(25)
 torch.backends.cudnn.benchmark = True
-os.environ['CUDA_VISIBLE_DEVICES'] = '1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 
 def lunar_loclearning():
@@ -430,8 +430,9 @@ def lunar_synclearning_ckpoint():
 
 
 def lunar_analyze():
-    loc_model_path = '../../results/2024-12-27-15-45LUNAR_SL.pt'
-    image_path = '../../datasets/demo3-exp_whole_cell_tetra6'   # can be a tiff file path or a folder path
+    loc_model_path = '../../results/2024-11-27-16-56LUNAR_SL.pt'
+    # loc_model_path = '../../results/2024-12-08-23-47DeepLoc.pt'
+    image_path = '../../datasets/dmo6Mito_sw20220423/crop_data/crop_roi.tif'   # can be a tiff file path or a folder path
     save_path = '../../results/' + \
                 os.path.split(loc_model_path)[-1].split('.')[0] + \
                 '_'+os.path.split(image_path)[-1].split('.')[0]+'_predictions.csv'
@@ -461,7 +462,7 @@ def lunar_analyze():
         num_workers=0
     )
 
-    lunar_analyzer.check_single_frame_output(frame_num=17)
+    lunar_analyzer.check_single_frame_output(frame_num=5)
 
     preds_array, preds_rescale_array = lunar_analyzer.divide_and_conquer(degrid=True)
 
@@ -521,7 +522,7 @@ def lunar_competitive_analyze():
         preds_array,
         pixel_size=lunar_analyzer.pixel_size_xy,
         rescale_bins=20,
-        sig_3d=False
+        threshold=0.01,
     )
     tmp_path = os.path.dirname(lunar_analyzer.output_path) + '/' + os.path.basename(lunar_analyzer.output_path).split('.')[
         0] + '_rescale.csv'
@@ -534,28 +535,29 @@ def lunar_competitive_analyze():
     print(print_message_tmp)
     print_message_tmp = f'the file to save the rescaled predictions is: {tmp_path}'
     print(print_message_tmp)
-    # resampling the localizations with large uncertainty to avoid the grid artifacts
-    time_start = time.time()
-    print_message_tmp = 'resample the xy offsets to reduce grid artifacts ' \
-                        'in the difficult conditions (low SNR, high density, etc.) ' \
-                        'replace the original xnm and ynm with x_resample and y_resample'
-    print(print_message_tmp)
-    preds_array_re = ailoc.common.resample_offset(
-        preds_array,
-        pixel_size=lunar_analyzer.pixel_size_xy,
-        threshold=0.25
-    )
-    tmp_path = os.path.dirname(lunar_analyzer.output_path) + '/' + os.path.basename(lunar_analyzer.output_path).split('.csv')[
-        0] + '_resample.csv'
-    ailoc.common.write_csv_array(
-        preds_array_re,
-        filename=tmp_path,
-        write_mode='write localizations'
-    )
-    print_message_tmp = f'resample finished, time cost (min): {(time.time() - time_start) / 60:.2f}'
-    print(print_message_tmp)
-    print_message_tmp = f'the file to save the resampled predictions is: {tmp_path}'
-    print(print_message_tmp)
+
+    # # resampling the localizations with large uncertainty to avoid the grid artifacts
+    # time_start = time.time()
+    # print_message_tmp = 'resample the xy offsets to reduce grid artifacts ' \
+    #                     'in the difficult conditions (low SNR, high density, etc.) ' \
+    #                     'replace the original xnm and ynm with x_resample and y_resample'
+    # print(print_message_tmp)
+    # preds_array_re = ailoc.common.resample_offset(
+    #     preds_array,
+    #     pixel_size=lunar_analyzer.pixel_size_xy,
+    #     threshold=0.25
+    # )
+    # tmp_path = os.path.dirname(lunar_analyzer.output_path) + '/' + os.path.basename(lunar_analyzer.output_path).split('.csv')[
+    #     0] + '_resample.csv'
+    # ailoc.common.write_csv_array(
+    #     preds_array_re,
+    #     filename=tmp_path,
+    #     write_mode='write localizations'
+    # )
+    # print_message_tmp = f'resample finished, time cost (min): {(time.time() - time_start) / 60:.2f}'
+    # print(print_message_tmp)
+    # print_message_tmp = f'the file to save the resampled predictions is: {tmp_path}'
+    # print(print_message_tmp)
 
     # # read the ground truth and calculate metrics
     # preds_array = ailoc.common.read_csv_array(save_path)
