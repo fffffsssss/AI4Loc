@@ -3,7 +3,8 @@ Artificial intelligence for single molecule localization microscopy (SMLM),
 this is a framework for developing deep learning based 3D localization algorithms.
 
 # LUNAR: Localization Using Neural-physics Adaptive Reconstruction
-This is the official implementation of the paper "Neural-physics reconstruction learning for computational adaptive 3D super-resolution imaging", 
+This is the official implementation of the paper 
+"Unsupervised neural-physics learning reveals three-dimensional subcellular nanostructures with large depth of field", 
 distributed as a part of the AI4Loc framework.
 
 <p align="center">
