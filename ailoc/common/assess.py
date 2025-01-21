@@ -393,35 +393,35 @@ def test_single_emitter_accuracy(loc_model,
         plt.ylabel('Accuracy (nm)')
         plt.show()
 
-        print('plot the STD of network prediction vs CRLB')
-        plt.figure(constrained_layout=True)
-        plt.plot(ailoc.common.cpu(z), xyz_crlb_np[:, 0], 'b',
-                 ailoc.common.cpu(z), xyz_crlb_np[:, 1], 'g',
-                 ailoc.common.cpu(z), xyz_crlb_np[:, 2], 'r')
-        plt.scatter(ailoc.common.cpu(z), std_xyz[0, :], c='b')
-        plt.scatter(ailoc.common.cpu(z), std_xyz[1, :], c='g')
-        plt.scatter(ailoc.common.cpu(z), std_xyz[2, :], c='r')
-        plt.scatter(ailoc.common.cpu(z), sigma_xyz[0, :], c='b', marker='x')
-        plt.scatter(ailoc.common.cpu(z), sigma_xyz[1, :], c='g', marker='x')
-        plt.scatter(ailoc.common.cpu(z), sigma_xyz[2, :], c='r', marker='x')
-        plt.legend(('$CRLB_x^{1/2}$', '$CRLB_y^{1/2}$', '$CRLB_z^{1/2}$', '$STD_x$', '$STD_y$', '$STD_z$',
-                    '$\sigma_x$', '$\sigma_y$', '$\sigma_z$'),
-                   ncol=3,
-                   loc='upper center')
-        plt.xlim([np.min(ailoc.common.cpu(z)), np.max(ailoc.common.cpu(z))])
-        plt.ylim([0, np.max([np.max(xyz_crlb_np) * 1.5, np.max(std_xyz) + 5])])
-        plt.xlabel('Z (nm)')
-        plt.ylabel('Precision (nm)')
-        plt.show()
-
-        print('plot the distribution of prediction z')
-        plt.figure(constrained_layout=True)
-        plt.scatter(paired_array[:,3],paired_array[:,7],c='cyan',marker='o',alpha=1,linewidths=0.1,)
-        plt.scatter(ailoc.common.cpu(z), mean_xyz[2, :], c='darkgreen', marker='x')
-        plt.scatter(ailoc.common.cpu(z), ailoc.common.cpu(z), c='r', marker='x')
-        plt.legend(('$z_{predict}$','$z_{predict,mean}$','$z_{gt}$'))
-        plt.xlabel('Z (nm)')
-        plt.ylabel('Z prediction (nm)')
-        plt.show()
+        # print('plot the STD of network prediction vs CRLB')
+        # plt.figure(constrained_layout=True)
+        # plt.plot(ailoc.common.cpu(z), xyz_crlb_np[:, 0], 'b',
+        #          ailoc.common.cpu(z), xyz_crlb_np[:, 1], 'g',
+        #          ailoc.common.cpu(z), xyz_crlb_np[:, 2], 'r')
+        # plt.scatter(ailoc.common.cpu(z), std_xyz[0, :], c='b')
+        # plt.scatter(ailoc.common.cpu(z), std_xyz[1, :], c='g')
+        # plt.scatter(ailoc.common.cpu(z), std_xyz[2, :], c='r')
+        # plt.scatter(ailoc.common.cpu(z), sigma_xyz[0, :], c='b', marker='x')
+        # plt.scatter(ailoc.common.cpu(z), sigma_xyz[1, :], c='g', marker='x')
+        # plt.scatter(ailoc.common.cpu(z), sigma_xyz[2, :], c='r', marker='x')
+        # plt.legend(('$CRLB_x^{1/2}$', '$CRLB_y^{1/2}$', '$CRLB_z^{1/2}$', '$STD_x$', '$STD_y$', '$STD_z$',
+        #             '$\sigma_x$', '$\sigma_y$', '$\sigma_z$'),
+        #            ncol=3,
+        #            loc='upper center')
+        # plt.xlim([np.min(ailoc.common.cpu(z)), np.max(ailoc.common.cpu(z))])
+        # plt.ylim([0, np.max([np.max(xyz_crlb_np) * 1.5, np.max(std_xyz) + 5])])
+        # plt.xlabel('Z (nm)')
+        # plt.ylabel('Precision (nm)')
+        # plt.show()
+        #
+        # print('plot the distribution of prediction z')
+        # plt.figure(constrained_layout=True)
+        # plt.scatter(paired_array[:,3],paired_array[:,7],c='cyan',marker='o',alpha=1,linewidths=0.1,)
+        # plt.scatter(ailoc.common.cpu(z), mean_xyz[2, :], c='darkgreen', marker='x')
+        # plt.scatter(ailoc.common.cpu(z), ailoc.common.cpu(z), c='r', marker='x')
+        # plt.legend(('$z_{predict}$','$z_{predict,mean}$','$z_{gt}$'))
+        # plt.xlabel('Z (nm)')
+        # plt.ylabel('Z prediction (nm)')
+        # plt.show()
 
     return metric_dict, paired_array, np.concatenate([ailoc.common.cpu(z)[:, None], xyz_crlb_np], axis=1)
