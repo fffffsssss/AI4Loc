@@ -68,6 +68,7 @@ The project files should be organized as the following hierarchy:
 We recommend running the demos on a GPU with at least 24GB of memory. 
 If such a GPU is unavailable, 
 you can reduce the `batch_size` or `context_size` to lower GPU memory usage during training. 
+(e.g., `batch_size=1`, `context_size=8`)
 
 We provide several demos in the `demos` directory, illustrating use cases such as beads calibration, 
 localization learning based on the calibration, and synchronized learning directly on raw data. 
