@@ -444,7 +444,7 @@ def lunar_synclearning():
     file_name = '../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'LUNAR_SL.pt'
     # torch.autograd.set_detect_anomaly(True)
     lunar_model.online_train(
-        batch_size=2,
+        batch_size=2,  # the batch size for training, can be adjusted according to the GPU memory
         max_iterations=40000,
         eval_freq=1000,
         file_name=file_name,
