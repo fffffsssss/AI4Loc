@@ -135,7 +135,7 @@ def sample_prob(p_pred, batch_size, thre_integrated=0.7, thre_candi_1=0.3, thre_
         thre_integrated (float): the threshold for the integrated probability value.
 
     Returns:
-        np.ndarray: The binary map that indicates the existence of a molecule.
+        torch.Tensor: The binary map that indicates the existence of a molecule.
     """
 
     num_img = len(p_pred)
@@ -317,7 +317,12 @@ def gmm_to_localizations(p_pred,
                                                     ailoc.common.cpu(pixel_size_xy),
                                                     z_scale,
                                                     photon_scale)
-    bg_sampled = bg_pred * bg_scale
+    try:
+        bg_sampled = bg_pred * bg_scale
+    except:
+        # if bg_pred is not available, set bg_sampled to -1
+        bg_pred = torch.ones_like(p_sampled) * -1
+        bg_sampled = bg_pred
 
     if return_infer_map:
         inference_dict = {'prob': [], 'x_offset': [], 'y_offset': [], 'z_offset': [], 'photon': [],
