@@ -462,7 +462,7 @@ def rescale_offset_v1(preds_array, pixel_size=None, rescale_bins=20, sig_3d=Fals
     return preds_array_rescale
 
 
-def rescale_offset(preds_array, pixel_size=None, rescale_bins=20, threshold=0.2):
+def rescale_offset(preds_array, pixel_size=None, rescale_bins=20, threshold=0.2, show_res=True):
     """
     Rescales x and y offsets so that they are distributed uniformly within [-0.5, 0.5] to
     correct for biased outputs. All molecules are binned based on their uncertainties and then
@@ -477,6 +477,7 @@ def rescale_offset(preds_array, pixel_size=None, rescale_bins=20, threshold=0.2)
         pixel_size (list of int): [int int], the pixel size in the xy plane.
         threshold (float): the threshold of the uncertainty to rescale, if the uncertainty relative to pixel size
             is larger than the threshold, the xy offset will be rescaled.
+        show_res (bool): whether to show the histogram of the original and rescaled offsets.
 
     Returns:
         np.ndarray: the rescaled molecule list, the rescaled xo, yo, xnm, ynm are stored in the last four columns.
@@ -523,20 +524,21 @@ def rescale_offset(preds_array, pixel_size=None, rescale_bins=20, threshold=0.2)
     preds_array_rescale[:, 1:3] = np.column_stack((x_rescale, y_rescale))
 
     # plot the histogram of the original and rescaled offsets
-    fig, ax = plt.subplots(2, 2, constrained_layout=True)
-    ax[0, 0].hist(xo, bins=100, label='original x offset')
-    ax[0, 0].legend()
-    ax[0, 0].set_xlim([-0.5, 0.5])
-    ax[0, 1].hist(xo_rescale, bins=100, label='rescaled x offset')
-    ax[0, 1].legend()
-    ax[0, 1].set_xlim([-0.5, 0.5])
-    ax[1, 0].hist(yo, bins=100, label='original y offset')
-    ax[1, 0].legend()
-    ax[1, 0].set_xlim([-0.5, 0.5])
-    ax[1, 1].hist(yo_rescale, bins=100, label='rescaled y offset')
-    ax[1, 1].legend()
-    ax[1, 1].set_xlim([-0.5, 0.5])
-    plt.show()
+    if show_res:
+        fig, ax = plt.subplots(2, 2, constrained_layout=True)
+        ax[0, 0].hist(xo, bins=100, label='original x offset')
+        ax[0, 0].legend()
+        ax[0, 0].set_xlim([-0.5, 0.5])
+        ax[0, 1].hist(xo_rescale, bins=100, label='rescaled x offset')
+        ax[0, 1].legend()
+        ax[0, 1].set_xlim([-0.5, 0.5])
+        ax[1, 0].hist(yo, bins=100, label='original y offset')
+        ax[1, 0].legend()
+        ax[1, 0].set_xlim([-0.5, 0.5])
+        ax[1, 1].hist(yo_rescale, bins=100, label='rescaled y offset')
+        ax[1, 1].legend()
+        ax[1, 1].set_xlim([-0.5, 0.5])
+        plt.show()
 
     return preds_array_rescale
 
