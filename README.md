@@ -75,7 +75,7 @@ We provide several demos in the `demos` directory, illustrating use cases such a
 localization learning based on the calibration, and synchronized learning directly on raw data. 
 For all demos: 
 
-* Data should be downloaded from [![image](https://github.com/user-attachments/assets/5792be5b-2830-410b-8f34-6a1b88e8e7d8)](https://doi.org/10.5281/zenodo.14709467)
+* Data should be downloaded from [![img.png](docs/img1.png)](https://doi.org/10.5281/zenodo.14709467)
  and put in the `datasets` directory.
 * Results will be automatically saved in the `results` directory.
 * Localizations are saved as a `.csv` file. 
