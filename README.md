@@ -4,7 +4,7 @@ this is a framework for developing deep learning based 3D localization algorithm
 
 # LUNAR: Localization Using Neural-physics Adaptive Reconstruction
 This is the official implementation of the paper 
-"Unsupervised neural-physics learning reveals three-dimensional subcellular nanostructures with large depth of field", 
+"Unsupervised neural-physics learning reveals three-dimensional subcellular nanostructures across large depth of field", 
 distributed as a part of the AI4Loc framework.
 
 <p align="center">
@@ -75,7 +75,8 @@ We provide several demos in the `demos` directory, illustrating use cases such a
 localization learning based on the calibration, and synchronized learning directly on raw data. 
 For all demos: 
 
-* Data should be downloaded and put in the `datasets` directory.
+* Data should be downloaded from [![img.png](docs/img1.png)](https://doi.org/10.5281/zenodo.14709467)
+ and put in the `datasets` directory.
 * Results will be automatically saved in the `results` directory.
 * Localizations are saved as a `.csv` file. 
 
