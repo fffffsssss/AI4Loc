@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import torch
 import numpy as np
 import torch.nn.functional as F
+import torch.distributions
 
 import ailoc.common
 import ailoc.simulation
@@ -99,6 +100,162 @@ def spatial_integration(p_pred, thre_candi_1=0.3, thre_candi_2=0.6):
         p_integrated_candidate = torch.clamp(p_integrated_candidate_1 + p_integrated_candidate_2, 0., 1.)
 
         return p_integrated_candidate[:, 0]
+
+
+def spatial_integration_v3(p_pred, thre_candi_1=0.3, thre_candi_2=0.6, xyzph_pred=None, xyzph_sig_pred=None):
+    """
+    Extract local maximum from the probability map. Two situations are considered
+
+    Args:
+        p_pred: the original probability map output from the network
+        thre_candi_1: the threshold for the original probability value for situation 1
+        thre_candi_2: the threshold for the original probability value for situation 2
+
+    Returns:
+        torch.Tensor: The spatially integrated probability map with only candidate pixels non-zero
+    """
+
+    with torch.no_grad():
+        p_pred = ailoc.common.gpu(p_pred)[:, None]
+
+        # Situation 1: Local maximum with probability values > candi_thre (normally 0.3)
+        # are regarded as candidates
+        p_pred_clip = torch.where(p_pred > thre_candi_1, p_pred, torch.zeros_like(p_pred))
+        # localize local maximum within a 3x3 patch
+        pool = F.max_pool2d(p_pred_clip, kernel_size=3, stride=1, padding=1)
+        candidate_mask1 = torch.eq(p_pred, pool).float()
+
+        # Situation 2: In order do be able to identify two emitters in adjacent pixels we look for
+        # probability values > 0.6 that are not part of the first mask
+        p_pred_except_candi1 = p_pred * (1 - candidate_mask1)
+        candidate_mask2 = torch.where(p_pred_except_candi1 > thre_candi_2,
+                                      torch.ones_like(p_pred_except_candi1),
+                                      torch.zeros_like(p_pred_except_candi1))
+
+        # Add probability values from the 4 adjacent pixels to the center pixel
+        diag = 0.  # 1/np.sqrt(2)
+        filter_ = ailoc.common.gpu(torch.tensor([[diag, 1., diag],
+                                                 [1, 1, 1],
+                                                 [diag, 1, diag]])).view([1, 1, 3, 3])
+        p_integrated = F.conv2d(p_pred, filter_, padding=1)
+
+        p_integrated_candidate_1 = candidate_mask1 * p_integrated
+        p_integrated_candidate_2 = candidate_mask2 * p_integrated
+
+        # This is our final integrated probability map which we then threshold (normally > 0.7)
+        # to get our final discrete locations
+        p_integrated_candidate = torch.clamp(p_integrated_candidate_1 + p_integrated_candidate_2, 0., 1.)
+
+        if xyzph_pred is None:
+            return p_integrated_candidate[:, 0]
+
+        # postprocess the xyzph_pred considering the neighbouring two-gauss PDF
+        candidate_mask = torch.clamp(candidate_mask1 + candidate_mask2, 0., 1.)
+
+        # postprocess the x offset
+        x_pred = xyzph_pred[:, 0:1].detach()
+        x_sig_pred = xyzph_sig_pred[:, 0:1].detach()
+
+        # find candidate neighbors
+        x_candi_left_mask = (x_pred < 0) * candidate_mask
+        x_candi_left_idx = tuple(x_candi_left_mask.nonzero().transpose(1, 0))
+        # x_neighbor_left = x_pred[x_candi_left_idx[0], x_candi_left_idx[1], x_candi_left_idx[2], x_candi_left_idx[3]-1]
+        x_candi_right_mask = (x_pred > 0) * candidate_mask
+        x_candi_right_idx = tuple(x_candi_right_mask.nonzero().transpose(1, 0))
+        # x_neighbor_right = x_pred[x_candi_right_idx[0], x_candi_right_idx[1], x_candi_right_idx[2], x_candi_right_idx[3]+1]
+
+        filter_left = ailoc.common.gpu(torch.tensor([[0, 0, 0],
+                                                     [1, 0, 0],
+                                                     [0, 0, 0]])).view([1, 1, 3, 3])
+        x_pred_left = F.conv2d((x_pred-1)*(1-candidate_mask), filter_left, padding=1)
+        p_pred_left = F.conv2d(p_pred*(1-candidate_mask), filter_left, padding=1)
+        x_sig_pred_left = F.conv2d(x_sig_pred*(1-candidate_mask), filter_left, padding=1)
+
+        filter_right = ailoc.common.gpu(torch.tensor([[0, 0, 0],
+                                                     [0, 0, 1],
+                                                     [0, 0, 0]])).view([1, 1, 3, 3])
+        x_pred_right = F.conv2d((x_pred+1)*(1-candidate_mask), filter_right, padding=1)
+        p_pred_right = F.conv2d(p_pred*(1-candidate_mask), filter_right, padding=1)
+        x_sig_pred_right = F.conv2d(x_sig_pred*(1-candidate_mask), filter_right, padding=1)
+
+        x_pred_neighbor = x_candi_left_mask*x_pred_left+x_candi_right_mask*x_pred_right
+        x_p_pred_neighbor = x_candi_left_mask*p_pred_left+x_candi_right_mask*p_pred_right
+        x_sig_pred_neighbor = x_candi_left_mask*x_sig_pred_left+x_candi_right_mask*x_sig_pred_right
+
+        x_pred_new = (p_pred/(x_sig_pred**2)*x_pred + x_p_pred_neighbor/(x_sig_pred_neighbor**2)*x_pred_neighbor) /\
+                     (p_pred/(x_sig_pred**2) + x_p_pred_neighbor/(x_sig_pred_neighbor**2))
+
+        x_sig_pred_neighbor[torch.isnan(x_pred_new)] = 4
+        x_pred_new[torch.isnan(x_pred_new)] = 0
+
+        # compute the probability of the x_pred, x_neighbor, and x_pred_new in the two-gauss PDF
+        x_gauss_1 = torch.distributions.Normal(x_pred, x_sig_pred)
+        x_gauss_2 = torch.distributions.Normal(x_pred_neighbor, x_sig_pred_neighbor)
+
+        # calculate the pdf value
+        prob_x_pred = p_pred * torch.exp(x_gauss_1.log_prob(x_pred)) + x_p_pred_neighbor * torch.exp(x_gauss_2.log_prob(x_pred))
+        prob_x_pred_neighbor = p_pred * torch.exp(x_gauss_1.log_prob(x_pred_neighbor)) + x_p_pred_neighbor * torch.exp(x_gauss_2.log_prob(x_pred_neighbor))
+        prob_x_pred_new = p_pred * torch.exp(x_gauss_1.log_prob(x_pred_new)) + x_p_pred_neighbor * torch.exp(x_gauss_2.log_prob(x_pred_new))
+
+        x_prob_stacked = torch.stack([prob_x_pred, prob_x_pred_neighbor, prob_x_pred_new], dim=0)
+        x_pred_stacked = torch.stack([x_pred, x_pred_neighbor, x_pred_new], dim=0)
+        max_prob_x, max_indices_x = torch.max(x_prob_stacked, dim=0)
+        max_indices_x_expanded = max_indices_x.unsqueeze(0)
+        x_pred_postproc = torch.gather(x_pred_stacked, 0, max_indices_x_expanded).squeeze(0)
+
+        # postprocess the y offset
+        y_pred = xyzph_pred[:, 1:2].detach()
+        y_sig_pred = xyzph_sig_pred[:, 1:2].detach()
+
+        # find candidate neighbors
+        y_candi_down_mask = (y_pred < 0) * candidate_mask
+        y_candi_down_idx = tuple(y_candi_down_mask.nonzero().transpose(1, 0))
+        # y_neighbor_down = y_pred[y_candi_down_idx[0], y_candi_down_idx[1], y_candi_down_idx[2]-1, y_candi_down_idx[3]]
+        y_candi_up_mask = (y_pred > 0) * candidate_mask
+        y_candi_up_idx = tuple(y_candi_up_mask.nonzero().transpose(1, 0))
+
+        filter_down = ailoc.common.gpu(torch.tensor([[0, 1, 0],  # torch.conv need to flip the kernel
+                                                     [0, 0, 0],
+                                                     [0, 0, 0]])).view([1, 1, 3, 3])
+        y_pred_down = F.conv2d((y_pred-1)*(1-candidate_mask), filter_down, padding=1)
+        p_pred_down = F.conv2d(p_pred*(1-candidate_mask), filter_down, padding=1)
+        y_sig_pred_down = F.conv2d(y_sig_pred*(1-candidate_mask), filter_down, padding=1)
+
+        filter_up = ailoc.common.gpu(torch.tensor([[0, 0, 0],
+                                                     [0, 0, 0],
+                                                     [0, 1, 0]])).view([1, 1, 3, 3])
+        y_pred_up = F.conv2d((y_pred+1)*(1-candidate_mask), filter_up, padding=1)
+        p_pred_up = F.conv2d(p_pred*(1-candidate_mask), filter_up, padding=1)
+        y_sig_pred_up = F.conv2d(y_sig_pred*(1-candidate_mask), filter_up, padding=1)
+
+        y_pred_neighbor = y_candi_down_mask*y_pred_down+y_candi_up_mask*y_pred_up
+        y_p_pred_neighbor = y_candi_down_mask*p_pred_down+y_candi_up_mask*p_pred_up
+        y_sig_pred_neighbor = y_candi_down_mask*y_sig_pred_down+y_candi_up_mask*y_sig_pred_up
+
+        y_pred_new = (p_pred/(y_sig_pred**2)*y_pred + y_p_pred_neighbor/(y_sig_pred_neighbor**2)*y_pred_neighbor) /\
+                        (p_pred/(y_sig_pred**2) + y_p_pred_neighbor/(y_sig_pred_neighbor**2))
+
+        y_sig_pred_neighbor[torch.isnan(y_pred_new)] = 4
+        y_pred_new[torch.isnan(y_pred_new)] = 0
+
+        # compute the probability of the y_pred, y_neighbor, and y_pred_new in the two-gauss PDF
+        y_gauss_1 = torch.distributions.Normal(y_pred, y_sig_pred)
+        y_gauss_2 = torch.distributions.Normal(y_pred_neighbor, y_sig_pred_neighbor)
+
+        # calculate the pdf value
+        prob_y_pred = p_pred * torch.exp(y_gauss_1.log_prob(y_pred)) + y_p_pred_neighbor * torch.exp(y_gauss_2.log_prob(y_pred))
+        prob_y_pred_neighbor = p_pred * torch.exp(y_gauss_1.log_prob(y_pred_neighbor)) + y_p_pred_neighbor * torch.exp(y_gauss_2.log_prob(y_pred_neighbor))
+        prob_y_pred_new = p_pred * torch.exp(y_gauss_1.log_prob(y_pred_new)) + y_p_pred_neighbor * torch.exp(y_gauss_2.log_prob(y_pred_new))
+
+        y_prob_stacked = torch.stack([prob_y_pred, prob_y_pred_neighbor, prob_y_pred_new], dim=0)
+        y_pred_stacked = torch.stack([y_pred, y_pred_neighbor, y_pred_new], dim=0)
+        max_prob_y, max_indices_y = torch.max(y_prob_stacked, dim=0)
+        max_indices_y_expanded = max_indices_y.unsqueeze(0)
+        y_pred_postproc = torch.gather(y_pred_stacked, 0, max_indices_y_expanded).squeeze(0)
+
+        xyzph_pred_postproc = torch.cat([x_pred_postproc, y_pred_postproc, xyzph_pred[:, 2:]], dim=1)
+
+        return p_integrated_candidate[:, 0], xyzph_pred_postproc
 
 
 def sample_prob_v1(p_pred, batch_size, thre_integrated=0.7, thre_candi_1=0.3, thre_candi_2=0.6):
@@ -312,6 +469,77 @@ def gmm_to_localizations(p_pred,
     molecule_array = inference_map_to_localizations(p_sampled,
                                                     p_pred,
                                                     xyzph_pred,
+                                                    xyzph_sig_pred,
+                                                    bg_pred,
+                                                    ailoc.common.cpu(pixel_size_xy),
+                                                    z_scale,
+                                                    photon_scale)
+    try:
+        bg_sampled = bg_pred * bg_scale
+    except:
+        # if bg_pred is not available, set bg_sampled to -1
+        bg_pred = torch.ones_like(p_sampled) * -1
+        bg_sampled = bg_pred
+
+    if return_infer_map:
+        inference_dict = {'prob': [], 'x_offset': [], 'y_offset': [], 'z_offset': [], 'photon': [],
+                          'bg': [], 'x_sig': [], 'y_sig': [], 'z_sig': [], 'photon_sig': [],
+                          'prob_sampled': [], 'bg_sampled': []}
+
+        inference_dict['prob'].append(ailoc.common.cpu(p_pred))
+        inference_dict['x_offset'].append(ailoc.common.cpu(xyzph_pred[:, 0, :, :]))
+        inference_dict['y_offset'].append(ailoc.common.cpu(xyzph_pred[:, 1, :, :]))
+        inference_dict['z_offset'].append(ailoc.common.cpu(xyzph_pred[:, 2, :, :]))
+        inference_dict['photon'].append(ailoc.common.cpu(xyzph_pred[:, 3, :, :]))
+        inference_dict['x_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 0, :, :]))
+        inference_dict['y_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 1, :, :]))
+        inference_dict['z_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 2, :, :]))
+        inference_dict['photon_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 3, :, :]))
+        inference_dict['bg'].append(ailoc.common.cpu(bg_pred))
+        inference_dict['prob_sampled'].append(ailoc.common.cpu(p_sampled))
+        inference_dict['bg_sampled'].append(ailoc.common.cpu(bg_sampled))
+        for k in inference_dict.keys():
+            inference_dict[k] = np.vstack(inference_dict[k])
+    else:
+        inference_dict = None
+
+    return molecule_array, inference_dict
+
+
+def gmm_to_localizations_v3(p_pred,
+                         xyzph_pred,
+                         xyzph_sig_pred,
+                         bg_pred,
+                         thre_integrated,
+                         pixel_size_xy,
+                         z_scale,
+                         photon_scale,
+                         bg_scale,
+                         batch_size,
+                         return_infer_map):
+    """
+    Postprocess the GMM posterior to the molecule list.
+
+    Args:
+        inference_dict (dict): the inference result from the network, contains the GMM components.
+        thre_integrated (float): the threshold for the integrated probability value.
+        pixel_size_xy (list of int): [int int], the pixel size in the xy plane.
+        z_scale (float): the scale factor for the z axis.
+        photon_scale (float): the scale factor for the photon count.
+        bg_scale (float): the scale factor for the background.
+        batch_size (int): the batch size used for spatial integration.
+
+    Returns:
+        (np.ndarray, dict): the molecule list with frame ordered based on the input dict, the modified inference dict.
+    """
+
+    p_integrated, xyzph_pred_postproc = spatial_integration_v3(p_pred, 0.3, 0.6, xyzph_pred, xyzph_sig_pred)
+
+    p_sampled = torch.where(p_integrated > thre_integrated, 1, 0)
+
+    molecule_array = inference_map_to_localizations(p_sampled,
+                                                    p_pred,
+                                                    xyzph_pred_postproc,
                                                     xyzph_sig_pred,
                                                     bg_pred,
                                                     ailoc.common.cpu(pixel_size_xy),

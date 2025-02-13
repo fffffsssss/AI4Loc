@@ -447,7 +447,7 @@ class SmlmDataAnalyzer:
                           self.fov_xy_start[1] * self.pixel_size_xy[1],
                           (self.fov_xy_start[1] + self.tiff_dataset.tiff_shape[-2]) * self.pixel_size_xy[1])
 
-    def divide_and_conquer(self, degrid=True):
+    def divide_and_conquer(self, degrid=False):
         """
         Analyze a large tiff file through loading images into the RAM by time block, each time block will be
         divided into sub-FOVs and analyzed separately.
