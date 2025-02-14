@@ -181,24 +181,26 @@ def spatial_integration_v3(p_pred, thre_candi_1=0.3, thre_candi_2=0.6, xyzph_pre
         x_pred_neighbor = x_candi_left_mask*x_pred_left+x_candi_right_mask*x_pred_right
         x_p_pred_neighbor = x_candi_left_mask*p_pred_left+x_candi_right_mask*p_pred_right
         x_sig_pred_neighbor = x_candi_left_mask*x_sig_pred_left+x_candi_right_mask*x_sig_pred_right
+        x_sig_pred_neighbor[x_sig_pred_neighbor == 0] = 4
 
-        x_pred_new = (p_pred/(x_sig_pred**2)*x_pred + x_p_pred_neighbor/(x_sig_pred_neighbor**2)*x_pred_neighbor) /\
-                     (p_pred/(x_sig_pred**2) + x_p_pred_neighbor/(x_sig_pred_neighbor**2))
+        # v2
+        # x_pred_new = (p_pred/(x_sig_pred**2)*x_pred + x_p_pred_neighbor/(x_sig_pred_neighbor**2)*x_pred_neighbor) /\
+        #              (p_pred/(x_sig_pred**2) + x_p_pred_neighbor/(x_sig_pred_neighbor**2))
+        # x_pred_stacked = torch.stack([x_pred, x_pred_neighbor, x_pred_new], dim=0)
 
-        x_sig_pred_neighbor[torch.isnan(x_pred_new)] = 4
-        x_pred_new[torch.isnan(x_pred_new)] = 0
+        # v3
+        x_pred_new = x_pred + (x_pred_neighbor - x_pred) * \
+                     ailoc.common.gpu(torch.linspace(0, 1, 11).view(-1, *([1] * x_pred.dim())))
+        x_pred_stacked = x_pred_new
 
         # compute the probability of the x_pred, x_neighbor, and x_pred_new in the two-gauss PDF
         x_gauss_1 = torch.distributions.Normal(x_pred, x_sig_pred)
         x_gauss_2 = torch.distributions.Normal(x_pred_neighbor, x_sig_pred_neighbor)
 
         # calculate the pdf value
-        prob_x_pred = p_pred * torch.exp(x_gauss_1.log_prob(x_pred)) + x_p_pred_neighbor * torch.exp(x_gauss_2.log_prob(x_pred))
-        prob_x_pred_neighbor = p_pred * torch.exp(x_gauss_1.log_prob(x_pred_neighbor)) + x_p_pred_neighbor * torch.exp(x_gauss_2.log_prob(x_pred_neighbor))
-        prob_x_pred_new = p_pred * torch.exp(x_gauss_1.log_prob(x_pred_new)) + x_p_pred_neighbor * torch.exp(x_gauss_2.log_prob(x_pred_new))
+        x_prob_stacked = p_pred * torch.exp(x_gauss_1.log_prob(x_pred_stacked)) + \
+                         x_p_pred_neighbor * torch.exp(x_gauss_2.log_prob(x_pred_stacked))
 
-        x_prob_stacked = torch.stack([prob_x_pred, prob_x_pred_neighbor, prob_x_pred_new], dim=0)
-        x_pred_stacked = torch.stack([x_pred, x_pred_neighbor, x_pred_new], dim=0)
         max_prob_x, max_indices_x = torch.max(x_prob_stacked, dim=0)
         max_indices_x_expanded = max_indices_x.unsqueeze(0)
         x_pred_postproc = torch.gather(x_pred_stacked, 0, max_indices_x_expanded).squeeze(0)
@@ -231,24 +233,26 @@ def spatial_integration_v3(p_pred, thre_candi_1=0.3, thre_candi_2=0.6, xyzph_pre
         y_pred_neighbor = y_candi_down_mask*y_pred_down+y_candi_up_mask*y_pred_up
         y_p_pred_neighbor = y_candi_down_mask*p_pred_down+y_candi_up_mask*p_pred_up
         y_sig_pred_neighbor = y_candi_down_mask*y_sig_pred_down+y_candi_up_mask*y_sig_pred_up
+        y_sig_pred_neighbor[y_sig_pred_neighbor == 0] = 4
 
-        y_pred_new = (p_pred/(y_sig_pred**2)*y_pred + y_p_pred_neighbor/(y_sig_pred_neighbor**2)*y_pred_neighbor) /\
-                        (p_pred/(y_sig_pred**2) + y_p_pred_neighbor/(y_sig_pred_neighbor**2))
+        # v2
+        # y_pred_new = (p_pred/(y_sig_pred**2)*y_pred + y_p_pred_neighbor/(y_sig_pred_neighbor**2)*y_pred_neighbor) /\
+        #                 (p_pred/(y_sig_pred**2) + y_p_pred_neighbor/(y_sig_pred_neighbor**2))
+        # y_pred_stacked = torch.stack([y_pred, y_pred_neighbor, y_pred_new], dim=0)
 
-        y_sig_pred_neighbor[torch.isnan(y_pred_new)] = 4
-        y_pred_new[torch.isnan(y_pred_new)] = 0
+        # v3
+        y_pred_new = y_pred + (y_pred_neighbor - y_pred) * \
+                     ailoc.common.gpu(torch.linspace(0, 1, 11).view(-1, *([1] * y_pred.dim())))
+        y_pred_stacked = y_pred_new
 
         # compute the probability of the y_pred, y_neighbor, and y_pred_new in the two-gauss PDF
         y_gauss_1 = torch.distributions.Normal(y_pred, y_sig_pred)
         y_gauss_2 = torch.distributions.Normal(y_pred_neighbor, y_sig_pred_neighbor)
 
         # calculate the pdf value
-        prob_y_pred = p_pred * torch.exp(y_gauss_1.log_prob(y_pred)) + y_p_pred_neighbor * torch.exp(y_gauss_2.log_prob(y_pred))
-        prob_y_pred_neighbor = p_pred * torch.exp(y_gauss_1.log_prob(y_pred_neighbor)) + y_p_pred_neighbor * torch.exp(y_gauss_2.log_prob(y_pred_neighbor))
-        prob_y_pred_new = p_pred * torch.exp(y_gauss_1.log_prob(y_pred_new)) + y_p_pred_neighbor * torch.exp(y_gauss_2.log_prob(y_pred_new))
+        y_prob_stacked = p_pred * torch.exp(y_gauss_1.log_prob(y_pred_stacked)) +\
+                         y_p_pred_neighbor * torch.exp(y_gauss_2.log_prob(y_pred_stacked))
 
-        y_prob_stacked = torch.stack([prob_y_pred, prob_y_pred_neighbor, prob_y_pred_new], dim=0)
-        y_pred_stacked = torch.stack([y_pred, y_pred_neighbor, y_pred_new], dim=0)
         max_prob_y, max_indices_y = torch.max(y_prob_stacked, dim=0)
         max_indices_y_expanded = max_indices_y.unsqueeze(0)
         y_pred_postproc = torch.gather(y_pred_stacked, 0, max_indices_y_expanded).squeeze(0)

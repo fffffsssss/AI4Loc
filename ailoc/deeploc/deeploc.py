@@ -212,7 +212,7 @@ class DeepLoc(ailoc.common.XXLoc):
         #                                                                    batch_size=p_pred.shape[0])
 
         # new version, faster
-        molecule_array, inference_dict = ailoc.common.gmm_to_localizations(p_pred=p_pred,
+        molecule_array, inference_dict = ailoc.common.gmm_to_localizations_v3(p_pred=p_pred,
                                                                            xyzph_pred=xyzph_pred,
                                                                            xyzph_sig_pred=xyzph_sig_pred,
                                                                            bg_pred=bg_pred,
