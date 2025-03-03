@@ -180,6 +180,61 @@ def get_bg_stats_gauss(images, percentile=10, plot=False):
                              a_min=0, a_max=None))
     return bg_range
 
+def get_bg_empirical(images,
+                     percentile=50,
+                     plot=False):
+    """
+    This is an empirical method to estimate a training background range from data with very uneven background,
+    the estimated range maybe a little higher than the real one on uniform background data, but it is more robust
+    as the network will not predict too many false positive signals.
+
+    Args:
+        images (np.ndarray): 3D array of recordings in photon counts
+        percentile (float): Percentile between 0 and 100.
+            Sets the percentage of pixels that are assumed to have signals,
+            and the training background range is estimated from these pixels,
+            the background estimated from the rest is often lower and may cause false positives.
+        plot (bool): If true produces a plot of the histogram and fit
+
+    Returns:
+        (float, float): (bg_min, bg_max) background parameters
+    """
+
+    # get the region of interest that has both background and signals
+    sample_mask = np.where(images.mean(0) > np.percentile(images.mean(0), percentile))
+    # pixel values containing both bg and signals
+    pixel_vals = images.mean(0)[sample_mask[0], sample_mask[1]]
+    # roi_idx = np.where(sample_pixel_vals < np.percentile(sample_pixel_vals, fit_percentile))
+    # pixel_vals = sample_pixel_vals[roi_idx[0], roi_idx[1]].reshape(-1)
+
+    # fit the gauss distribution
+    result = scipy.stats.norm.fit(pixel_vals)
+
+    bg_range = tuple(np.clip([result[0] - 2 * result[1], result[0]],
+                             a_min=0, a_max=None))
+
+    if plot:
+        fig, ax = plt.subplots(1, 3, figsize=(12, 8), constrained_layout=True)
+        ax[0].imshow(images.mean(0), cmap='turbo')
+        ax[0].set_title('mean image')
+        ax[1].imshow(images.mean(0) > np.percentile(images.mean(0), percentile))
+        ax[1].set_title(f'masked area for bg fit \n(mean image>{percentile}%)')
+        ax[2].hist(pixel_vals,
+                   density=True,
+                   bins=20,
+                   alpha=0.5,
+                   label=f'masked pixels including bg and signals')
+        ax[2].hist(np.random.uniform(low=bg_range[0], high=bg_range[1], size=len(pixel_vals)),
+                   density=True,
+                   bins=20,
+                   alpha=0.5,
+                   label=f'training bg range ({bg_range[0]:.1f}, {bg_range[1]:.1f})')
+
+        plt.legend()
+        plt.show()
+
+    return bg_range
+
 
 def get_mean_percentile(images, percentile=10):
     """
