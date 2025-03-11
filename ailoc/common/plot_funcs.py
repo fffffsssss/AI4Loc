@@ -4,6 +4,7 @@ import scipy.signal
 from matplotlib.colors import hsv_to_rgb
 from matplotlib.colors import rgb_to_hsv
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
+from matplotlib.gridspec import GridSpec
 import cv2
 import PIL
 from PIL import ImageEnhance
@@ -76,7 +77,7 @@ def plot_train_record(model):
     plt.show(block=True)
 
 
-def plot_synclearning_record(model):
+def plot_synclearning_record(model, plot_phase=True):
     recorder = model.evaluation_recorder
 
     plt.figure(figsize=(9, 6), constrained_layout=True)
@@ -121,64 +122,67 @@ def plot_synclearning_record(model):
     plt.ylabel('loss_sleep')
 
     plt.subplot(3, 3, 9)
-    plot_od(recorder['loss_wake'])
+    # plot_od(recorder['loss_wake'])
+    plot_od(recorder['recon_NLL'])
     plt.xlabel('iterations')
-    plt.ylabel('loss_wake')
+    # plt.ylabel('loss_wake')
+    plt.ylabel('loss_recon')
 
     plt.show(block=True)
 
-    # plot the pseudo-color image of the zernike phase and save it as a gif
-    print('-' * 200)
-    print('Plot the phase learning process, this may take a while')
     zernike_phase_list = []
-    for zernike_tmp in recorder['learned_psf_zernike'].items():
-        if zernike_tmp[0] < model.warmup:
-            continue
-        with torch.no_grad():
-            model.learned_psf.zernike_coef = ailoc.common.gpu(zernike_tmp[1])
-            # model.learned_psf._pre_compute()
-            nz = 9
-            x = ailoc.common.gpu(torch.zeros(nz))
-            y = ailoc.common.gpu(torch.zeros(nz))
-            z = ailoc.common.gpu(torch.linspace(*model.data_simulator.mol_sampler.z_range, nz))
-            photons = ailoc.common.gpu(torch.ones(nz))
-            psf = ailoc.common.cpu(model.learned_psf.simulate(x, y, z, photons))
-            phase_tmp = ailoc.common.cpu(torch.real(torch.log(
-                torch.exp(1j * 2 * np.pi * torch.sum(model.learned_psf.zernike_coef[:, None, None] *
-                                                     model.learned_psf.allzernikes, dim=0) /
-                          model.learned_psf.wavelength)
-            )/1j))
+    if plot_phase:
+        # plot the pseudo-color image of the zernike phase and save it as a gif
+        print('-' * 200)
+        print('Plot the phase learning process, this may take a while')
+        for zernike_tmp in recorder['learned_psf_zernike'].items():
+            if zernike_tmp[0] < model.warmup:
+                continue
+            with torch.no_grad():
+                model.learned_psf.zernike_coef = ailoc.common.gpu(zernike_tmp[1])
+                # model.learned_psf._pre_compute()
+                nz = 9
+                x = ailoc.common.gpu(torch.zeros(nz))
+                y = ailoc.common.gpu(torch.zeros(nz))
+                z = ailoc.common.gpu(torch.linspace(*model.data_simulator.mol_sampler.z_range, nz))
+                photons = ailoc.common.gpu(torch.ones(nz))
+                psf = ailoc.common.cpu(model.learned_psf.simulate(x, y, z, photons))
+                phase_tmp = ailoc.common.cpu(torch.real(torch.log(
+                    torch.exp(1j * 2 * np.pi * torch.sum(model.learned_psf.zernike_coef[:, None, None] *
+                                                         model.learned_psf.allzernikes, dim=0) /
+                              model.learned_psf.wavelength)
+                )/1j))
 
-        # Create a pseudo-color plot of the depth slice
-        fig = plt.figure(figsize=(9, 6), dpi=300, constrained_layout=True)
-        fig.suptitle(f'Iterations: {zernike_tmp[0]}')
-        gs = fig.add_gridspec(1, 2)
-        ax1 = fig.add_subplot(gs[0, 0])
-        im = ax1.imshow(phase_tmp, cmap='turbo')
-        fig.colorbar(im, ax=ax1, fraction=0.05)
-        ax1.set_title('Pupil phase')
+            # Create a pseudo-color plot of the depth slice
+            fig = plt.figure(figsize=(9, 6), dpi=300, constrained_layout=True)
+            fig.suptitle(f'Iterations: {zernike_tmp[0]}')
+            gs = fig.add_gridspec(1, 2)
+            ax1 = fig.add_subplot(gs[0, 0])
+            im = ax1.imshow(phase_tmp, cmap='turbo')
+            fig.colorbar(im, ax=ax1, fraction=0.05)
+            ax1.set_title('Pupil phase')
 
-        gs01 = gs[0, 1].subgridspec(nz//3, 3)
-        for i in range(nz):
-            ax2 = fig.add_subplot(gs01[i])
-            ax2.imshow(psf[i, :, :], cmap='turbo')
-            ax2.set_title(f'{ailoc.common.cpu(z[i])} nm')
+            gs01 = gs[0, 1].subgridspec(nz//3, 3)
+            for i in range(nz):
+                ax2 = fig.add_subplot(gs01[i])
+                ax2.imshow(psf[i, :, :], cmap='turbo')
+                ax2.set_title(f'{ailoc.common.cpu(z[i])} nm')
 
-        # # old plots, only plot the zernike phase
-        # fig, ax = plt.subplots()
-        # im = ax.imshow(phase_tmp, cmap='turbo',)
-        # plt.title(f'iterations: {zernike_tmp[0]}')
-        # fig.colorbar(im, ax=ax)
+            # # old plots, only plot the zernike phase
+            # fig, ax = plt.subplots()
+            # im = ax.imshow(phase_tmp, cmap='turbo',)
+            # plt.title(f'iterations: {zernike_tmp[0]}')
+            # fig.colorbar(im, ax=ax)
 
-        # Convert the plot to an image array
-        canvas = FigureCanvas(fig)
-        canvas.draw()
-        image_array = np.array(canvas.renderer.buffer_rgba())
-        zernike_phase_list.append(image_array)
+            # Convert the plot to an image array
+            canvas = FigureCanvas(fig)
+            canvas.draw()
+            image_array = np.array(canvas.renderer.buffer_rgba())
+            zernike_phase_list.append(image_array)
 
-        plt.close(fig)
+            plt.close(fig)
 
-    # zernike_phase_3d = np.stack(zernike_phase_list, axis=0)
+        # zernike_phase_3d = np.stack(zernike_phase_list, axis=0)
 
     return zernike_phase_list
 
@@ -217,57 +221,111 @@ def plot_start_end_psf(model):
     psf_start_end_diff = np.concatenate([psf_start, psf_end, psf_end - psf_start], 1)
     phase_start_end_diff = np.concatenate([phase_start, phase_end, phase_end - phase_start], 1)
 
-    # plot psfs
-    fig, ax = plt.subplots(1, 9, constrained_layout=True, figsize=(12, 3))
+    # Create a single figure with GridSpec
+    fig = plt.figure(figsize=(12, 14))
+    gs = GridSpec(3, 9, height_ratios=[4, 4, 8])
+
+    # PSF plots (first row, 1x9 grid)
     for i in range(nz):
-        ax_tmp = ax[i]
+        ax_tmp = fig.add_subplot(gs[0, i])
         ax_tmp.imshow(psf_start_end_diff[i, :, :], cmap='turbo')
         ax_tmp.set_title(f'{ailoc.common.cpu(z[i])} nm')
-    fig.suptitle(f'PSF start;end;difference')
-    plt.show()
+    fig.suptitle(f'PSF start;end;difference')  # Adding suptitle to the whole figure
 
-    # plot pupils
-    fig, ax = plt.subplots(1, 1, constrained_layout=True, figsize=(9, 3))
-    im = plt.imshow(phase_start_end_diff, cmap='turbo')
-    fig.colorbar(im, ax=ax, fraction=0.05)
-    ax.set_title('Pupil start;end;difference')
-    plt.show()
+    # Pupil plot (second row, spanning all columns)
+    ax_pupil = fig.add_subplot(gs[1, :])
+    im = ax_pupil.imshow(phase_start_end_diff, cmap='turbo')
+    fig.colorbar(im, ax=ax_pupil, fraction=0.05)
+    ax_pupil.set_title('Pupil start;end;difference')
 
-    # plot the zernike coefficients
+    # Zernike coefficients plot (third row, spanning all columns)
+    ax_zernike = fig.add_subplot(gs[2, :])
     width = 0.35
     zernike_mode = ailoc.common.cpu(model.learned_psf.zernike_mode)
-    figure, ax = plt.subplots(1, 1, constrained_layout=True, figsize=(10, 8))
     aberrations_names = []
     for i in range(zernike_mode.shape[0]):
-        aberrations_names.append(
-            f"{zernike_mode[i, 0]:.0f}, {zernike_mode[i, 1]:.0f}")
-    plt.xticks(np.arange(zernike_mode.shape[0]),
-               labels=aberrations_names, rotation=30, fontsize=12)
-    bar_start = ax.bar(np.arange(zernike_mode.shape[0])-width/2, ailoc.common.cpu(zernike_coef_start),
-                     width=width, color='orange',
-                     edgecolor='k')
-    bar_end = ax.bar(np.arange(zernike_mode.shape[0])+width/2, ailoc.common.cpu(zernike_coef_end),
-                     width=width, color='olive',
-                     edgecolor='k')
-    plt.yticks(fontsize=12)
+        aberrations_names.append(f"{zernike_mode[i, 0]:.0f}, {zernike_mode[i, 1]:.0f}")
+    ax_zernike.set_xticks(np.arange(zernike_mode.shape[0]))
+    ax_zernike.set_xticklabels(aberrations_names, rotation=30, fontsize=12)
+    bar_start = ax_zernike.bar(np.arange(zernike_mode.shape[0]) - width / 2,
+                               ailoc.common.cpu(zernike_coef_start),
+                               width=width, color='orange', edgecolor='k')
+    bar_end = ax_zernike.bar(np.arange(zernike_mode.shape[0]) + width / 2,
+                             ailoc.common.cpu(zernike_coef_end),
+                             width=width, color='olive', edgecolor='k')
+    ax_zernike.tick_params(axis='y', labelsize=12)
 
-    def autolabel(rects):
-        y_axis_length = rects.datavalues.max() - rects.datavalues.min()
-        for rect in rects:
-            height = rect.get_height()
-            plt.text(rect.get_x() + 0.1, y_axis_length / 100 + height if height > 0 else height - y_axis_length / 40,
-                     '%.1f' % height,
-                     fontsize=10 - 2)
-
+    # Define autolabel function (unchanged, commented out as in original)
+    # def autolabel(rects):
+    #     y_axis_length = rects.datavalues.max() - rects.datavalues.min()
+    #     for rect in rects:
+    #         height = rect.get_height()
+    #         plt.text(rect.get_x() + 0.1, y_axis_length / 100 + height if height > 0 else height - y_axis_length / 40,
+    #                  '%.1f' % height,
+    #                  fontsize=10 - 2)
+    #
     # autolabel(bar_start)
     # autolabel(bar_end)
-    ax.tick_params(axis='both',
-                   direction='out'
-                   )
-    ax.set_ylabel('Zernike coefficients (nm)', fontsize=16)
-    ax.set_xlabel('Zernike modes', fontsize=16)
-    plt.legend(['start', 'end'], fontsize=16)
+    ax_zernike.tick_params(axis='both', direction='out')
+    ax_zernike.set_ylabel('Zernike coefficients (nm)', fontsize=16)
+    ax_zernike.set_xlabel('Zernike modes', fontsize=16)
+    ax_zernike.legend(['start', 'end'], fontsize=16)
+
+    # Adjust layout, save, and display
+    fig.tight_layout()
     plt.show()
+
+    # # plot psfs
+    # fig, ax = plt.subplots(1, 9, constrained_layout=True, figsize=(12, 3))
+    # for i in range(nz):
+    #     ax_tmp = ax[i]
+    #     ax_tmp.imshow(psf_start_end_diff[i, :, :], cmap='turbo')
+    #     ax_tmp.set_title(f'{ailoc.common.cpu(z[i])} nm')
+    # fig.suptitle(f'PSF start;end;difference')
+    # plt.show()
+    #
+    # # plot pupils
+    # fig, ax = plt.subplots(1, 1, constrained_layout=True, figsize=(9, 3))
+    # im = plt.imshow(phase_start_end_diff, cmap='turbo')
+    # fig.colorbar(im, ax=ax, fraction=0.05)
+    # ax.set_title('Pupil start;end;difference')
+    # plt.show()
+    #
+    # # plot the zernike coefficients
+    # width = 0.35
+    # zernike_mode = ailoc.common.cpu(model.learned_psf.zernike_mode)
+    # figure, ax = plt.subplots(1, 1, constrained_layout=True, figsize=(10, 8))
+    # aberrations_names = []
+    # for i in range(zernike_mode.shape[0]):
+    #     aberrations_names.append(
+    #         f"{zernike_mode[i, 0]:.0f}, {zernike_mode[i, 1]:.0f}")
+    # plt.xticks(np.arange(zernike_mode.shape[0]),
+    #            labels=aberrations_names, rotation=30, fontsize=12)
+    # bar_start = ax.bar(np.arange(zernike_mode.shape[0])-width/2, ailoc.common.cpu(zernike_coef_start),
+    #                  width=width, color='orange',
+    #                  edgecolor='k')
+    # bar_end = ax.bar(np.arange(zernike_mode.shape[0])+width/2, ailoc.common.cpu(zernike_coef_end),
+    #                  width=width, color='olive',
+    #                  edgecolor='k')
+    # plt.yticks(fontsize=12)
+    #
+    # def autolabel(rects):
+    #     y_axis_length = rects.datavalues.max() - rects.datavalues.min()
+    #     for rect in rects:
+    #         height = rect.get_height()
+    #         plt.text(rect.get_x() + 0.1, y_axis_length / 100 + height if height > 0 else height - y_axis_length / 40,
+    #                  '%.1f' % height,
+    #                  fontsize=10 - 2)
+    #
+    # # autolabel(bar_start)
+    # # autolabel(bar_end)
+    # ax.tick_params(axis='both',
+    #                direction='out'
+    #                )
+    # ax.set_ylabel('Zernike coefficients (nm)', fontsize=16)
+    # ax.set_xlabel('Zernike modes', fontsize=16)
+    # plt.legend(['start', 'end'], fontsize=16)
+    # plt.show()
 
 
 def plot_single_frame_inference(inference_dict, loc_model):

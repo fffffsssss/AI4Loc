@@ -202,15 +202,18 @@ def get_bg_empirical(images,
 
     # get the region of interest that has both background and signals
     sample_mask = np.where(images.mean(0) > np.percentile(images.mean(0), percentile))
+    # average the images for every 1000 frames
+    images_avg = images.reshape(-1, 1000, images.shape[1], images.shape[2]).mean(1) if (images.shape[0] % 1000 == 0) else \
+        images[:-(images.shape[0]%1000)].reshape(-1, 1000, images.shape[1], images.shape[2]).mean(1)
+
     # pixel values containing both bg and signals
-    pixel_vals = images.mean(0)[sample_mask[0], sample_mask[1]]
-    # roi_idx = np.where(sample_pixel_vals < np.percentile(sample_pixel_vals, fit_percentile))
-    # pixel_vals = sample_pixel_vals[roi_idx[0], roi_idx[1]].reshape(-1)
+    pixel_vals = images_avg[:, sample_mask[0], sample_mask[1]].reshape(-1)
 
     # fit the gauss distribution
     result = scipy.stats.norm.fit(pixel_vals)
 
-    bg_range = tuple(np.clip([result[0] - 2 * result[1], result[0]],
+    # get the background range, the lower bound is the mean minus 2 times std, the upper bound is the mean
+    bg_range = tuple(np.clip([result[0] - min(2 * result[1], 150), result[0]],
                              a_min=0, a_max=None))
 
     if plot:

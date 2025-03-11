@@ -216,6 +216,26 @@ def pair_localizations(prediction, ground_truth, frame_num=None, fov_xy_nm=None,
     return metric_dict, paired_array
 
 
+def find_molecules(molecule_array, frame_num):
+    """
+    Find molecules on specific frames.
+
+    Args:
+        molecule_array (np.ndarray or list of tuples): List of molecule coordinates, where each tuple contains (frame_num, x, y, ...).
+        frame_num (int or list): The frame number or frame number list to filter molecules.
+
+    Returns:
+        molecule_array: molecules on the specified frame.
+    """
+    molecule_array = np.array(molecule_array) if not isinstance(molecule_array, np.ndarray) else molecule_array
+    frame_num = [frame_num] if not isinstance(frame_num, list) else frame_num
+    result = []
+    for frame in frame_num:
+        tmp = molecule_array[molecule_array[:, 0] == frame]
+        result.append(tmp) if len(tmp) else None
+    return np.concatenate(result, 0) if len(result) else np.array([])
+
+
 def test_single_emitter_accuracy(loc_model,
                                  psf_params,
                                  xy_range=(-100, 100),
