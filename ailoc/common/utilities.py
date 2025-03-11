@@ -217,7 +217,7 @@ def get_bg_empirical(images,
                              a_min=0, a_max=None))
 
     if plot:
-        fig, ax = plt.subplots(1, 3, figsize=(12, 8), constrained_layout=True)
+        fig, ax = plt.subplots(1, 3, figsize=(12, 6), constrained_layout=True)
         ax[0].imshow(images.mean(0), cmap='turbo')
         ax[0].set_title('mean image')
         ax[1].imshow(images.mean(0) > np.percentile(images.mean(0), percentile))
