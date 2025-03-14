@@ -213,7 +213,7 @@ def get_bg_empirical(images,
     result = scipy.stats.norm.fit(pixel_vals)
 
     # get the background range, the lower bound is the mean minus 2 times std, the upper bound is the mean
-    bg_range = tuple(np.clip([result[0] - min(2 * result[1], 150), result[0]],
+    bg_range = tuple(np.clip([result[0] - np.clip(2 * result[1], 20, 200), result[0]],
                              a_min=0, a_max=None))
 
     if plot:
