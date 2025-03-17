@@ -12,6 +12,7 @@ import cv2
 
 # import ailoc.common.local_tifffile
 import ailoc.common
+import ailoc.simulation
 
 
 def setup_seed(seed):
@@ -180,16 +181,23 @@ def get_bg_stats_gauss(images, percentile=10, plot=False):
                              a_min=0, a_max=None))
     return bg_range
 
-def get_bg_empirical(images,
-                     percentile=50,
-                     plot=False):
+def get_gain_bg_empirical(images,
+                          camera_params_dict,
+                          adjust_gain=True,
+                          percentile=50,
+                          plot=False):
     """
-    This is an empirical method to estimate a training background range from data with very uneven background,
-    the estimated range maybe a little higher than the real one on uniform background data, but it is more robust
+    This is an empirical method to estimate gain and training background range from data with uneven background,
+    use the 1% darkest pixels to estimate the variance/mean ratio as the gain, and adjust the e_per_adu to make the
+    variance/mean ratio to be 1.0 for Poisson assumption, a little mismatch is allowed.
+    Then use the pixels with intensity higher than the percentile to estimate the background range.
+    The estimated bg range maybe a little higher than the real one on uniform background data, but it is more robust
     as the network will not predict too many false positive signals.
 
     Args:
         images (np.ndarray): 3D array of recordings in photon counts
+        camera_params_dict (dict): dict containing the camera parameters.
+        adjust_gain (bool): If true, adjust the e_per_adu to make the variance/mean ratio to be 1.0 for Poisson assumption
         percentile (float): Percentile between 0 and 100.
             Sets the percentage of pixels that are assumed to have signals,
             and the training background range is estimated from these pixels,
@@ -199,12 +207,56 @@ def get_bg_empirical(images,
     Returns:
         (float, float): (bg_min, bg_max) background parameters
     """
+    n, h, w = images.shape
+
+    camera_calib = ailoc.simulation.instantiate_camera(camera_params_dict)
+    images_photon = ailoc.common.cpu(camera_calib.backward(torch.tensor(images.astype(np.float32))))
+
+    if adjust_gain:
+        # get the minimal 1% pixels as the background to estimate the gain
+        min_idx = np.where(images_photon.mean(0) < np.quantile(images_photon.mean(0), 0.005))
+
+        # split the images into 1000 frames as time chunks
+        images_electron = camera_calib.qe * images_photon.reshape(-1, 1000, h, w) if (n % 1000 == 0) \
+            else (images_photon[:-(n % 1000)].reshape(-1, 1000, h, w))
+
+        pix_vals = images_electron[:, :, min_idx[0], min_idx[1]]
+
+        pix_mean = pix_vals.mean(1).reshape(-1)
+        pix_var = pix_vals.var(1).reshape(-1)
+        pix_gain = ((pix_var-camera_calib.read_noise_sigma**2)/pix_mean)
+        # remove the outliers, 95% remain
+        used_idx = np.logical_and(pix_gain > pix_gain.mean() - 2 * pix_gain.std(),
+                                  pix_gain < pix_gain.mean() + 2 * pix_gain.std())
+        pix_mean_used = pix_mean[used_idx]
+        pix_var_used = pix_var[used_idx]
+        pix_gain_used = pix_gain[used_idx]
+        est_gain = pix_gain_used.mean()
+
+        print(f'The variance/mean ratio of data is estimated as {est_gain:.2f} using the provided QE and e_per_adu.')
+
+        if est_gain > 1.2 or est_gain < 0.9:
+            e_per_adu_new = ((pix_mean_used.mean() +
+                             np.sqrt(pix_mean_used.mean()**2-4*pix_var_used.mean()*
+                                     (est_gain*pix_mean_used.mean()-pix_var_used.mean())))/(2*pix_var_used.mean())
+                             *camera_calib.e_per_adu)
+            # e_per_adu_new = camera_calib.e_per_adu / est_gain
+            e_per_adu_new = np.around(e_per_adu_new, decimals=2)
+            print(f'This might be unreliable, '
+                  f'automatically change the e_per_adu from {camera_calib.e_per_adu:.2f} to '
+                  f'{e_per_adu_new:.2f} to make the variance/mean ratio 1.0 for Poisson noise assumption.')
+            camera_calib.e_per_adu = e_per_adu_new
+            images_photon = ailoc.common.cpu(camera_calib.backward(torch.tensor(images.astype(np.float32))))
+        else:
+            e_per_adu_new = camera_calib.e_per_adu
+    else:
+        e_per_adu_new = camera_calib.e_per_adu
 
     # get the region of interest that has both background and signals
-    sample_mask = np.where(images.mean(0) > np.percentile(images.mean(0), percentile))
+    sample_mask = np.where(images_photon.mean(0) > np.percentile(images_photon.mean(0), percentile))
     # average the images for every 1000 frames
-    images_avg = images.reshape(-1, 1000, images.shape[1], images.shape[2]).mean(1) if (images.shape[0] % 1000 == 0) else \
-        images[:-(images.shape[0]%1000)].reshape(-1, 1000, images.shape[1], images.shape[2]).mean(1)
+    images_avg = images_photon.reshape(-1, 1000, h, w).mean(1) if (n % 1000 == 0) \
+        else images_photon[:-(n % 1000)].reshape(-1, 1000, h, w).mean(1)
 
     # pixel values containing both bg and signals
     pixel_vals = images_avg[:, sample_mask[0], sample_mask[1]].reshape(-1)
@@ -215,28 +267,54 @@ def get_bg_empirical(images,
     # get the background range, the lower bound is the mean minus 2 times std, the upper bound is the mean
     bg_range = tuple(np.clip([result[0] - np.clip(2 * result[1], 20, 200), result[0]],
                              a_min=0, a_max=None))
+    print(f'Estimated bg_range: {bg_range}')
 
     if plot:
-        fig, ax = plt.subplots(1, 3, figsize=(12, 6), constrained_layout=True)
-        ax[0].imshow(images.mean(0), cmap='turbo')
-        ax[0].set_title('mean image')
-        ax[1].imshow(images.mean(0) > np.percentile(images.mean(0), percentile))
-        ax[1].set_title(f'masked area for bg fit \n(mean image>{percentile}%)')
-        ax[2].hist(pixel_vals,
-                   density=True,
-                   bins=20,
-                   alpha=0.5,
-                   label=f'masked pixels including bg and signals')
-        ax[2].hist(np.random.uniform(low=bg_range[0], high=bg_range[1], size=len(pixel_vals)),
-                   density=True,
-                   bins=20,
-                   alpha=0.5,
-                   label=f'training bg range ({bg_range[0]:.1f}, {bg_range[1]:.1f})')
+        # Create the figure and GridSpec
+        fig = plt.figure(figsize=(12, 8), constrained_layout=True)
+        gs = fig.add_gridspec(2, 3)
 
-        plt.legend()
+        if adjust_gain:
+            # First plot: Histogram with star marker
+            ax0 = fig.add_subplot(gs[0, 0])
+            ax0.imshow(images_photon.mean(0) < np.quantile(images_photon.mean(0), 0.001), cmap='turbo')
+            ax0.set_title('Pixels to estimate var/mean')
+
+            ax1 = fig.add_subplot(gs[0, 1:])
+            ax1.hist(pix_gain_used,
+                     bins=np.linspace(pix_gain_used.min(), pix_gain_used.max(), 50),
+                     alpha=0.5,
+                     label='0.5% pixel var/mean')
+            ax1.plot(est_gain, 1, '*', markersize=20, label=f'extra gain: {est_gain:.1f}')
+            ax1.legend()
+
+        # Second plot: Mean image
+        ax2 = fig.add_subplot(gs[1, 0])
+        ax2.imshow(images_photon.mean(0), cmap='turbo')
+        ax2.set_title('mean image')
+
+        # Third plot: Masked area
+        ax3 = fig.add_subplot(gs[1, 1])
+        ax3.imshow(images_photon.mean(0) > np.percentile(images_photon.mean(0), percentile))
+        ax3.set_title(f'masked area for bg fit \n(mean image>{percentile}%)')
+
+        # Fourth plot: Dual histogram
+        ax4 = fig.add_subplot(gs[1, 2])
+        ax4.hist(pixel_vals,
+                 density=True,
+                 bins=20,
+                 alpha=0.5,
+                 label='masked pixels including bg and signals')
+        ax4.hist(np.random.uniform(low=bg_range[0], high=bg_range[1], size=len(pixel_vals)),
+                 density=True,
+                 bins=20,
+                 alpha=0.5,
+                 label=f'training bg range ({bg_range[0]:.1f}, {bg_range[1]:.1f})')
+        ax4.legend()
+
         plt.show()
 
-    return bg_range
+    return bg_range, e_per_adu_new
 
 
 def get_mean_percentile(images, percentile=10):
