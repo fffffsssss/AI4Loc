@@ -38,7 +38,7 @@ class Simulator:
         else:
             raise NotImplementedError('Camera type not supported.')
 
-    def sample_training_data(self, batch_size, context_size, iter_train,):
+    def sample_training_data(self, batch_size, context_size, iter_train, robust_scale=False):
         """
         Sample a batch of training data. All frames in a batch unit with the context_size share the same
             background and serve as temporal context for each other.
@@ -49,6 +49,8 @@ class Simulator:
                 shape (batch_size, context_size, H, W)
             iter_train (int): the number of training iterations, used for sequentially select the
                 sub-fov to simulate images
+            robust_scale (bool): whether to randomly scale the data to break the strict Poisson distribution
+                as a data augmentation method
 
         Returns:
             (torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, tuple):
@@ -65,6 +67,13 @@ class Simulator:
 
         data_cam = self.camera.forward(data, curr_sub_fov_xy) \
             if isinstance(self.camera, ailoc.simulation.SCMOS) else self.camera.forward(data)
+
+        if robust_scale:
+            # random scale the data to break the strict Poisson distribution
+            random_scale = torch.distributions.Uniform(0.9, 1.2).sample()
+            data_cam = ((data_cam - self.camera.baseline) * random_scale + self.camera.baseline)
+            xyzph_array_gt[:, :, :, 3] *= random_scale
+            bg_map_sample = bg_map_sample * random_scale
 
         return data_cam, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_sample, curr_sub_fov_xy
 
