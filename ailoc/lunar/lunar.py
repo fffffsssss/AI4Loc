@@ -9,6 +9,7 @@ import random
 from tqdm import tqdm
 import copy
 import collections
+import scipy
 
 import ailoc.common
 import ailoc.simulation
@@ -94,7 +95,12 @@ class Lunar_LocLearning(ailoc.common.XXLoc):
 
         return total_loss
 
-    def online_train(self, batch_size=1, max_iterations=50000, eval_freq=500, file_name=None):
+    def online_train(self,
+                     batch_size=1,
+                     max_iterations=50000,
+                     eval_freq=500,
+                     file_name=None,
+                     robust_scale=False):
         """
         Train the network.
 
@@ -125,7 +131,8 @@ class Lunar_LocLearning(ailoc.common.XXLoc):
                 train_data, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt, _ = \
                     self.data_simulator.sample_training_data(batch_size=batch_size,
                                                              context_size=self.context_size,
-                                                             iter_train=self._iter_train)
+                                                             iter_train=self._iter_train,
+                                                             robust_scale=robust_scale)
                 p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt = self.unfold_target(p_map_gt,
                                                                                         xyzph_array_gt,
                                                                                         mask_array_gt,
@@ -426,18 +433,35 @@ class Lunar_SyncLearning(Lunar_LocLearning):
         self.z_bins = 10
         self.real_data_z_weight = [np.ones(self.z_bins) * (1/self.z_bins),
                                    np.linspace(-1, 1, self.z_bins+1)]
+        self.intervals = np.linspace(sampler_params_dict['z_range'][0],
+                                     sampler_params_dict['z_range'][1],
+                                     self.z_bins+1)
+        self.target_z_counts = collections.Counter()
+        for i in range(self.z_bins):
+            self.target_z_counts[(self.intervals[i], self.intervals[i+1])] = 200
+        self.roilib_sparse_first = True
+        self.over_cut = 8
+
+        self.roi_lib = {'sparse': np.array([]),
+                        'dense': np.array([]),
+                        'sparse_z_counts': collections.Counter(),
+                        'dense_z_counts': collections.Counter(),
+                        'total_z_counts': collections.Counter()}
+        self.roi_lib_test = None
 
         self.use_threshold = False
         self.photon_threshold = 3000/self.data_simulator.mol_sampler.photon_scale
         self.p_var_threshold = 0.00125  # p=0.5, var=0.25,  density=0.005, 0.25*0.005
 
-        self.optimizer_psf = torch.optim.Adam([self.learned_psf.zernike_coef], lr=0.01*self.z_bins)
+        # self.optimizer_psf = torch.optim.Adam([self.learned_psf.zernike_coef], lr=0.01*self.z_bins)
+        self.optimizer_psf = torch.optim.Adam([self.learned_psf.zernike_coef], lr=0.025)
         self.scheduler_psf = torch.optim.lr_scheduler.StepLR(self.optimizer_psf, step_size=1000, gamma=0.9)
 
     @staticmethod
     def _init_recorder():
         recorder = {'loss_sleep': collections.OrderedDict(),  # loss function value
                     'loss_wake': collections.OrderedDict(),
+                    'loss_recon': collections.OrderedDict(),  # reconstruction loss of the test roi lib
                     'iter_time': collections.OrderedDict(),  # time cost for each iteration
                     'n_per_img': collections.OrderedDict(),  # average summed probability channel per image
                     'recall': collections.OrderedDict(),  # TP/(TP+FN)
@@ -464,7 +488,8 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                      num_sample=100,
                      wake_interval=1,
                      max_recon_psfs=5000,
-                     online_build_eval_set=True):
+                     online_build_eval_set=True,
+                     robust_scale=False):
         """
         Train the network.
 
@@ -505,22 +530,22 @@ class Lunar_SyncLearning(Lunar_LocLearning):
             total_loss_sleep = []
             total_loss_wake = []
             for i in range(eval_freq):
-                loss_sleep = self.sleep_train(batch_size=batch_size)
+                loss_sleep = self.sleep_train(batch_size=batch_size, robust_scale=robust_scale)
                 total_loss_sleep.append(loss_sleep)
                 if self._iter_train > self.warmup:
-                    if (self._iter_train-1) % 1000 == 0 and self._iter_train > self.warmup:
+                    if (self._iter_train-1) % self.warmup == 0 and self._iter_train > self.warmup:
                         # calculate the z weight due to non-uniform z distribution
-                        self.get_real_data_z_prior(real_data, self.sample_batch_size)
-                        # self.updata_partitioned_library(real_data, self.context_size*batch_size)
+                        # self.get_real_data_z_prior(real_data, self.sample_batch_size)
+                        self.update_roilib2learn(real_data, self.context_size*batch_size)
 
                     if (self._iter_train-1) % wake_interval == 0:
-                        loss_wake = self.wake_train(real_data,
-                                                    self.sample_batch_size,
-                                                    num_sample,
-                                                    max_recon_psfs)
-                        # loss_wake = self.physics_learning(batch_size * self.context_size,
-                        #                                   num_sample,
-                        #                                   max_recon_psfs)
+                        # loss_wake = self.wake_train(real_data,
+                        #                             self.sample_batch_size,
+                        #                             num_sample,
+                        #                             max_recon_psfs)
+                        loss_wake = self.physics_learning(batch_size * self.context_size,
+                                                          num_sample,
+                                                          max_recon_psfs)
                         total_loss_wake.append(loss_wake) if loss_wake is not np.nan else None
 
                 if self._iter_train % 100 == 0:
@@ -534,6 +559,8 @@ class Lunar_SyncLearning(Lunar_LocLearning):
             avg_loss_wake = np.mean(total_loss_wake) if len(total_loss_wake) > 0 else np.nan
             self.evaluation_recorder['loss_sleep'][self._iter_train] = avg_loss_sleep
             self.evaluation_recorder['loss_wake'][self._iter_train] = avg_loss_wake
+            self.evaluation_recorder['loss_recon'][self._iter_train] = self.compute_roilibtest_loss(batch_size *
+                                                                                                   self.context_size)
             self.evaluation_recorder['iter_time'][self._iter_train] = avg_iter_time
 
             if self._iter_train > 1000:
@@ -544,13 +571,16 @@ class Lunar_SyncLearning(Lunar_LocLearning):
             self.print_recorder(max_iterations)
             self.save(file_name)
 
+        self.plot_roilib_recon()
+
         print('training finished!')
 
-    def sleep_train(self, batch_size):
+    def sleep_train(self, batch_size, robust_scale):
         train_data, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt, _ = \
             self.data_simulator.sample_training_data(batch_size=batch_size,
                                                      context_size=self.context_size,
-                                                     iter_train=self._iter_train)
+                                                     iter_train=self._iter_train,
+                                                     robust_scale=robust_scale)
         p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt = self.unfold_target(p_map_gt,
                                                                                 xyzph_array_gt,
                                                                                 mask_array_gt,
@@ -969,18 +999,17 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                torch.stack(z_weight_crop) if z_weight is not None else None
 
     @staticmethod
-    def count_intervals(roi_list, intervals):
+    def count_intervals(mol_list, intervals):
         counts = collections.Counter()
-        for roi in roi_list:
-            for mol in roi:
-                z = mol[3]
-                for i in range(len(intervals) - 1):
-                    if intervals[i] <= z < intervals[i + 1]:
-                        counts[(intervals[i], intervals[i + 1])] += 1
-                        break
+        for mol in mol_list:
+            z = mol[3]
+            for i in range(len(intervals) - 1):
+                if intervals[i] <= z < intervals[i + 1]:
+                    counts[(intervals[i], intervals[i + 1])] += 1
+                    break
         return counts
 
-    def z_partition(self, roi_list, current_counts, target_counts, intervals, replacement=True):
+    def z_partition(self, chunk_list, current_counts, target_counts, intervals, replacement=True):
         """
         Partition the input roi_list,
         select ROIs from the input to construct a new_roi_list to approach the target z interval counts
@@ -989,197 +1018,276 @@ class Lunar_SyncLearning(Lunar_LocLearning):
         # vectorized for better computation
         target_array = np.array([target_counts[interval] for interval in target_counts])
 
-        # calculate all roi's interval count for quick selection
-        roi_counts_list = []
-        for i, roi in enumerate(roi_list):
-            tmp_counts = self.count_intervals([roi], intervals)
-            tmp_counts_list = [tmp_counts[interval] for interval in target_counts]  # single roi interval counts
-            tmp_counts_list.append(i)  # add the roi number at the end
-            roi_counts_list.append(np.array(tmp_counts_list))  # transform the list into array
-        roi_counts_array = np.array(roi_counts_list)  # collect all roi counts array for fast computation
+        # calculate all chunk's z counts for quick selection
+        chunk_z_counts_list = []
+        for i, chunk in enumerate(chunk_list):
+            mol_array_tmp = chunk[0]
+            tmp_z_counts = self.count_intervals(mol_array_tmp, intervals)
+            tmp_z_counts = [tmp_z_counts[interval] for interval in target_counts]
+            tmp_z_counts.append(i)  # add the chunk number at the end
+            chunk_z_counts_list.append(np.array(tmp_z_counts))  # transform the list into array
+        chunk_z_counts_array = np.array(chunk_z_counts_list)  # collect all z counts array for fast computation
 
         # Create the new list
-        new_roi_list = []
-        new_roi_counts = collections.Counter() + current_counts
+        new_chunk_list = []
+        new_chunk_z_counts = collections.Counter()
+        for interval in target_counts:
+            new_chunk_z_counts[interval] = 0
+        current_z_counts = collections.Counter() + current_counts
 
         while True:
             # calculate the current state and the score
-            new_roi_array = np.array([new_roi_counts[interval] for interval in target_counts])
-            best_score = np.sum((target_array - new_roi_array) ** 2)
+            current_z_array = np.array([current_z_counts[interval] for interval in target_counts])
+            best_score = np.sum((target_array - current_z_array) ** 2)
             # calculate current roi list plus all candidate roi, and the score
-            tmp_roi_array = new_roi_array + roi_counts_array[:, :-1]
-            tmp_roi_score = np.sum((target_array - tmp_roi_array) ** 2, axis=1)
+            tmp_chunk_z_array = current_z_array + chunk_z_counts_array[:, :-1]
+            tmp_chunk_score = np.sum((target_array - tmp_chunk_z_array) ** 2, axis=1)
 
             # Check if any improvement,
-            if any(tmp_roi_score < best_score):
-                # get the best roi
-                roi_indices = np.where(tmp_roi_score == tmp_roi_score.min())[0]
-                best_roi_array_idx = roi_indices[np.random.randint(0, roi_indices.size)]
-                best_roi_list_idx = roi_counts_array[best_roi_array_idx][-1]
-                best_roi = roi_list[best_roi_list_idx]
+            if any(tmp_chunk_score < best_score):
+                # get the best chunk
+                tmp_indices = np.where(tmp_chunk_score == tmp_chunk_score.min())[0]
+                best_chunk_array_idx = tmp_indices[np.random.randint(0, tmp_indices.size)]
+                best_chunk_list_idx = chunk_z_counts_array[best_chunk_array_idx][-1]
+                best_chunk = chunk_list[best_chunk_list_idx]
 
                 # update the new roi list and counts
-                new_roi_counts.update(self.count_intervals([best_roi], intervals))
-                new_roi_list.append(best_roi)
+                tmp_z_counts = self.count_intervals(best_chunk[0], intervals)
+                current_z_counts.update(tmp_z_counts)
+                new_chunk_z_counts.update(tmp_z_counts)
+                new_chunk_list.append(best_chunk)
 
-                # remove the selected roi from the roi counts array
+                # remove the selected roi from the chunk z counts array
                 if not replacement:
-                    roi_counts_array = np.delete(roi_counts_array, best_roi_array_idx, axis=0)
+                    chunk_z_counts_array = np.delete(chunk_z_counts_array, best_chunk_array_idx, axis=0)
             else:
                 # print('no better roi found')
                 break
 
-            if sum(new_roi_counts.values()) >= sum(target_counts.values()):
+            if sum(current_z_counts.values()) >= sum(target_counts.values()):
                 # print('found number satisfies')
                 break
 
-        return new_roi_list
+        return new_chunk_list, new_chunk_z_counts, current_z_counts
 
-    def organize_roi_mol_list(self, molecule_list):
+    def update_roilib2learn(self, real_data, batch_size):
         """
-        Given molecule list, first group the molecule list by ROI number.
-        then filter the ROIs with lower detection probability and higher localization uncertainty.
-        Return ROI list, with each item a list of molecule array
-        """
-
-        # group by ROI number
-        roi_mol_dict = {}
-        for molecule in molecule_list:
-            if molecule[0] not in roi_mol_dict.keys():
-                roi_mol_dict[molecule[0]] = [molecule]
-            else:
-                roi_mol_dict[molecule[0]].append(molecule)
-
-        # for each ROI, calculate some parameters to filter
-        roi_param_dict = {}
-        for key in roi_mol_dict.keys():
-            tmp_mol_list = np.array(roi_mol_dict[key])
-            tmp_roi_idx = tmp_mol_list[0, 0]  # the idx to track the ROI
-            tmp_num_mol = tmp_mol_list.shape[0]
-            tmp_avg_p = tmp_mol_list[:, 5].mean()
-            tmp_avg_sigma = np.sqrt(
-                tmp_mol_list[:, 6].mean() ** 2 + tmp_mol_list[:, 7].mean() ** 2 + tmp_mol_list[:, 8].mean() ** 2)
-            roi_param_dict[tmp_roi_idx] = [tmp_roi_idx, tmp_num_mol, tmp_avg_p, tmp_avg_sigma]
-        roi_param_array = np.array(list(roi_param_dict.values()))
-
-        # filter the ROIs
-        mask = ((roi_param_array[:, 1] <= np.percentile(roi_param_array[:, 1], 80)) &
-                (roi_param_array[:, 2] > np.percentile(roi_param_array[:, 2], 1)) &
-                (roi_param_array[:, 3] < np.percentile(roi_param_array[:, 3], 99)))
-        selected_roi_idx = roi_param_array[mask][:, 0]
-        roi_mol_list = [roi_mol_dict[key] for key in selected_roi_idx]
-
-        return roi_mol_list
-
-    def updata_partitioned_library(self, roi_library, train_batch_size):
-        """
-        given the multiple ROIs with single or multi emitters,
-        update the z-partitioned ROI library for physics learning.
-        This creates a more balanced z distributed roi library from the preprocessed ROIs.
+        Use current network to analyze experimental data, build ROI library for physics learning.
+        This creates a more balanced z distributed roi library from the experimental data.
         """
 
         t0 = time.time()
         print('-' * 200)
-        print('Using the current network to update the partitioned ROI library...')
-        partitioned_library = {}
-        partitioned_library['sparse'] = np.array([])
-        partitioned_library['sparse_z_counts'] = collections.Counter()
-        partitioned_library['dense'] = np.array([])
-        partitioned_library['dense_z_counts'] = collections.Counter()
-        partitioned_library['total_z_counts'] = collections.Counter()
-        with torch.cuda.amp.autocast():
-            # first using the current network to analyze the sparse ROIs and partition them
-            if roi_library['sparse'][2] != 0:
-                batch_size = max(1,
-                                 (train_batch_size * self.dict_sampler_params['train_size'] ** 2) //
-                                 (self.attn_length *
-                                  roi_library['sparse'][0].shape[-1]
-                                  * roi_library['sparse'][0].shape[-2])
-                                 )
-                sparse_mol_list = []
-                for i in range(int(np.ceil(roi_library['sparse'][0].shape[0] / batch_size))):
-                    molecule_array_tmp, _ = self.analyze(
-                        ailoc.common.gpu(roi_library['sparse'][0][i * batch_size: (i + 1) * batch_size]),
-                        self.data_simulator.camera
-                    )
-                    if len(molecule_array_tmp) > 0:
-                        molecule_array_tmp[:, 0] += i * batch_size
-                        sparse_mol_list += molecule_array_tmp.tolist()
+        print(f'Using the current network to build roilib2learn from the experimental data {real_data.shape}...')
 
-                # organize the molecule list for sparse ROIs and filter some bad ROIs
-                sparse_roi_mol_list = self.organize_roi_mol_list(sparse_mol_list)
+        if self.temporal_attn:
+            extra_length = self.attn_length//2
+        else:
+            extra_length = 0
 
-                # partition the ROIs using the predicted molecule list
-                partitioned_sparse_roi_mol_list = self.z_partition(sparse_roi_mol_list,
-                                                                   partitioned_library['total_z_counts'],
-                                                                   self.target_z_counts,
-                                                                   self.intervals,
-                                                                   replacement=True)
+        # first split the real data into sub-FOVs
+        n, h, w = real_data.shape
+        fov_xy = (0, w - 1, 0, h - 1)
 
-                # update the z counts
-                partitioned_library['sparse_z_counts'] = self.count_intervals(partitioned_sparse_roi_mol_list,
-                                                                              self.intervals)
-                partitioned_library['total_z_counts'].update(partitioned_library['sparse_z_counts'])
+        sub_fov_data_list, \
+            sub_fov_xy_list, \
+            original_sub_fov_xy_list = ailoc.common.split_fov(data=real_data,
+                                                              fov_xy=fov_xy,
+                                                              sub_fov_size=256,
+                                                              over_cut=self.over_cut)
 
-                # build the partitioned library
-                partitioned_roi_list = []
-                for mol_list in partitioned_sparse_roi_mol_list:
-                    roi_idx = int(mol_list[0][0] - 1)
-                    partitioned_roi_list.append(roi_library['sparse'][0][roi_idx: roi_idx + 1])
-                if len(partitioned_roi_list) > 0:
-                    partitioned_library['sparse'] = np.concatenate(partitioned_roi_list)
+        # use current network to analyze the sub-fov data block
+        sub_fov_molecule_list = []
+        self.network.eval()
+        with torch.no_grad():
+            for i_fov in range(len(sub_fov_xy_list)):
+                with torch.cuda.amp.autocast():
+                    molecule_list_tmp, inference_dict_tmp = ailoc.common.data_analyze(loc_model=self,
+                                                                                      data=sub_fov_data_list[i_fov],
+                                                                                      sub_fov_xy=sub_fov_xy_list[i_fov],
+                                                                                      camera=self.data_simulator.camera,
+                                                                                      batch_size=batch_size,
+                                                                                      retain_infer_map=False)
+                sub_fov_molecule_list.append(molecule_list_tmp)
+            # merge the localizations in each sub-FOV to whole FOV, filter repeated localizations in over cut region
+            molecule_array = np.array(
+                ailoc.common.SmlmDataAnalyzer.filter_over_cut(sub_fov_molecule_list,
+                                                              sub_fov_xy_list,
+                                                              original_sub_fov_xy_list,
+                                                              ailoc.common.cpu(self.data_simulator.psf_model.pixel_size_xy)))
 
-            # if partitioned library doesn't satisfy the target_z_counts, use the dense ROIs to fill
-            if sum(partitioned_library['total_z_counts'].values()) < sum(self.target_z_counts.values()):
-                batch_size = max(1,
-                                 (train_batch_size * self.dict_sampler_params['train_size'] ** 2) //
-                                 (self.attn_length *
-                                  roi_library['dense'][0].shape[-1]
-                                  * roi_library['dense'][0].shape[-2])
-                                 )
-                dense_mol_list = []
-                for i in range(int(np.ceil(roi_library['dense'][0].shape[0] / batch_size))):
-                    molecule_array_tmp, _ = self.analyze(
-                        ailoc.common.gpu(roi_library['dense'][0][i * batch_size: (i + 1) * batch_size]),
-                        self.data_simulator.camera
-                    )
-                    if len(molecule_array_tmp) > 0:
-                        molecule_array_tmp[:, 0] += i * batch_size
-                        dense_mol_list += molecule_array_tmp.tolist()
+        # calculate the threshold to filter ROIs
+        photon_low_thre = max(self.dict_sampler_params['photon_range'][0]*1.1,
+                              np.quantile(molecule_array[:, 4], 0.2))
+        photon_up_thre = self.dict_sampler_params['photon_range'][1]*0.95
+        z_up_thre = self.dict_sampler_params['z_range'][1]-50
+        z_low_thre = self.dict_sampler_params['z_range'][0]+50
+        p_low_thre = 0.5
+        # photon_low_thre = 0
+        # photon_up_thre = np.inf
+        # z_up_thre = np.inf
+        # z_low_thre = -np.inf
+        # p_low_thre = 0
 
-                # organize the molecule list for dense ROIs and filter some bad ROIs
-                dense_roi_mol_list = self.organize_roi_mol_list(dense_mol_list)
+        self.roi_lib['sparse']=np.array([]);self.roi_lib['sparse_z']=np.array([]);self.roi_lib['sparse_z_counts'] = collections.Counter()
+        self.roi_lib['dense']=np.array([]);self.roi_lib['dense_z_counts'] = collections.Counter()
+        self.roi_lib['total_z_counts'] = collections.Counter()
+        for i in range(self.z_bins):
+            self.roi_lib['sparse_z_counts'][(self.intervals[i], self.intervals[i + 1])] = 0
+            self.roi_lib['dense_z_counts'][(self.intervals[i], self.intervals[i + 1])] = 0
+            self.roi_lib['total_z_counts'][(self.intervals[i], self.intervals[i + 1])] = 0
 
-                # partition the ROIs using the predicted molecule list
-                partitioned_dense_roi_mol_list = self.z_partition(dense_roi_mol_list,
-                                                                  partitioned_library['total_z_counts'],
-                                                                  self.target_z_counts,
-                                                                  self.intervals,
-                                                                  replacement=True)
+        # determine the sparse ROI size
+        psf_size = self.dict_psf_params['psf_size']
+        factor = 4
+        if (psf_size % 4 != 0):
+            psf_size = (psf_size // factor + 1) * factor
+        sparse_roi_size = psf_size + 2 * self.over_cut
+        min_dist = np.hypot(self.dict_psf_params['psf_size'] * self.dict_psf_params['pixel_size_xy'][0],
+                            self.dict_psf_params['psf_size'] * self.dict_psf_params['pixel_size_xy'][1])
 
-                partitioned_library['dense_z_counts'] = self.count_intervals(partitioned_dense_roi_mol_list,
-                                                                             self.intervals)
-                partitioned_library['total_z_counts'].update(partitioned_library['dense_z_counts'])
+        # determine the dense ROI size, not larger than the data size
+        dense_roi_size = min(min(h // 4 * 4, w // 4 * 4), 2*psf_size+2*self.over_cut)
+        dense_frame_num = 3
+        assert n-2*extra_length-dense_frame_num >= 0 and dense_roi_size-2*self.over_cut > 0, \
+            f'The experimental data size {real_data.shape} is too small.'
 
-                # build the partitioned library
-                partitioned_roi_list = []
-                for mol_list in partitioned_dense_roi_mol_list:
-                    roi_idx = int(mol_list[0][0] - 1)
-                    partitioned_roi_list.append(roi_library['dense'][0][roi_idx: roi_idx + 1])
-                if len(partitioned_roi_list) > 0:
-                    partitioned_library['dense'] = np.concatenate(partitioned_roi_list)
+        sparse_roi_list = []
+        sparse_z_list = []
+        # first find the sparse ROIs
+        if self.roilib_sparse_first:
+            progress = 0
+            # randomly traverse frames
+            for frame in random.sample(range(extra_length, n-extra_length), n-2*extra_length):
+                progress += 1
+                if progress % 1000 == 0:
+                    print(f'\rSparse ROI progress: {progress/(n-2*extra_length)*100:.0f}%', end='')
+                mol_this_frame = ailoc.common.find_molecules(molecule_array, frame+1)
+                if len(mol_this_frame) == 0:
+                    continue
+                # check the sparsity
+                dist_matrix = scipy.spatial.distance_matrix(mol_this_frame[:,1:3], mol_this_frame[:,1:3])
+                keep_matrix_idxs = np.where((0 == dist_matrix) | (dist_matrix > min_dist))
+                unique, counts = np.unique(keep_matrix_idxs[0], return_counts=True)
+                sparse_idxs = unique[counts == mol_this_frame.shape[0]]
+                if len(sparse_idxs) == 0:
+                    continue
+                # randomly traverse the sparse molecules and crop the ROI
+                for mol in mol_this_frame[random.sample(sparse_idxs.tolist(), len(sparse_idxs))]:
+                    z = mol[3]
+                    photon = mol[4]
+                    p = mol[5]
+                    interval_idx = np.digitize(z, self.intervals) - 1
+                    if (interval_idx < 0 or interval_idx >= self.z_bins
+                            or z < z_low_thre or z > z_up_thre or photon < photon_low_thre or photon > photon_up_thre
+                            or p < p_low_thre):
+                        continue
+                    interval_key = (self.intervals[interval_idx], self.intervals[interval_idx + 1])
+                    # check the target z counts and the current z counts
+                    if self.roi_lib['sparse_z_counts'][interval_key] < self.target_z_counts[interval_key]:
+                        # crop the ROI
+                        w_range = (int(mol[1]/self.dict_psf_params['pixel_size_xy'][0] - sparse_roi_size // 2),
+                                   int(mol[1]/self.dict_psf_params['pixel_size_xy'][0] + sparse_roi_size // 2))
+                        h_range = (int(mol[2]/self.dict_psf_params['pixel_size_xy'][1] - sparse_roi_size // 2),
+                                   int(mol[2]/self.dict_psf_params['pixel_size_xy'][1] + sparse_roi_size // 2))
+                        sparse_roi = real_data[frame-extra_length:frame+extra_length+1,
+                                               h_range[0]: h_range[1],
+                                               w_range[0]: w_range[1]][None]
+                        if sparse_roi.shape[-1] != sparse_roi_size or sparse_roi.shape[-2] != sparse_roi_size:
+                            continue
+                        # update the roi library
+                        sparse_roi_list.append(sparse_roi)
+                        sparse_z_list.append(z)
+                        self.roi_lib['sparse_z_counts'][interval_key] += 1
 
-        # calculate the sparse signal portion of the partitioned library
-        partitioned_library['sparse_portion'] = (sum(partitioned_library['sparse_z_counts'].values()) /
-                                                 sum(partitioned_library['total_z_counts'].values()))
+                if sum(self.roi_lib['sparse_z_counts'].values()) >= sum(self.target_z_counts.values()):
+                    break
 
-        self.partitioned_library = partitioned_library
-        print(f'Partitioned ROI library updated, cost {time.time() - t0}s,\n'
-              f'select {len(partitioned_library["sparse"])} sparse ROIs '
-              f'and {len(partitioned_library["dense"])} dense ROIs, \n'
-              f'Total signals Z counts: \n'
-              f'{[interval for interval in self.target_z_counts]}\n'
-              f'{[partitioned_library["total_z_counts"][interval] for interval in self.target_z_counts]}')
+            print(f'\rSparse ROI progress: 100%')
+
+            self.roi_lib['sparse'] = np.concatenate(sparse_roi_list, axis=0) if sparse_roi_list else np.array([])
+            self.roi_lib['sparse_z'] = np.array(sparse_z_list)
+            self.roi_lib['total_z_counts'].update(self.roi_lib['sparse_z_counts'])
+
+        if sum(self.roi_lib['total_z_counts'].values()) < sum(self.target_z_counts.values()):
+            # then find the dense ROIs
+            # first define the split setting of the data by dense ROI size and chunk frame number
+            split_chunk_list = []
+            row_sub_fov = int(np.ceil(h / dense_roi_size))
+            col_sub_fov = int(np.ceil(w / dense_roi_size))
+            progress = 0
+            for frame in range(extra_length, n - extra_length - dense_frame_num, dense_frame_num):
+                progress += 1
+                if progress % 1000 == 0:
+                    print(f'\rDense ROI progress: '
+                          f'{progress/((n-2*extra_length-dense_frame_num)/dense_frame_num)*100:.0f}%', end='')
+                frame_range = range(frame+1, frame+1 + dense_frame_num)
+                mol_these_frames = ailoc.common.find_molecules(molecule_array, list(frame_range))
+                if len(mol_these_frames) == 0:
+                    continue
+                # split the molecules into sub-FOVs
+                for raw in range(row_sub_fov):
+                    for col in range(col_sub_fov):
+                        x_start = col * dense_roi_size if col * dense_roi_size + dense_roi_size <= w else w - dense_roi_size
+                        y_start = raw * dense_roi_size if raw * dense_roi_size + dense_roi_size <= h else h - dense_roi_size
+                        x_end = x_start + dense_roi_size
+                        y_end = y_start + dense_roi_size
+                        # find the molecules in this sub-FOV
+                        x_range = ((x_start+self.over_cut)*self.dict_psf_params['pixel_size_xy'][0],
+                                   (x_end-self.over_cut)*self.dict_psf_params['pixel_size_xy'][0])
+                        y_range = ((y_start+self.over_cut)*self.dict_psf_params['pixel_size_xy'][1],
+                                   (y_end-self.over_cut)*self.dict_psf_params['pixel_size_xy'][1])
+                        mol_this_chunk = mol_these_frames[
+                            (mol_these_frames[:, 1] >= x_range[0]) & (mol_these_frames[:, 1] <= x_range[1]) &
+                            (mol_these_frames[:, 2] >= y_range[0]) & (mol_these_frames[:, 2] <= y_range[1])]
+                        if len(mol_this_chunk) == 0:
+                            continue
+                        p_avg = mol_this_chunk[:, 5].mean()
+                        photon_max = mol_this_chunk[:, 4].max()
+                        photon_min = mol_this_chunk[:, 4].min()
+                        z_max = mol_this_chunk[:, 3].max()
+                        z_min = mol_this_chunk[:, 3].min()
+                        if (p_avg < p_low_thre or
+                            # photon_min < photon_low_thre or
+                            photon_max > photon_up_thre or
+                            z_min < z_low_thre or
+                            z_max > z_up_thre):
+                            continue
+                        # calculate the z counts of this chunk
+                        split_chunk_list.append((mol_this_chunk,
+                                                 (frame, frame+dense_frame_num),
+                                                 (x_start, x_end),
+                                                 (y_start, y_end)))
+
+            print('\rDense ROI progress: 100%')
+
+            # select the split chunks to form a new list with more balanced z distribution
+            selected_chunks, selected_chunks_z_counts, total_z_counts = self.z_partition(split_chunk_list,
+                                                                                         self.roi_lib['total_z_counts'],
+                                                                                         self.target_z_counts,
+                                                                                         self.intervals,
+                                                                                         replacement=False)
+            if len(selected_chunks):
+                # build the dense ROI library
+                dense_roi_list = []
+                for chunk in selected_chunks:
+                    frame_start, frame_end = chunk[1][0]-extra_length, chunk[1][1]+extra_length
+                    x_start, x_end = chunk[2]
+                    y_start, y_end = chunk[3]
+                    dense_roi_list.append(real_data[frame_start:frame_end, y_start:y_end, x_start:x_end][None])
+
+                self.roi_lib['dense'] = np.concatenate(dense_roi_list, axis=0)
+                self.roi_lib['dense_z_counts'] = selected_chunks_z_counts
+                self.roi_lib['total_z_counts'].update(self.roi_lib['dense_z_counts'])
+
+        print(f'ROI library built, cost {time.time()-t0}s, '
+              f'sparse ROIs: {self.roi_lib["sparse"].shape if len(self.roi_lib["sparse"])>0 else len(self.roi_lib["sparse"])}, '
+              f'dense ROIs: {self.roi_lib["dense"].shape if len(self.roi_lib["dense"])>0 else len(self.roi_lib["dense"])}')
+        print(f'total z counts: ')
+        for key in self.roi_lib['total_z_counts'].keys():
+            print(f'{key}: {self.roi_lib["total_z_counts"][key]}')
+
+        self.roi_lib_test = copy.deepcopy(self.roi_lib) if self.roi_lib_test is None else self.roi_lib_test
 
     def physics_learning(self, batch_size, num_sample=50, max_recon_psfs=5000):
         """
@@ -1188,23 +1296,23 @@ class Lunar_SyncLearning(Lunar_LocLearning):
         """
 
         # randomly select the sparse or dense roi library for learning
-        sparse_prob = self.partitioned_library['sparse_portion']
+        sparse_prob = sum(self.roi_lib['sparse_z_counts'].values()) / sum(self.roi_lib['total_z_counts'].values())
         sparse_flag = random.random() < sparse_prob
         if sparse_flag:
-            lib_length = len(self.partitioned_library['sparse'])
+            lib_length = len(self.roi_lib['sparse'])
             sample_batch_size = max(1,
                                     (batch_size * self.dict_sampler_params['train_size'] ** 2) //
                                     (self.attn_length *
-                                     self.partitioned_library['sparse'].shape[-1]
-                                     * self.partitioned_library['sparse'].shape[-2])
+                                     self.roi_lib['sparse'].shape[-1]
+                                     * self.roi_lib['sparse'].shape[-2])
                                     )
         else:
-            lib_length = len(self.partitioned_library['dense'])
+            lib_length = len(self.roi_lib['dense'])
             sample_batch_size = max(1,
                                     (batch_size * self.dict_sampler_params['train_size'] ** 2) //
-                                    (self.attn_length *
-                                     self.partitioned_library['dense'].shape[-1]
-                                     * self.partitioned_library['dense'].shape[-2])
+                                    (self.roi_lib['dense'].shape[-3] *
+                                     self.roi_lib['dense'].shape[-1]
+                                     * self.roi_lib['dense'].shape[-2])
                                     )
 
         real_data_sample_list = []
@@ -1213,18 +1321,20 @@ class Lunar_SyncLearning(Lunar_LocLearning):
         bg_sample_list = []
         xyzph_pred_list = []
         xyzph_sig_pred_list = []
+        infer_round = 0
+        patience = 20
         num_psfs = 0
 
         self.network.eval()
         with torch.no_grad():
-            while num_psfs < max_recon_psfs:
+            while num_psfs < max_recon_psfs and infer_round < patience:
                 # random select data in the library
                 start_idx = np.random.randint(0, max(0, lib_length-sample_batch_size)+1)
                 end_idx = start_idx + sample_batch_size
                 if sparse_flag:
-                    real_data_sampled = ailoc.common.gpu(self.partitioned_library['sparse'][start_idx: end_idx])
+                    real_data_sampled = ailoc.common.gpu(ailoc.common.cpu(self.roi_lib['sparse'][start_idx: end_idx]))
                 else:
-                    real_data_sampled = ailoc.common.gpu(self.partitioned_library['dense'][start_idx: end_idx])
+                    real_data_sampled = ailoc.common.gpu(ailoc.common.cpu(self.roi_lib['dense'][start_idx: end_idx]))
 
                 p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(real_data_sampled,
                                                                              self.data_simulator.camera)
@@ -1242,8 +1352,18 @@ class Lunar_SyncLearning(Lunar_LocLearning):
 
                 real_data_sampled = self.data_simulator.camera.backward(real_data_sampled)
                 if self.temporal_attn and self.attn_length // 2 > 0:
-                    # real_data_sampled = real_data_sampled[(self.attn_length // 2): -(self.attn_length // 2)]
-                    real_data_sampled = real_data_sampled[:, (self.attn_length // 2)]
+                    real_data_sampled = real_data_sampled[:, (self.attn_length // 2): -(self.attn_length // 2)]
+                    real_data_sampled = real_data_sampled.reshape(-1,
+                                                               real_data_sampled.shape[-2],
+                                                               real_data_sampled.shape[-1])
+
+                # # consider the overcut
+                # real_data_sampled = real_data_sampled[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # delta_map_sample = delta_map_sample[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # xyzph_map_sample = xyzph_map_sample[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # bg_sample = bg_sample[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # xyzph_pred = xyzph_pred[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # xyzph_sig_pred = xyzph_sig_pred[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
 
                 real_data_sample_list.append(real_data_sampled)
                 delta_map_sample_list.append(delta_map_sample)
@@ -1252,6 +1372,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                 xyzph_pred_list.append(xyzph_pred)
                 xyzph_sig_pred_list.append(xyzph_sig_pred)
 
+                infer_round += 1
                 num_psfs += len(delta_map_sample.nonzero())
 
         self.network.train()
@@ -1260,15 +1381,25 @@ class Lunar_SyncLearning(Lunar_LocLearning):
         delta_map_sample_list = torch.cat(delta_map_sample_list, dim=0)
         xyzph_map_sample_list = torch.cat(xyzph_map_sample_list, dim=1)
         bg_sample_list = torch.cat(bg_sample_list, dim=0)
+        # smooth the bg to reduce the noise hampering the PSF learning
+        bg_sample_list = torch.nn.functional.avg_pool2d(bg_sample_list[:, None], 9,
+                                                        stride=1, padding=9//2, count_include_pad=False)[:, 0]
         xyzph_pred_list = torch.cat(xyzph_pred_list, dim=0)
         xyzph_sig_pred_list = torch.cat(xyzph_sig_pred_list, dim=0)
 
         # calculate the p_theta(x|h), q_phi(h|x) to compute the loss and optimize the psf using Adam
-        self.learned_psf._pre_compute()
         reconstruction = self.data_simulator.reconstruct_posterior(self.learned_psf,
                                                                    delta_map_sample_list,
                                                                    xyzph_map_sample_list,
                                                                    bg_sample_list, )
+
+        # consider the overcut
+        real_data_sample_list = real_data_sample_list[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+        reconstruction = reconstruction[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+        delta_map_sample_list = delta_map_sample_list[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+        xyzph_map_sample_list = xyzph_map_sample_list[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+        xyzph_pred_list = xyzph_pred_list[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+        xyzph_sig_pred_list = xyzph_sig_pred_list[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
 
         loss, elbo_record = self.wake_loss(real_data_sample_list,
                                            reconstruction,
@@ -1278,26 +1409,182 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                                            xyzph_sig_pred_list,
                                            None)
         self.optimizer_psf.zero_grad()
-        # self.optimizer.zero_grad()
         loss.backward()
         self.optimizer_psf.step()
         self.scheduler_psf.step()
-        # self.optimizer.step()
 
         # update the psf simulator
         if isinstance(self.data_simulator.psf_model, ailoc.simulation.VectorPSFTorch):
             self.data_simulator.psf_model.zernike_coef = self.learned_psf.zernike_coef.detach()
-            self.data_simulator.psf_model._pre_compute()
         elif isinstance(self.data_simulator.psf_model, ailoc.simulation.VectorPSFCUDA):
             self.data_simulator.psf_model.zernike_coef = self.learned_psf.zernike_coef.detach().cpu().numpy()
 
         return elbo_record.detach().cpu().numpy()
 
+    def compute_roilibtest_loss(self, batch_size):
+        """
+        Compute the negative log likelihood of the ROI library, using the current network and learned PSF
+        to reconstruct the ROIs
+        """
+
+        if self.roi_lib_test is None:
+            return np.nan
+
+        loss_list = []
+        self.network.eval()
+        with torch.no_grad():
+            for lib in ['sparse', 'dense']:
+                if len(self.roi_lib_test[lib]) == 0:
+                    continue
+                lib_length = len(self.roi_lib_test[lib])
+                lib_batch_size = max(1,
+                            (batch_size * self.dict_sampler_params['train_size'] ** 2) //
+                            (self.roi_lib_test[lib].shape[-3] *
+                             self.roi_lib_test[lib].shape[-1]
+                             * self.roi_lib_test[lib].shape[-2])
+                            )
+
+                for i in range(int(np.ceil(lib_length/ lib_batch_size))):
+                    real_data_tmp = ailoc.common.gpu(ailoc.common.cpu(
+                        self.roi_lib_test[lib][i * lib_batch_size: (i + 1) * lib_batch_size]))
+                    p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(real_data_tmp,
+                                                                                 self.data_simulator.camera)
+                    n, h, w = p_pred.shape[0], p_pred.shape[-2], p_pred.shape[-1]
+                    delta_map_sample = ailoc.common.gpu(ailoc.common.sample_prob(p_pred, n))[:, None].expand(-1, 1, -1, -1)
+                    xyzph_map_sample = (xyzph_pred.permute([1, 0, 2, 3])[:, :, None]).expand(-1, -1, 1, -1, -1)
+                    bg_sample = bg_pred.detach()
+
+                    real_data_tmp = self.data_simulator.camera.backward(real_data_tmp)
+                    if self.temporal_attn and self.attn_length // 2 > 0:
+                        real_data_tmp = real_data_tmp[:, (self.attn_length // 2): -(self.attn_length // 2)]
+                        real_data_tmp = real_data_tmp.reshape(-1, real_data_tmp.shape[-2], real_data_tmp.shape[-1])
+
+                    # # consider the overcut
+                    # real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                    # delta_map_sample = delta_map_sample[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                    # xyzph_map_sample = xyzph_map_sample[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                    # bg_sample = bg_sample[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+
+                    reconstruction = self.data_simulator.reconstruct_posterior(self.learned_psf,
+                                                                               delta_map_sample,
+                                                                               xyzph_map_sample,
+                                                                               bg_sample, )
+
+                    # consider the overcut
+                    real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                    reconstruction = reconstruction[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+
+                    # nll_list.append(-ailoc.lunar.compute_log_p_x_given_h(data=real_data_tmp[:, None].expand(-1, 1, -1, -1),
+                    #                                            model=reconstruction).mean().detach().cpu().numpy())
+                    # use MSE
+                    loss_list.append(torch.nn.MSELoss(reduction='none')(reconstruction, real_data_tmp[:, None]
+                                                                        .expand(-1, 1, -1, -1)).mean().detach().cpu().numpy())
+
+        return np.mean(loss_list) if loss_list else np.nan
+
+    def plot_roilib_recon(self):
+        """
+        plot the reconstruction of the ROI library, choose one ROI for each z interval if sparse ROI,
+        else randomly select 10 ROI from the dense ROI library.
+        """
+
+        print('-' * 200)
+        print(f'Plot example ROIs and LUNAR reconstruction...')
+
+        if self.temporal_attn:
+            extra_length = self.attn_length//2
+        else:
+            extra_length = 0
+
+        roi_list = []
+        if len(self.roi_lib['sparse']) > 0:
+            z_counts = collections.Counter()
+            for i in range(self.z_bins):
+                z_counts[(self.intervals[i], self.intervals[i + 1])] = 0
+            for i in range(len(self.roi_lib['sparse'])):
+                tmp_z = self.roi_lib['sparse_z'][i]
+                interval_idx = np.digitize(tmp_z, self.intervals) - 1
+                if interval_idx < 0 or interval_idx >= self.z_bins:
+                    continue
+                elif z_counts[(self.intervals[interval_idx], self.intervals[interval_idx + 1])] == 0:
+                    z_counts[(self.intervals[interval_idx], self.intervals[interval_idx + 1])] = 1
+                    roi_list.append([self.roi_lib['sparse'][i], tmp_z])
+                else:
+                    continue
+        if len(roi_list) < self.z_bins:
+            dense_idx = random.sample(range(len(self.roi_lib['dense'])), self.z_bins-len(roi_list))
+            frame_idx = random.sample(range(extra_length, self.roi_lib['dense'].shape[-3]-extra_length), 1)[0]
+            for i in dense_idx:
+                roi_list.append([self.roi_lib['dense'][i, frame_idx-extra_length: frame_idx+extra_length+1], np.nan])
+
+        recon_list = []
+        roi_plot_list = []
+        self.network.eval()
+        with torch.no_grad():
+            for roi, tmp_z in roi_list:
+                real_data_tmp = ailoc.common.gpu(ailoc.common.cpu(roi))[None]
+                p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(real_data_tmp,
+                                                                             self.data_simulator.camera)
+                n, h, w = p_pred.shape[0], p_pred.shape[-2], p_pred.shape[-1]
+                delta_map_sample = ailoc.common.gpu(ailoc.common.sample_prob(p_pred, n))[:, None].expand(-1, 1, -1, -1)
+                xyzph_map_sample = (xyzph_pred.permute([1, 0, 2, 3])[:, :, None]).expand(-1, -1, 1, -1, -1)
+                bg_sample = bg_pred.detach()
+
+                real_data_tmp = self.data_simulator.camera.backward(real_data_tmp)
+                if extra_length > 0:
+                    real_data_tmp = real_data_tmp[:, extra_length: -extra_length]
+                    real_data_tmp = real_data_tmp.reshape(-1, real_data_tmp.shape[-2], real_data_tmp.shape[-1])
+
+                # # consider the overcut
+                # real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # delta_map_sample = delta_map_sample[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # xyzph_map_sample = xyzph_map_sample[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # bg_sample = bg_sample[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+
+                reconstruction = self.data_simulator.reconstruct_posterior(self.learned_psf,
+                                                                           delta_map_sample,
+                                                                           xyzph_map_sample,
+                                                                           bg_sample, )
+
+                # consider the overcut
+                real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                reconstruction = reconstruction[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+
+                recon_list.append(ailoc.common.cpu(reconstruction))
+                roi_plot_list.append([ailoc.common.cpu(real_data_tmp),tmp_z])
+
+        # plot the data, model, error
+        n_img = self.z_bins
+        n_row = self.z_bins
+
+        figure, ax_arr = plt.subplots(n_row, 1, constrained_layout=True, figsize=(6, 2 * n_row))
+        figure.suptitle('Example ROI | Reconstruction | Error', fontsize=16)
+
+        ax = []
+        plts = []
+        for i in ax_arr:
+            try:
+                for j in i:
+                    ax.append(j)
+            except:
+                ax.append(i)
+
+        for i in range(n_row):
+            a_tmp = np.squeeze(roi_plot_list[i][0])
+            b_tmp = np.squeeze(recon_list[i])
+            mismatch_tmp = a_tmp - b_tmp
+            image_tmp = np.concatenate([a_tmp, b_tmp, mismatch_tmp], axis=1)
+            plts.append(ax[i].imshow(image_tmp, cmap='turbo'))
+            plt.colorbar(mappable=plts[-1], ax=ax[i], fraction=0.046, pad=0.04)
+            ax[i].set_title(f'Z(nm): {roi_plot_list[i][1]:.0f}', fontsize=16)
+        plt.show()
+
     def print_recorder(self, max_iterations):
         try:
             print(f"Iterations: {self._iter_train}/{max_iterations} || "
                   f"Loss_sleep: {self.evaluation_recorder['loss_sleep'][self._iter_train]:.2f} || "
-                  f"Loss_wake: {self.evaluation_recorder['loss_wake'][self._iter_train]:.2f} || "
+                  # f"Loss_wake: {self.evaluation_recorder['loss_wake'][self._iter_train]:.2f} || "
+                  f"Loss_recon: {self.evaluation_recorder['loss_recon'][self._iter_train]:.2f} || "
                   f"IterTime: {self.evaluation_recorder['iter_time'][self._iter_train]:.2f} ms || "
                   f"ETA: {self.evaluation_recorder['iter_time'][self._iter_train] * (max_iterations - self._iter_train) / 3600000:.2f} h || ",
                   end='')

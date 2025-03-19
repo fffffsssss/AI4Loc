@@ -77,7 +77,7 @@ def plot_train_record(model):
     plt.show(block=True)
 
 
-def plot_synclearning_record(model, plot_phase=True):
+def plot_synclearning_record(model, plot_phase=False):
     recorder = model.evaluation_recorder
 
     plt.figure(figsize=(9, 6), constrained_layout=True)
@@ -123,7 +123,7 @@ def plot_synclearning_record(model, plot_phase=True):
 
     plt.subplot(3, 3, 9)
     # plot_od(recorder['loss_wake'])
-    plot_od(recorder['recon_NLL'])
+    plot_od(recorder['loss_recon'])
     plt.xlabel('iterations')
     # plt.ylabel('loss_wake')
     plt.ylabel('loss_recon')
