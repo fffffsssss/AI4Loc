@@ -9,6 +9,7 @@ import napari
 import tifffile
 import os
 import cv2
+import sys
 
 # import ailoc.common.local_tifffile
 import ailoc.common
@@ -476,6 +477,22 @@ def print_learning_params(psf_params_dict, camera_params_dict, sampler_params_di
             else:
                 params = params_dict[keys]
                 print(f"{keys}: {params}")
+
+
+class TrainLogger(object):
+    def __init__(self, filename="logfile.log"):
+        self.terminal = sys.stdout
+        self.log = open(filename, "a")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+
+    def flush(self):
+        # this flush method is needed for python 3 compatibility.
+        # this handles the flush command by doing nothing.
+        # you might want to specify some extra behavior here.
+        pass
 
 
 if __name__ == "__main__":
