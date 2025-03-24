@@ -236,7 +236,7 @@ def get_gain_bg_empirical(images,
 
         print(f'The variance/mean ratio of data is estimated as {est_gain:.2f} using the provided QE and e_per_adu.')
 
-        if est_gain > 1.2 or est_gain < 0.9:
+        if est_gain > 1.1 or est_gain < 0.9:
             e_per_adu_new = ((pix_mean_used.mean() +
                              np.sqrt(pix_mean_used.mean()**2-4*pix_var_used.mean()*
                                      (est_gain*pix_mean_used.mean()-pix_var_used.mean())))/(2*pix_var_used.mean())
