@@ -27,6 +27,10 @@ def deeploc_loclearning():
     calib_file = '../datasets/demo2-exp_npc_dmo1.2/beads_step20/1_calib_results.mat'
     experiment_file = '../datasets/demo2-exp_npc_dmo1.2/npc_DMO1.2__6_MMStack_Default.ome.tif'
 
+    # file path to save the trained model and log
+    file_name = '../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'DeepLoc.pt'
+    sys.stdout = ailoc.common.TrainLogger('../results/' + os.path.split(file_name)[-1].split('.')[0] + '.log')
+
     if calib_file is not None:
         # using the same psf parameters and camera parameters as beads calibration
         calib_dict = sio.loadmat(calib_file, simplify_cells=True)
@@ -94,16 +98,14 @@ def deeploc_loclearning():
 
     # estimate the background range from experimental images
     if experiment_file is not None:
-        experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 2)
-        camera_calib = ailoc.simulation.instantiate_camera(camera_params_dict)
-        experimental_images_photon = ailoc.common.cpu(
-            camera_calib.backward(torch.tensor(experimental_images.astype(np.float32))))
+        experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 4)
 
         print('experimental images provided, automatically adjust training parameters')
-
-        sampler_params_dict['bg_range'] = ailoc.common.get_bg_stats_gauss(experimental_images_photon, percentile=10,
-                                                                          plot=True)
-        print(f'Adjusted bg_range: {sampler_params_dict["bg_range"]}')
+        (sampler_params_dict['bg_range'],
+         camera_params_dict['e_per_adu']) = ailoc.common.get_gain_bg_empirical(experimental_images,
+                                                                               camera_params_dict,
+                                                                               adjust_gain=True,
+                                                                               plot=True)
 
     # print learning parameters
     ailoc.common.print_learning_params(psf_params_dict, camera_params_dict, sampler_params_dict)
@@ -117,7 +119,6 @@ def deeploc_loclearning():
 
     deeploc_model.build_evaluation_dataset(napari_plot=False)
 
-    file_name = '../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'DeepLoc.pt'
     deeploc_model.online_train(
         batch_size=2,
         max_iterations=40000,
@@ -148,7 +149,7 @@ def deeploc_loclearning():
     deeploc_analyzer.check_single_frame_output(frame_num=11)
 
     t0 = time.time()
-    preds_array, preds_rescale_array = deeploc_analyzer.divide_and_conquer(degrid=True)
+    preds_array, preds_rescale_array = deeploc_analyzer.divide_and_conquer()
     print(f'Prediction time cost: {time.time() - t0} s')
 
 
@@ -157,6 +158,10 @@ def lunar_loclearning():
     # experiment file is optional for background range estimation
     calib_file = '../datasets/demo2-exp_npc_dmo1.2/beads_step20/1_calib_results.mat'
     experiment_file = '../datasets/demo2-exp_npc_dmo1.2/npc_DMO1.2__6_MMStack_Default.ome.tif'
+
+    # file path to save the trained model and log
+    file_name = '../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'LUNAR_LL.pt'
+    sys.stdout = ailoc.common.TrainLogger('../results/' + os.path.split(file_name)[-1].split('.')[0] + '.log')
 
     if calib_file is not None:
         # using the same psf parameters and camera parameters as beads calibration
@@ -225,16 +230,14 @@ def lunar_loclearning():
 
     # estimate the background range from experimental images
     if experiment_file is not None:
-        experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 2)
-        camera_calib = ailoc.simulation.instantiate_camera(camera_params_dict)
-        experimental_images_photon = ailoc.common.cpu(
-            camera_calib.backward(torch.tensor(experimental_images.astype(np.float32))))
+        experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 4)
 
         print('experimental images provided, automatically adjust training parameters')
-
-        sampler_params_dict['bg_range'] = ailoc.common.get_bg_stats_gauss(experimental_images_photon, percentile=10,
-                                                                          plot=True)
-        print(f'Adjusted bg_range: {sampler_params_dict["bg_range"]}')
+        (sampler_params_dict['bg_range'],
+         camera_params_dict['e_per_adu']) = ailoc.common.get_gain_bg_empirical(experimental_images,
+                                                                               camera_params_dict,
+                                                                               adjust_gain=True,
+                                                                               plot=True)
 
     # print learning parameters
     ailoc.common.print_learning_params(psf_params_dict, camera_params_dict, sampler_params_dict)
@@ -248,7 +251,6 @@ def lunar_loclearning():
 
     lunar_model.build_evaluation_dataset(napari_plot=False)
 
-    file_name = '../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'LUNAR_LL.pt'
     lunar_model.online_train(
         batch_size=2,
         max_iterations=40000,
@@ -279,7 +281,7 @@ def lunar_loclearning():
     lunar_analyzer.check_single_frame_output(frame_num=11)
 
     t0 = time.time()
-    preds_array, preds_rescale_array = lunar_analyzer.divide_and_conquer(degrid=True)
+    preds_array, preds_rescale_array = lunar_analyzer.divide_and_conquer()
     print(f'Prediction time cost: {time.time() - t0} s')
 
 
@@ -288,6 +290,10 @@ def lunar_synclearning():
     # experiment file is needed for background range estimation and synchronized learning
     calib_file = None
     experiment_file = '../datasets/demo2-exp_npc_dmo1.2/npc_DMO1.2__6_MMStack_Default.ome.tif'
+
+    # file path to save the trained model and log
+    file_name = '../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'LUNAR_SL.pt'
+    sys.stdout = ailoc.common.TrainLogger('../results/' + os.path.split(file_name)[-1].split('.')[0] + '.log')
 
     if calib_file is not None:
         # using the same psf parameters and camera parameters as beads calibration
@@ -352,16 +358,14 @@ def lunar_synclearning():
 
     # estimate the background range from experimental images
     if experiment_file is not None:
-        experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 2)
-        camera_calib = ailoc.simulation.instantiate_camera(camera_params_dict)
-        experimental_images_photon = ailoc.common.cpu(
-            camera_calib.backward(torch.tensor(experimental_images.astype(np.float32))))
+        experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 4)
 
         print('experimental images provided, automatically adjust training parameters')
-
-        sampler_params_dict['bg_range'] = ailoc.common.get_bg_stats_gauss(experimental_images_photon, percentile=10,
-                                                                          plot=True)
-        print(f'Adjusted bg_range: {sampler_params_dict["bg_range"]}')
+        (sampler_params_dict['bg_range'],
+         camera_params_dict['e_per_adu']) = ailoc.common.get_gain_bg_empirical(experimental_images,
+                                                                               camera_params_dict,
+                                                                               adjust_gain=True,
+                                                                               plot=True)
 
     # print learning parameters
     ailoc.common.print_learning_params(psf_params_dict, camera_params_dict, sampler_params_dict)
@@ -375,7 +379,6 @@ def lunar_synclearning():
 
     lunar_model.build_evaluation_dataset(napari_plot=False)
 
-    file_name = '../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'LUNAR_SL.pt'
     # torch.autograd.set_detect_anomaly(True)
     lunar_model.online_train(
         batch_size=2,
@@ -390,7 +393,7 @@ def lunar_synclearning():
     )
 
     # plot evaluation performance during the training
-    phase_record = ailoc.common.plot_synclearning_record(lunar_model)
+    phase_record = ailoc.common.plot_synclearning_record(lunar_model, plot_phase=True)
     # save the phase learned during the training
     imageio.mimsave('../results/' + os.path.split(file_name)[-1].split('.')[0] + '_phase.gif',
                     phase_record,
@@ -416,7 +419,7 @@ def lunar_synclearning():
     )
     lunar_analyzer.check_single_frame_output(frame_num=25)
 
-    preds_array, preds_rescale_array = lunar_analyzer.divide_and_conquer(degrid=True)
+    preds_array, preds_rescale_array = lunar_analyzer.divide_and_conquer()
 
 
 if __name__ == '__main__':

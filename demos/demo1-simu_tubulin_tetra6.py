@@ -24,6 +24,10 @@ def deeploc_loclearning():
     calib_file = None
     experiment_file = '../datasets/demo1-simu_tubulin/simu_tubulin_tetra6_hd/1.tif'
 
+    # file path to save the trained model and log
+    file_name = '../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'DeepLoc.pt'
+    sys.stdout = ailoc.common.TrainLogger('../results/' + os.path.split(file_name)[-1].split('.')[0] + '.log')
+
     if calib_file is not None:
         # using the same psf parameters and camera parameters as beads calibration
         calib_dict = sio.loadmat(calib_file, simplify_cells=True)
@@ -116,7 +120,6 @@ def deeploc_loclearning():
 
     deeploc_model.build_evaluation_dataset(napari_plot=False)
 
-    file_name = '../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'DeepLoc.pt'
     deeploc_model.online_train(
         batch_size=2,
         max_iterations=40000,
@@ -167,7 +170,7 @@ def deeploc_loclearning():
         data_analyzer.check_single_frame_output(frame_num=25)
 
         t0 = time.time()
-        preds_array, preds_rescale_array = data_analyzer.divide_and_conquer(degrid=False)
+        preds_array, preds_rescale_array = data_analyzer.divide_and_conquer()
         print(f'Prediction time cost: {time.time() - t0} s')
 
         # read the ground truth and calculate metrics
@@ -187,6 +190,10 @@ def lunar_loclearning():
     # experiment file is optional for background range estimation
     calib_file = None
     experiment_file = '../datasets/demo1-simu_tubulin/simu_tubulin_tetra6_hd/1.tif'
+
+    # file path to save the trained model and log
+    file_name = '../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'LUNAR_LL.pt'
+    sys.stdout = ailoc.common.TrainLogger('../results/' + os.path.split(file_name)[-1].split('.')[0] + '.log')
 
     if calib_file is not None:
         # using the same psf parameters and camera parameters as beads calibration
@@ -277,7 +284,6 @@ def lunar_loclearning():
 
     lunar_model.build_evaluation_dataset(napari_plot=False)
 
-    file_name = '../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'LUNAR_LL.pt'
     lunar_model.online_train(
         batch_size=2,
         max_iterations=40000,
@@ -328,7 +334,7 @@ def lunar_loclearning():
         data_analyzer.check_single_frame_output(frame_num=25)
 
         t0 = time.time()
-        preds_array, preds_rescale_array = data_analyzer.divide_and_conquer(degrid=False)
+        preds_array, preds_rescale_array = data_analyzer.divide_and_conquer()
         print(f'Prediction time cost: {time.time() - t0} s')
 
         # read the ground truth and calculate metrics
@@ -348,6 +354,10 @@ def lunar_synclearning():
     # experiment file is optional for background range estimation
     calib_file = None
     experiment_file = '../datasets/demo1-simu_tubulin/simu_tubulin_tetra6_hd/1.tif'
+
+    # file path to save the trained model and log
+    file_name = '../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'LUNAR_SL.pt'
+    sys.stdout = ailoc.common.TrainLogger('../results/' + os.path.split(file_name)[-1].split('.')[0] + '.log')
 
     if calib_file is not None:
         # using the same psf parameters and camera parameters as beads calibration
@@ -441,7 +451,6 @@ def lunar_synclearning():
 
     lunar_model.build_evaluation_dataset(napari_plot=False)
 
-    file_name = '../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'LUNAR_SL.pt'
     # torch.autograd.set_detect_anomaly(True)
     lunar_model.online_train(
         batch_size=2,  # the batch size for training, can be adjusted according to the GPU memory
@@ -456,7 +465,7 @@ def lunar_synclearning():
     )
 
     # plot evaluation performance during the training
-    phase_record = ailoc.common.plot_synclearning_record(lunar_model)
+    phase_record = ailoc.common.plot_synclearning_record(lunar_model, plot_phase=True)
     # save the phase learned during the training
     print('Plot done, saving the .gif')
     imageio.mimsave('../results/' + os.path.split(file_name)[-1].split('.')[0] + '_phase.gif',
@@ -506,7 +515,7 @@ def lunar_synclearning():
         data_analyzer.check_single_frame_output(frame_num=25)
 
         t0 = time.time()
-        preds_array, preds_rescale_array = data_analyzer.divide_and_conquer(degrid=False)
+        preds_array, preds_rescale_array = data_analyzer.divide_and_conquer()
         print(f'Prediction time cost: {time.time() - t0} s')
 
         # read the ground truth and calculate metrics
