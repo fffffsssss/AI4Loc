@@ -16,36 +16,38 @@ def beads_stack_calibrate():
     """
 
     # load bead stack
-    beads_file_name = "../../datasets/dmo4Spectrin_sw20220923/crop_beads/1.tif"
+    beads_file_name = "../../datasets/astigTubulin_DNApaint/beads/bead_640_H2O-1-33_oil-ring0-15-use_5/bead_640_H2O-1-33_oil-ring0-15-use_5_MMStack_Pos0.ome.tif"
 
     # set psf parameters
     zernike_aber = np.array([2, -2, 0, 2, 2, 0, 3, -1, 0, 3, 1, 0, 4, 0, 0, 3, -3, 0, 3, 3, 0,
                              4, -2, 0, 4, 2, 0, 5, -1, 0, 5, 1, 0, 6, 0, 0, 4, -4, 0, 4, 4, 0,
                              5, -3, 0, 5, 3, 0, 6, -2, 0, 6, 2, 0, 7, 1, 0, 7, -1, 0, 8, 0, 0],
                             dtype=np.float32).reshape([21, 3])
-    psf_params_dict = {'na': 1.35,
+    psf_params_dict = {'na': 1.5,
                        'wavelength': 670,  # unit: nm
-                       'refmed': 1.406,
+                       'refmed': 1.352,
                        'refcov': 1.524,
-                       'refimm': 1.406,
+                       'refimm': 1.518,
                        'zernike_mode': zernike_aber[:, 0:2],
                        'zernike_coef': zernike_aber[:, 2],
                        'objstage0': 0,
                        'pixel_size_xy': (108, 108),
                        'otf_rescale_xy': (0.5, 0.5),  # this is an empirical value, which maybe due to the pixelation
                        'npupil': 64,
-                       'psf_size': 61}
+                       'psf_size': 31}
 
     # set camera parameters
-    camera_params_dict = {'camera_type': 'scmos',
-                          'qe': 0.95,
-                          'spurious_charge': 0.01,
-                          'read_noise_sigma': 1.6,
-                          'e_per_adu': 1.2,
-                          'baseline': 100.0}
+    camera_params_dict = {
+        'camera_type': 'scmos',
+        'qe': 0.9,
+        'spurious_charge': 0.01,
+        'read_noise_sigma': 1.535,
+        'e_per_adu': 0.747,
+        'baseline': 100.0,
+    }
 
     # set calibration parameters
-    calib_params_dict = {'z_step': 100,
+    calib_params_dict = {'z_step': 20,
                          'filter_sigma': 3,
                          'threshold_abs': 20,
                          'fit_brightest': True,}
