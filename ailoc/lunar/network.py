@@ -346,13 +346,13 @@ class LunarNet(nn.Module):
         xyzph_pred[:, :2] = torch.tanh(xyzph_pred[:, :2])
         # output z range is (-2, 2), the training sampling range is in (-1,1)
         xyzph_pred[:, 2] = torch.tanh(xyzph_pred[:, 2]) * 2
-        # output photon range is (0, 2), the training sampling range is in (0,1)
-        xyzph_pred[:, 3] = torch.sigmoid(xyzph_pred[:, 3]) * 2
+        # output photon range is (0, 1.5), the training sampling range is in (0,1)
+        xyzph_pred[:, 3] = torch.sigmoid(xyzph_pred[:, 3]) * 1.5
         # scale the uncertainty and add epsilon, the output range becomes (0.0001, 3.0001),
         # maybe can use RELU for unlimited upper range and stable gradient
         xyzph_sig_pred = torch.sigmoid(xyzphs) * 3 + 0.0001
-        # output bg range is (0, 2), the training sampling range is in (0,1)
-        bg_pred = torch.sigmoid(bg[:, 0]) * 2
+        # output bg range is (0, 1.5), the training sampling range is in (0,1)
+        bg_pred = torch.sigmoid(bg[:, 0]) * 1.5
 
         return p_pred, xyzph_pred, xyzph_sig_pred, bg_pred
 
