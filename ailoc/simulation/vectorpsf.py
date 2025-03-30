@@ -985,23 +985,28 @@ class VectorPSFTorch(VectorPSF):
                                self.polarizationvector[:, :, None] *
                                self.amplitude[None, None, None])
 
-            length_tmp = slice_tmp.stop - slice_tmp.start
-            position_phase = torch.empty([length_tmp, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
+            # length_tmp = slice_tmp.stop - slice_tmp.start
+            # position_phase = torch.empty([length_tmp, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
 
-            idx = torch.where(z[slice_tmp] + self.zemit0 >= 0)[0]
-            phase_xyz_tmp = -y[slice_tmp][idx][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx][:, None, None] * \
-                            self.wavevector[1][None] + \
-                            (z[slice_tmp][idx] + self.zemit0)[:, None, None] * self.wavevectorzmed[None]
-            position_phase[idx, :, :] = torch.exp(
-                1j * (phase_xyz_tmp + (objstage[slice_tmp][idx][:, None, None] + self.objstage0) *
-                      self.wavevectorzimm[None]))
+            # idx = torch.where(z[slice_tmp] + self.zemit0 >= 0)[0]
+            # phase_xyz_tmp = -y[slice_tmp][idx][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx][:, None, None] * \
+            #                 self.wavevector[1][None] + \
+            #                 (z[slice_tmp][idx] + self.zemit0)[:, None, None] * self.wavevectorzmed[None]
+            # position_phase[idx, :, :] = torch.exp(
+            #     1j * (phase_xyz_tmp + (objstage[slice_tmp][idx][:, None, None] + self.objstage0) *
+            #           self.wavevectorzimm[None]))
+            #
+            # idx = torch.where(z[slice_tmp] + self.zemit0 < 0)[0]
+            # phase_xyz_tmp = -y[slice_tmp][idx][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx][:, None, None] * \
+            #                 self.wavevector[1][None]
+            # position_phase[idx, :, :] = torch.exp(
+            #     1j * (phase_xyz_tmp + (objstage[slice_tmp][idx][:, None, None] + self.objstage0 + z[slice_tmp][idx][:, None, None]
+            #                            + self.zemit0) * self.wavevectorzimm[None]))
 
-            idx = torch.where(z[slice_tmp] + self.zemit0 < 0)[0]
-            phase_xyz_tmp = -y[slice_tmp][idx][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx][:, None, None] * \
-                            self.wavevector[1][None]
-            position_phase[idx, :, :] = torch.exp(
-                1j * (phase_xyz_tmp + (objstage[slice_tmp][idx][:, None, None] + self.objstage0 + z[slice_tmp][idx][:, None, None]
-                                       + self.zemit0) * self.wavevectorzimm[None]))
+            phase_xyz_tmp = -y[slice_tmp][:, None, None] * self.wavevector[0][None] - x[slice_tmp][:, None, None] * \
+                            self.wavevector[1][None] + (z[slice_tmp] + self.zemit0)[:, None, None] * self.wavevectorzmed[None]
+            position_phase = torch.exp(1j * (phase_xyz_tmp + (objstage[slice_tmp][:, None, None] + self.objstage0) *
+                             self.wavevectorzimm[None]))
 
             pupil_tmp = position_phase[None, None] * pupilmatrix
             inter_image = torch.transpose(self.czt_parallel(pupil_tmp, self.ay, self.by, self.dy), -1, -2)
@@ -1306,23 +1311,28 @@ class VectorPSFTorch(VectorPSF):
         psfs = torch.zeros([n_mol, self.psf_size, self.psf_size], device='cuda', dtype=self.data_type)
         psfs_ders = torch.zeros([n_mol, self.psf_size, self.psf_size, 3], device='cuda', dtype=self.data_type)
         for slice_tmp in slice_list:
-            length_tmp = slice_tmp.stop - slice_tmp.start
-            position_phase = torch.empty([length_tmp, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
+            # length_tmp = slice_tmp.stop - slice_tmp.start
+            # position_phase = torch.empty([length_tmp, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
 
-            idx_0 = torch.where(z[slice_tmp] + self.zemit0 >= 0)[0]
-            phase_xyz_tmp = -y[slice_tmp][idx_0][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx_0][:, None, None] * \
-                            self.wavevector[1][None] + \
-                            (z[slice_tmp][idx_0] + self.zemit0)[:, None, None] * self.wavevectorzmed[None]
-            position_phase[idx_0, :, :] = torch.exp(
-                1j * (phase_xyz_tmp + (objstage[slice_tmp][idx_0][:, None, None] + self.objstage0) *
-                      self.wavevectorzimm[None]))
+            # idx_0 = torch.where(z[slice_tmp] + self.zemit0 >= 0)[0]
+            # phase_xyz_tmp = -y[slice_tmp][idx_0][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx_0][:, None, None] * \
+            #                 self.wavevector[1][None] + \
+            #                 (z[slice_tmp][idx_0] + self.zemit0)[:, None, None] * self.wavevectorzmed[None]
+            # position_phase[idx_0, :, :] = torch.exp(
+            #     1j * (phase_xyz_tmp + (objstage[slice_tmp][idx_0][:, None, None] + self.objstage0) *
+            #           self.wavevectorzimm[None]))
+            #
+            # idx_1 = torch.where(z[slice_tmp] + self.zemit0 < 0)[0]
+            # phase_xyz_tmp = -y[slice_tmp][idx_1][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx_1][:, None, None] * \
+            #                 self.wavevector[1][None]
+            # position_phase[idx_1, :, :] = torch.exp(
+            #     1j * (phase_xyz_tmp + (objstage[slice_tmp][idx_1][:, None, None] + self.objstage0 + z[slice_tmp][idx_1][:, None, None]
+            #                            + self.zemit0) * self.wavevectorzimm[None]))
 
-            idx_1 = torch.where(z[slice_tmp] + self.zemit0 < 0)[0]
-            phase_xyz_tmp = -y[slice_tmp][idx_1][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx_1][:, None, None] * \
-                            self.wavevector[1][None]
-            position_phase[idx_1, :, :] = torch.exp(
-                1j * (phase_xyz_tmp + (objstage[slice_tmp][idx_1][:, None, None] + self.objstage0 + z[slice_tmp][idx_1][:, None, None]
-                                       + self.zemit0) * self.wavevectorzimm[None]))
+            phase_xyz_tmp = -y[slice_tmp][:, None, None] * self.wavevector[0][None] - x[slice_tmp][:, None, None] * \
+                            self.wavevector[1][None] + (z[slice_tmp] + self.zemit0)[:, None, None] * self.wavevectorzmed[None]
+            position_phase = torch.exp(1j * (phase_xyz_tmp + (objstage[slice_tmp][:, None, None] + self.objstage0) *
+                             self.wavevectorzimm[None]))
 
             pupil_tmp = position_phase[None, None] * pupilmatrix
             inter_image = torch.transpose(self.czt_parallel(pupil_tmp, self.ay, self.by, self.dy), -1, -2)
@@ -1342,9 +1352,10 @@ class VectorPSFTorch(VectorPSF):
             psfs_ders[slice_tmp, :, :, 1] += 2 / 3 * torch.sum(torch.real(torch.conj(field_matrix) * field_matrix_y),
                                                                dim=(0, 1))
 
-            pupil_tmp_z = torch.empty([2, 3, length_tmp, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
-            pupil_tmp_z[:, :, idx_0] = 1j * self.wavevectorzmed * position_phase[idx_0] * pupilmatrix
-            pupil_tmp_z[:, :, idx_1] = 1j * self.wavevectorzimm * position_phase[idx_1] * pupilmatrix
+            # pupil_tmp_z = torch.empty([2, 3, length_tmp, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
+            # pupil_tmp_z[:, :, idx_0] = 1j * self.wavevectorzmed * position_phase[idx_0] * pupilmatrix
+            # pupil_tmp_z[:, :, idx_1] = 1j * self.wavevectorzimm * position_phase[idx_1] * pupilmatrix
+            pupil_tmp_z = 1j * self.wavevectorzmed * position_phase * pupilmatrix
             inter_image_z = torch.transpose(self.czt_parallel(pupil_tmp_z, self.ay, self.by, self.dy), -1, -2)
             field_matrix_z = torch.transpose(self.czt_parallel(inter_image_z, self.ax, self.bx, self.dx), -1, -2)
             psfs_ders[slice_tmp, :, :, 2] += 2 / 3 * torch.sum(torch.real(torch.conj(field_matrix) * field_matrix_z),
