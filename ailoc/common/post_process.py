@@ -754,6 +754,8 @@ def rescale_offset(preds_array, pixel_size=None, rescale_bins=20, threshold=0.2,
     # preds_array_rescale = np.column_stack((preds_array, xo_rescale, yo_rescale, x_rescale, y_rescale))
     preds_array_rescale = preds_array.copy()
     preds_array_rescale[:, 1:3] = np.column_stack((x_rescale, y_rescale))
+    preds_array_rescale[:, -2] = xo_rescale * pixel_size[0]
+    preds_array_rescale[:, -1] = yo_rescale * pixel_size[1]
 
     # plot the histogram of the original and rescaled offsets
     if show_res:
