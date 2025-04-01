@@ -363,10 +363,14 @@ class Lunar_LocLearning(ailoc.common.XXLoc):
 
         cmap = 'gray'
 
-        fig, ax_arr = plt.subplots(int(np.ceil(self.context_size / 2)),
-                                   2,
-                                   figsize=(3 * 2,
-                                            2 * int(np.ceil(self.context_size / 2))),
+        im_num = self.context_size * 2
+        n_col = 4
+        n_row = int(np.ceil(im_num / n_col))
+
+        fig, ax_arr = plt.subplots(n_row,
+                                   n_col,
+                                   figsize=(n_col * 3,
+                                            n_row * 2),
                                    constrained_layout=True)
         ax = []
         plts = []
@@ -381,8 +385,14 @@ class Lunar_LocLearning(ailoc.common.XXLoc):
             plts.append(ax[i].imshow(ailoc.common.cpu(data_cam)[0, i], cmap=cmap))
             ax[i].set_title(f"frame {i}")
             plt.colorbar(mappable=plts[-1], ax=ax[i], fraction=0.046, pad=0.04)
+
+        for i in range(self.context_size):
+            ax_num = i + self.context_size
+            plts.append(ax[ax_num].imshow(ailoc.common.cpu(data_cam)[0, i], cmap=cmap))
+            ax[ax_num].set_title(f"GT frame {i}")
             pix_gt = ailoc.common.cpu(p_map_gt[0, i].nonzero())
-            ax[i].scatter(pix_gt[:, 1], pix_gt[:, 0], s=5, c='m', marker='x')
+            ax[ax_num].scatter(pix_gt[:, 1], pix_gt[:, 0], s=5, c='m', marker='x')
+            plt.colorbar(mappable=plts[-1], ax=ax[ax_num], fraction=0.046, pad=0.04)
 
         plt.show()
 
@@ -1139,11 +1149,6 @@ class Lunar_SyncLearning(Lunar_LocLearning):
         z_up_thre = self.dict_sampler_params['z_range'][1]-50
         z_low_thre = self.dict_sampler_params['z_range'][0]+50
         p_low_thre = 0.5
-        # photon_low_thre = 0
-        # photon_up_thre = np.inf
-        # z_up_thre = np.inf
-        # z_low_thre = -np.inf
-        # p_low_thre = 0
 
         self.roi_lib['sparse'] = np.array([])
         self.roi_lib['sparse_z'] = np.array([])
@@ -1228,8 +1233,98 @@ class Lunar_SyncLearning(Lunar_LocLearning):
             self.roi_lib['sparse_z'] = np.array(sparse_z_list)
             self.roi_lib['total_z_counts'].update(self.roi_lib['sparse_z_counts'])
 
+        # then find the dense ROIs
         if sum(self.roi_lib['total_z_counts'].values()) < sum(self.target_z_counts.values()):
-            # then find the dense ROIs
+            # first define the split setting of the data by dense ROI size and chunk frame number
+            split_chunk_list = []
+            row_sub_fov = int(np.ceil(h / dense_roi_size))
+            col_sub_fov = int(np.ceil(w / dense_roi_size))
+            progress = 0
+            for frame in range(extra_length, n - extra_length - dense_frame_num, dense_frame_num):
+                progress += 1
+                if progress % 1000 == 0:
+                    print(f'\rDense ROI progress: '
+                          f'{progress/((n-2*extra_length-dense_frame_num)/dense_frame_num)*100:.0f}%', end='')
+                frame_range = range(frame+1, frame+1 + dense_frame_num)
+                mol_these_frames = ailoc.common.find_molecules(molecule_array, list(frame_range))
+                if len(mol_these_frames) == 0:
+                    continue
+                # split the molecules into sub-FOVs
+                for raw in range(row_sub_fov):
+                    for col in range(col_sub_fov):
+                        x_start = col * dense_roi_size if col * dense_roi_size + dense_roi_size <= w else w - dense_roi_size
+                        y_start = raw * dense_roi_size if raw * dense_roi_size + dense_roi_size <= h else h - dense_roi_size
+                        x_end = x_start + dense_roi_size
+                        y_end = y_start + dense_roi_size
+                        # find the molecules in this sub-FOV
+                        x_range = ((x_start+self.over_cut)*self.dict_psf_params['pixel_size_xy'][0],
+                                   (x_end-self.over_cut)*self.dict_psf_params['pixel_size_xy'][0])
+                        y_range = ((y_start+self.over_cut)*self.dict_psf_params['pixel_size_xy'][1],
+                                   (y_end-self.over_cut)*self.dict_psf_params['pixel_size_xy'][1])
+                        mol_this_chunk = mol_these_frames[
+                            (mol_these_frames[:, 1] >= x_range[0]) & (mol_these_frames[:, 1] <= x_range[1]) &
+                            (mol_these_frames[:, 2] >= y_range[0]) & (mol_these_frames[:, 2] <= y_range[1])]
+                        if len(mol_this_chunk) == 0:
+                            continue
+                        p_avg = mol_this_chunk[:, 5].mean()
+                        photon_max = mol_this_chunk[:, 4].max()
+                        photon_min = mol_this_chunk[:, 4].min()
+                        z_max = mol_this_chunk[:, 3].max()
+                        z_min = mol_this_chunk[:, 3].min()
+                        if (p_avg < p_low_thre or
+                            photon_min < photon_low_thre or
+                            photon_max > photon_up_thre or
+                            z_min < z_low_thre or
+                            z_max > z_up_thre):
+                            continue
+                        # calculate the z counts of this chunk
+                        split_chunk_list.append((mol_this_chunk,
+                                                 (frame, frame+dense_frame_num),
+                                                 (x_start, x_end),
+                                                 (y_start, y_end)))
+
+            print('\rDense ROI progress: 100%')
+
+            # select the split chunks to form a new list with more balanced z distribution
+            selected_chunks, selected_chunks_z_counts, total_z_counts = self.z_partition(split_chunk_list,
+                                                                                         self.roi_lib['total_z_counts'],
+                                                                                         self.target_z_counts,
+                                                                                         self.intervals,
+                                                                                         replacement=False)
+            if len(selected_chunks):
+                # build the dense ROI library
+                dense_roi_list = []
+                for chunk in selected_chunks:
+                    frame_start, frame_end = chunk[1][0]-extra_length, chunk[1][1]+extra_length
+                    x_start, x_end = chunk[2]
+                    y_start, y_end = chunk[3]
+                    dense_roi_list.append(real_data[frame_start:frame_end, y_start:y_end, x_start:x_end][None])
+
+                self.roi_lib['dense'] = np.concatenate(dense_roi_list, axis=0)
+                self.roi_lib['dense_z_counts'] = selected_chunks_z_counts
+                self.roi_lib['total_z_counts'].update(self.roi_lib['dense_z_counts'])
+
+        # if far away from the target z counts, loosen the filter requirements to rebuild the dense ROI library
+        if sum(self.roi_lib['total_z_counts'].values()) < 0.5 * sum(self.target_z_counts.values()):
+            print('The current ROI library is far away from the target z counts, '
+                  'loosen the filter requirements to rebuild the dense ROI library...')
+
+            # calculate the threshold to filter ROIs
+            photon_low_thre = self.dict_sampler_params['photon_range'][0]
+            photon_up_thre = self.dict_sampler_params['photon_range'][1]
+            z_up_thre = self.dict_sampler_params['z_range'][1]
+            z_low_thre = self.dict_sampler_params['z_range'][0]
+            p_low_thre = 0.5
+
+            # reset the dense ROI library
+            self.roi_lib['dense'] = np.array([])
+            self.roi_lib['dense_z_counts'] = collections.Counter()
+            self.roi_lib['total_z_counts'] = collections.Counter()
+            for i in range(self.z_bins):
+                self.roi_lib['dense_z_counts'][(self.intervals[i], self.intervals[i + 1])] = 0
+                self.roi_lib['total_z_counts'][(self.intervals[i], self.intervals[i + 1])] = 0
+            self.roi_lib['total_z_counts'].update(self.roi_lib['sparse_z_counts'])
+
             # first define the split setting of the data by dense ROI size and chunk frame number
             split_chunk_list = []
             row_sub_fov = int(np.ceil(h / dense_roi_size))
