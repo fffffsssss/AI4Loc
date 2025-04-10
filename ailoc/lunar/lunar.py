@@ -448,7 +448,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                                      self.z_bins+1)
         self.target_z_counts = collections.Counter()
         for i in range(self.z_bins):
-            self.target_z_counts[(self.intervals[i], self.intervals[i+1])] = 500
+            self.target_z_counts[(self.intervals[i], self.intervals[i+1])] = 1000
         self.roilib_sparse_first = True
         self.over_cut = 8
 
@@ -575,6 +575,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
             self.evaluation_recorder['loss_wake'][self._iter_train] = avg_loss_wake
             self.evaluation_recorder['loss_recon'][self._iter_train] = self.compute_roilibtest_loss(batch_size *
                                                                                                    self.context_size)
+            # self.evaluation_recorder['loss_recon'][self._iter_train] = np.nan
             self.evaluation_recorder['iter_time'][self._iter_train] = avg_iter_time
 
             if self._iter_train > 1000:
@@ -1471,13 +1472,13 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                                                                real_data_sampled.shape[-2],
                                                                real_data_sampled.shape[-1])
 
-                # consider the overcut
-                real_data_sampled = real_data_sampled[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                delta_map_sample = delta_map_sample[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                xyzph_map_sample = xyzph_map_sample[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                bg_sample = bg_sample[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                xyzph_pred = xyzph_pred[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                xyzph_sig_pred = xyzph_sig_pred[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # # consider the overcut
+                # real_data_sampled = real_data_sampled[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # delta_map_sample = delta_map_sample[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # xyzph_map_sample = xyzph_map_sample[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # bg_sample = bg_sample[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # xyzph_pred = xyzph_pred[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # xyzph_sig_pred = xyzph_sig_pred[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
 
                 real_data_sample_list.append(real_data_sampled)
                 delta_map_sample_list.append(delta_map_sample)
@@ -1507,13 +1508,13 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                                                                    xyzph_map_sample_list,
                                                                    bg_sample_list, )
 
-        # # consider the overcut
-        # real_data_sample_list = real_data_sample_list[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-        # reconstruction = reconstruction[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-        # delta_map_sample_list = delta_map_sample_list[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-        # xyzph_map_sample_list = xyzph_map_sample_list[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-        # xyzph_pred_list = xyzph_pred_list[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-        # xyzph_sig_pred_list = xyzph_sig_pred_list[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+        # consider the overcut
+        real_data_sample_list = real_data_sample_list[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+        reconstruction = reconstruction[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+        delta_map_sample_list = delta_map_sample_list[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+        xyzph_map_sample_list = xyzph_map_sample_list[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+        xyzph_pred_list = xyzph_pred_list[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+        xyzph_sig_pred_list = xyzph_sig_pred_list[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
 
         loss, elbo_record = self.wake_loss(real_data_sample_list,
                                            reconstruction,
@@ -1573,20 +1574,20 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                         real_data_tmp = real_data_tmp[:, (self.attn_length // 2): -(self.attn_length // 2)]
                         real_data_tmp = real_data_tmp.reshape(-1, real_data_tmp.shape[-2], real_data_tmp.shape[-1])
 
-                    # consider the overcut
-                    real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                    delta_map_sample = delta_map_sample[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                    xyzph_map_sample = xyzph_map_sample[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                    bg_sample = bg_sample[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                    # # consider the overcut
+                    # real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                    # delta_map_sample = delta_map_sample[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                    # xyzph_map_sample = xyzph_map_sample[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                    # bg_sample = bg_sample[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
 
                     reconstruction = self.data_simulator.reconstruct_posterior(self.learned_psf,
                                                                                delta_map_sample,
                                                                                xyzph_map_sample,
                                                                                bg_sample, )
 
-                    # # consider the overcut
-                    # real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                    # reconstruction = reconstruction[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                    # consider the overcut
+                    real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                    reconstruction = reconstruction[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
 
                     # nll_list.append(-ailoc.lunar.compute_log_p_x_given_h(data=real_data_tmp[:, None].expand(-1, 1, -1, -1),
                     #                                            model=reconstruction).mean().detach().cpu().numpy())
@@ -1649,20 +1650,20 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                     real_data_tmp = real_data_tmp[:, extra_length: -extra_length]
                     real_data_tmp = real_data_tmp.reshape(-1, real_data_tmp.shape[-2], real_data_tmp.shape[-1])
 
-                # consider the overcut
-                real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                delta_map_sample = delta_map_sample[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                xyzph_map_sample = xyzph_map_sample[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                bg_sample = bg_sample[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # # consider the overcut
+                # real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # delta_map_sample = delta_map_sample[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # xyzph_map_sample = xyzph_map_sample[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # bg_sample = bg_sample[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
 
                 reconstruction = self.data_simulator.reconstruct_posterior(self.learned_psf,
                                                                            delta_map_sample,
                                                                            xyzph_map_sample,
                                                                            bg_sample, )
 
-                # # consider the overcut
-                # real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                # reconstruction = reconstruction[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # consider the overcut
+                real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                reconstruction = reconstruction[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
 
                 recon_list.append(ailoc.common.cpu(reconstruction))
                 roi_plot_list.append([ailoc.common.cpu(real_data_tmp),tmp_z])
