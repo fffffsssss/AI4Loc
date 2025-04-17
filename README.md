@@ -7,9 +7,19 @@ This is the official implementation of the paper
 "Neural-physics adaptive reconstruction reveals 3D subcellular nanostructures over a large depth of field", 
 distributed as a part of the AI4Loc framework.
 
-<p align="center">
-    <img src="docs/NPCmovie1~2.gif" height='250'>
-    <img src="docs/Neuron_movie1~1.gif" height='250'>
+* whole-cell Nup96 NPC imaging with a 6 μm DMO Tetrapod PSF
+<p align="left">
+    <img src="docs/NPCmovie1~2.gif" width='500'>
+</p>
+
+* Neuron imaging at 50 μm depth in brain slice.
+<p align="left">
+    <img src="docs/Neuron_movie1~1.gif" width='500'>
+</p>
+
+* 20 μm thick whole-cell reconstruction with motor-PAINT and lattice light-sheet microscopy.
+<p align="left">
+    <img src="docs/LLS-motor-PAINT~1.gif" width='500'>
 </p>
 
 ## Installation
