@@ -156,10 +156,17 @@ def pair_localizations(prediction, ground_truth, frame_num=None, fov_xy_nm=None,
                 tp += 1
                 num_gt_remain -= 1
                 num_pred_remain -= 1
-                paired_list.append([i, gt_frame[row, 0], gt_frame[row, 1], gt_frame[row, 2], gt_frame[row, 3],
-                                    pred_frame[col, 0], pred_frame[col, 1], pred_frame[col, 2], pred_frame[col, 3],
-                                    pred_frame[col, 5], pred_frame[col, 6], pred_frame[col, 7]
-                                    ])
+                try:
+                    paired_list.append([i, gt_frame[row, 0], gt_frame[row, 1], gt_frame[row, 2], gt_frame[row, 3],
+                                        pred_frame[col, 0], pred_frame[col, 1], pred_frame[col, 2], pred_frame[col, 3],
+                                        pred_frame[col, 5], pred_frame[col, 6], pred_frame[col, 7]
+                                        ])
+                except:
+                    # deepstorm3d cannot predict photon number and uncertainties
+                    paired_list.append([i, gt_frame[row, 0], gt_frame[row, 1], gt_frame[row, 2], gt_frame[row, 3],
+                                        pred_frame[col, 0], pred_frame[col, 1], pred_frame[col, 2], pred_frame[col, 3],
+                                        # pred_frame[col, 5], pred_frame[col, 6], pred_frame[col, 7]
+                                        ])
                 dist_lat[row, :] = np.inf
                 dist_lat[:, col] = np.inf
                 dist_vol[row, :] = np.inf
@@ -376,6 +383,7 @@ def test_single_emitter_accuracy(loc_model,
         z_tmp = ailoc.common.cpu(z[i])
         ind = np.where(((z_tmp - z_step / 2) < paired_array[:, 3]) & (paired_array[:, 3] < (z_tmp + z_step / 2)))
         tmp = np.squeeze(paired_array[ind, :])
+        tmp = tmp[None] if len(tmp.shape) == 1 else tmp
         if tmp.shape[0]:
             rmse_xyz[0, i] = np.sqrt(np.mean(np.square(tmp[:, 1] - tmp[:, 5])))
             rmse_xyz[1, i] = np.sqrt(np.mean(np.square(tmp[:, 2] - tmp[:, 6])))
@@ -383,9 +391,13 @@ def test_single_emitter_accuracy(loc_model,
             std_xyz[0, i] = np.std(tmp[:, 5])
             std_xyz[1, i] = np.std(tmp[:, 6])
             std_xyz[2, i] = np.std(tmp[:, 7])
-            sigma_xyz[0, i] = np.mean(tmp[:, 9])
-            sigma_xyz[1, i] = np.mean(tmp[:, 10])
-            sigma_xyz[2, i] = np.mean(tmp[:, 11])
+            try:
+                # deepstorm3d cannot predict sigma xyz
+                sigma_xyz[0, i] = np.mean(tmp[:, 9])
+                sigma_xyz[1, i] = np.mean(tmp[:, 10])
+                sigma_xyz[2, i] = np.mean(tmp[:, 11])
+            except:
+                pass
             mean_xyz[0, i] = np.mean(tmp[:, 5])
             mean_xyz[1, i] = np.mean(tmp[:, 6])
             mean_xyz[2, i] = np.mean(tmp[:, 7])
@@ -413,35 +425,39 @@ def test_single_emitter_accuracy(loc_model,
         plt.ylabel('Accuracy (nm)')
         plt.show()
 
-        # print('plot the STD of network prediction vs CRLB')
-        # plt.figure(constrained_layout=True)
-        # plt.plot(ailoc.common.cpu(z), xyz_crlb_np[:, 0], 'b',
-        #          ailoc.common.cpu(z), xyz_crlb_np[:, 1], 'g',
-        #          ailoc.common.cpu(z), xyz_crlb_np[:, 2], 'r')
-        # plt.scatter(ailoc.common.cpu(z), std_xyz[0, :], c='b')
-        # plt.scatter(ailoc.common.cpu(z), std_xyz[1, :], c='g')
-        # plt.scatter(ailoc.common.cpu(z), std_xyz[2, :], c='r')
-        # plt.scatter(ailoc.common.cpu(z), sigma_xyz[0, :], c='b', marker='x')
-        # plt.scatter(ailoc.common.cpu(z), sigma_xyz[1, :], c='g', marker='x')
-        # plt.scatter(ailoc.common.cpu(z), sigma_xyz[2, :], c='r', marker='x')
-        # plt.legend(('$CRLB_x^{1/2}$', '$CRLB_y^{1/2}$', '$CRLB_z^{1/2}$', '$STD_x$', '$STD_y$', '$STD_z$',
-        #             '$\sigma_x$', '$\sigma_y$', '$\sigma_z$'),
-        #            ncol=3,
-        #            loc='upper center')
-        # plt.xlim([np.min(ailoc.common.cpu(z)), np.max(ailoc.common.cpu(z))])
-        # plt.ylim([0, np.max([np.max(xyz_crlb_np) * 1.5, np.max(std_xyz) + 5])])
-        # plt.xlabel('Z (nm)')
-        # plt.ylabel('Precision (nm)')
-        # plt.show()
-        #
-        # print('plot the distribution of prediction z')
-        # plt.figure(constrained_layout=True)
-        # plt.scatter(paired_array[:,3],paired_array[:,7],c='cyan',marker='o',alpha=1,linewidths=0.1,)
-        # plt.scatter(ailoc.common.cpu(z), mean_xyz[2, :], c='darkgreen', marker='x')
-        # plt.scatter(ailoc.common.cpu(z), ailoc.common.cpu(z), c='r', marker='x')
-        # plt.legend(('$z_{predict}$','$z_{predict,mean}$','$z_{gt}$'))
-        # plt.xlabel('Z (nm)')
-        # plt.ylabel('Z prediction (nm)')
-        # plt.show()
+        print('plot the STD of network prediction vs CRLB')
+        plt.figure(constrained_layout=True)
+        plt.plot(ailoc.common.cpu(z), xyz_crlb_np[:, 0], 'b',
+                 ailoc.common.cpu(z), xyz_crlb_np[:, 1], 'g',
+                 ailoc.common.cpu(z), xyz_crlb_np[:, 2], 'r')
+        plt.scatter(ailoc.common.cpu(z), std_xyz[0, :], c='b')
+        plt.scatter(ailoc.common.cpu(z), std_xyz[1, :], c='g')
+        plt.scatter(ailoc.common.cpu(z), std_xyz[2, :], c='r')
+        try:
+            # deepstorm3d cannot predict sigma xyz
+            plt.scatter(ailoc.common.cpu(z), sigma_xyz[0, :], c='b', marker='x')
+            plt.scatter(ailoc.common.cpu(z), sigma_xyz[1, :], c='g', marker='x')
+            plt.scatter(ailoc.common.cpu(z), sigma_xyz[2, :], c='r', marker='x')
+        except:
+            pass
+        plt.legend(('$CRLB_x^{1/2}$', '$CRLB_y^{1/2}$', '$CRLB_z^{1/2}$', '$STD_x$', '$STD_y$', '$STD_z$',
+                    '$\sigma_x$', '$\sigma_y$', '$\sigma_z$'),
+                   ncol=3,
+                   loc='upper center')
+        plt.xlim([np.min(ailoc.common.cpu(z)), np.max(ailoc.common.cpu(z))])
+        plt.ylim([0, np.max([np.max(xyz_crlb_np) * 1.5, np.max(std_xyz) + 5])])
+        plt.xlabel('Z (nm)')
+        plt.ylabel('Precision (nm)')
+        plt.show()
+
+        print('plot the distribution of prediction z')
+        plt.figure(constrained_layout=True)
+        plt.scatter(paired_array[:,3],paired_array[:,7],c='cyan',marker='o',alpha=1,linewidths=0.1,)
+        plt.scatter(ailoc.common.cpu(z), mean_xyz[2, :], c='darkgreen', marker='x')
+        plt.scatter(ailoc.common.cpu(z), ailoc.common.cpu(z), c='r', marker='x')
+        plt.legend(('$z_{predict}$','$z_{predict,mean}$','$z_{gt}$'))
+        plt.xlabel('Z (nm)')
+        plt.ylabel('Z prediction (nm)')
+        plt.show()
 
     return metric_dict, paired_array, np.concatenate([ailoc.common.cpu(z)[:, None], xyz_crlb_np], axis=1)
