@@ -301,6 +301,8 @@ class VectorPSFTorch(VectorPSF):
         self.npupil = psf_params['npupil']
         self.psf_size = psf_params['psf_size']
 
+        self.focus_norm = False
+
         self._pre_compute()
 
     @staticmethod
@@ -1014,12 +1016,13 @@ class VectorPSFTorch(VectorPSF):
 
             psfs_out[slice_tmp] += 1 / 3 * torch.sum((torch.abs(field_matrix[:, :])) ** 2, dim=(0, 1))
 
-        # intensity normalization by focus
-        psfs_out /= self.norm_intensity
-
-        # # normalize by themselves
-        # norm_factor = psfs_out.sum(dim=(-1, -2))
-        # psfs_out /= norm_factor[:, None, None]
+        if self.focus_norm:
+            # intensity normalization by focus
+            psfs_out /= self.norm_intensity
+        else:
+            # normalize by themselves
+            norm_factor = psfs_out.sum(dim=(-1, -2))
+            psfs_out /= norm_factor[:, None, None]
 
         # otf rescale
         if self.otf_rescale_xy[0] or self.otf_rescale_xy[1]:
@@ -1360,14 +1363,15 @@ class VectorPSFTorch(VectorPSF):
             field_matrix_z = torch.transpose(self.czt_parallel(inter_image_z, self.ax, self.bx, self.dx), -1, -2)
             psfs_ders[slice_tmp, :, :, 2] += 2 / 3 * torch.sum(torch.real(torch.conj(field_matrix) * field_matrix_z),
                                                                dim=(0, 1))
-        # normalize by focus intensity
-        psfs /= self.norm_intensity
-        psfs_ders /= self.norm_intensity
-
-        # # normalize by themselves
-        # norm_factor = psfs.sum(dim=(-1, -2))
-        # psfs /= norm_factor[:, None, None]
-        # psfs_ders /= norm_factor[:, None, None, None]
+        if self.focus_norm:
+            # normalize by focus intensity
+            psfs /= self.norm_intensity
+            psfs_ders /= self.norm_intensity
+        else:
+            # normalize by themselves
+            norm_factor = psfs.sum(dim=(-1, -2))
+            psfs /= norm_factor[:, None, None]
+            psfs_ders /= norm_factor[:, None, None, None]
 
         # otf rescale
         if self.otf_rescale_xy[0] or self.otf_rescale_xy[1]:
