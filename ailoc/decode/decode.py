@@ -7,19 +7,15 @@ import datetime
 
 import ailoc.common
 import ailoc.simulation
-import ailoc.deepstorm3d
+import ailoc.decode
 
 
-class DeepSTORM3D(ailoc.common.XXLoc):
+class DECODE(ailoc.common.XXLoc):
     """
-    DeepSTORM3D class, the core code is adopted from the DeepSTORM3D project
-    (Nehme, E. et al. DeepSTORM3D: dense 3D localization microscopy and PSF design by deep learning.
-    Nat Methods 17, 734–740 (2020)).
+    DECODE class, transplant from the DECODE (1. Speiser, A. et al. Deep learning enables fast and dense single-molecule localization with high accuracy. Nat Methods 18, 1082–1090 (2021).).
     """
 
-    def __init__(self, psf_params_dict, camera_params_dict, sampler_params_dict):
-        self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-
+    def __init__(self, psf_params_dict, camera_params_dict, sampler_params_dict, attn_length=3):
         self.dict_psf_params, self.dict_camera_params, self.dict_sampler_params = \
             psf_params_dict, camera_params_dict, sampler_params_dict
 
@@ -27,51 +23,26 @@ class DeepSTORM3D(ailoc.common.XXLoc):
         self.scale_ph_offset = np.mean(self.dict_sampler_params['bg_range'])
         self.scale_ph_factor = self.dict_sampler_params['photon_range'][1]/50
 
-        self.local_context = False  # DeepSTORM3D cannot process temporal context
+        self.local_context = self.dict_sampler_params['local_context']
         # attn_length only useful when local_context=True, should be odd,
         # using the same number of frames before and after the target frame
-        self.attn_length = 1
+        self.attn_length = attn_length
         assert self.attn_length % 2 == 1, 'attn_length should be odd'
         # add frames at the beginning and end to provide context
         self.context_size = sampler_params_dict['context_size'] + 2*(self.attn_length//2) if self.local_context else sampler_params_dict['context_size']
-
-        # upsampling factor for xy
-        self.upsampling_factor = 4  # the xy resolution of the output is 1/4 pixel size (nm)
-        #  discretization in z, # in [voxels] spanning the axial range (zmax - zmin)
-        self.discret_z = 120  # for astigmatism (+-700 nm) the z size is 11.67 nm and for Tetrapod (+-3 μm) is 50 nm
-        # scaling factor for the loss function to balance the vacant and occupied voxels
-        self.scaling_factor = 800.0
-
-        self._network = ailoc.deepstorm3d.LocalizationCNN(self.local_context,
-                                                          self.attn_length,
-                                                          self.context_size,
-                                                          self.discret_z,
-                                                          self.scaling_factor)
-        self.network.to(self._device)
-        self.network.get_parameter_number()
+        self._network = ailoc.decode.DECODENet(self.local_context,
+                                                 self.attn_length,
+                                                 self.context_size,)
 
         self.evaluation_dataset = {}
         self.evaluation_recorder = self._init_recorder()
 
         self._iter_train = 0
 
-        self.optimizer = torch.optim.Adam(self.network.parameters(), lr=5e-4)
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer,
-                                                                    mode='min',
-                                                                    factor=0.1,
-                                                                    patience=2,
-                                                                    verbose=True,
-                                                                    min_lr=1e-6)
+        self._device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
-        self.postprocessing_module = ailoc.deepstorm3d.Postprocess(device=self._device,
-                                                                   pixel_size_xy=np.array(self.dict_psf_params['pixel_size_xy'])/self.upsampling_factor,
-                                                                   pixel_size_z=2/self.discret_z*self.data_simulator.mol_sampler.z_scale,
-                                                                   z_min=-self.data_simulator.mol_sampler.z_scale,
-                                                                   thresh=20,
-                                                                   radius=6,
-                                                                   )
-
-        self.loss_func = ailoc.deepstorm3d.KDE_loss3D(self.scaling_factor, self._device)
+        self.optimizer = torch.optim.AdamW(self.network.parameters(), lr=6e-4, weight_decay=0.1)
+        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=1000, gamma=0.9)
 
     @staticmethod
     def _init_recorder():
@@ -100,11 +71,16 @@ class DeepSTORM3D(ailoc.common.XXLoc):
     def data_simulator(self):
         return self._data_simulator
 
-    def compute_loss(self, pred, target):
+    def compute_loss(self, p_pred, xyzph_pred, xyzph_sig_pred, bg_pred, p_gt, xyzph_array_gt, mask_array_gt, bg_gt):
         """
         Loss function.
         """
-        total_loss = self.loss_func(pred, target)
+
+        count_loss = torch.mean(ailoc.decode.count_loss(p_pred, p_gt))
+        loc_loss = torch.mean(ailoc.decode.loc_loss(p_pred, xyzph_pred, xyzph_sig_pred, xyzph_array_gt, mask_array_gt))
+        bg_loss = torch.mean(ailoc.decode.bg_loss(bg_pred, bg_gt))
+
+        total_loss = count_loss + loc_loss + bg_loss
 
         return total_loss
 
@@ -120,7 +96,7 @@ class DeepSTORM3D(ailoc.common.XXLoc):
             file_name (str): the name of the file to save the network
         """
 
-        file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'DeepSTORM3D.pt' if file_name is None else file_name
+        file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'DECODE.pt' if file_name is None else file_name
 
         print('Start training...')
 
@@ -136,112 +112,51 @@ class DeepSTORM3D(ailoc.common.XXLoc):
                     self.data_simulator.sample_training_data(batch_size=batch_size,
                                                              context_size=self.context_size,
                                                              iter_train=self._iter_train)
-                grid_gt = self.transform_target(p_map_gt, xyzph_array_gt, mask_array_gt)
-                pred_volume = self.inference(train_data, self.data_simulator.camera)
-
-                loss = self.compute_loss(pred_volume, grid_gt)
+                p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt = self.unfold_target(p_map_gt,
+                                                                                        xyzph_array_gt,
+                                                                                        mask_array_gt,
+                                                                                        bg_map_gt)
+                p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(train_data,
+                                                                             self.data_simulator.camera)
+                loss = self.compute_loss(p_pred, xyzph_pred, xyzph_sig_pred, bg_pred,
+                                         p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt)
                 self.optimizer.zero_grad()
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=0.03, norm_type=2)
                 self.optimizer.step()
-
+                self.scheduler.step()
                 self._iter_train += 1
 
                 total_loss.append(ailoc.common.cpu(loss))
-
-                # print(f'iter: {self._iter_train}, loss: {ailoc.common.cpu(loss)}, {pred_volume.max()}')
 
             avg_iter_time = 1000 * (time.time() - t0) / eval_freq
             avg_loss = np.mean(total_loss)
             self.evaluation_recorder['loss'][self._iter_train] = avg_loss
             self.evaluation_recorder['iter_time'][self._iter_train] = avg_iter_time
 
-            # reduce learning rate if loss stagnates
-            self.scheduler.step(avg_loss)
-
             if self._iter_train > 1000:
                 print('-' * 200)
-                self.online_evaluate(batch_size=batch_size*self.context_size)
+                self.online_evaluate(batch_size=batch_size)
 
             self.print_recorder(max_iterations)
             self.save(file_name)
 
         print('training finished!')
 
-        self.determine_post_process_param(batch_size=batch_size*self.context_size)
-        self.save(file_name)
-
-    def transform_target(self, p_map_gt, xyzph_array_gt, mask_array_gt):
-        '''
-        Transform the target data to the format that can be used for DeepSTORM3D loss computation.
-        '''
-
-        n, c, h, w = p_map_gt.shape
-        xyzph_array_gt = xyzph_array_gt.reshape(n*c, -1, 4)
-        mask_array_gt = mask_array_gt.reshape(n*c, -1)
-
-        # extract xyz list for each image
-        xyz_list_np = []
-        for i in range(n*c):
-            xyz_tmp = []
-            for j in range(mask_array_gt.shape[1]):
-                if mask_array_gt[i,j] == 0:
-                    continue
-                mol_xyz_tmp = xyzph_array_gt[i, j][:-1]
-                xyz_tmp.append(mol_xyz_tmp)
-            xyz_list_np.append(ailoc.common.cpu(torch.stack(xyz_tmp))) if xyz_tmp else xyz_list_np.append(np.zeros((0, 3)))
-
-        # calculate upsampling factor
-        upsampling_factor = self.upsampling_factor
-
-        # discrete axial size
-        pixel_size_axial = 2/self.discret_z
-
-        boolean_grid_list = []
-        for i in range(n*c):
-            xyz_np = xyz_list_np[i][None]
-            # if no localization, add a zero tensor
-            if xyz_np.shape[1] == 0:
-                boolean_grid_list.append(torch.zeros((self.discret_z, int(h * upsampling_factor), int(w * upsampling_factor))))
-                continue
-
-            # shift the z axis back to 0
-            zshift = xyz_np[:, :, 2] - (-1)
-            # zshift = 1 - xyz_np[:, :, 2]
-
-            # number of particles
-            batch_size, num_particles = zshift.shape
-
-            # project xyz locations on the grid and shift xy to the upper left corner
-            xg = (np.floor(xyz_np[:, :, 0] / (1/self.upsampling_factor) ) ).astype('int')
-            yg = (np.floor(xyz_np[:, :, 1] / (1/self.upsampling_factor) ) ).astype('int')
-            zg = (np.floor(zshift / pixel_size_axial)).astype('int')
-
-            # indices for sparse tensor
-            indX, indY, indZ = (xg.flatten('F')).tolist(), (yg.flatten('F')).tolist(), (zg.flatten('F')).tolist()
-
-            # update dimensions
-            new_h, new_w = int(h * upsampling_factor), int(w * upsampling_factor)
-
-            # if sampling a batch add a sample index
-            if batch_size > 1:
-                indS = (np.kron(np.ones(num_particles), np.arange(0, batch_size, 1)).astype('int')).tolist()
-                ibool = torch.LongTensor([indS, indZ, indY, indX])
-            else:
-                ibool = torch.LongTensor([indZ, indY, indX])
-
-            # spikes for sparse tensor
-            vals = torch.ones(batch_size * num_particles)
-
-            # resulting 3D boolean tensor
-            if batch_size > 1:
-                boolean_grid = torch.sparse_coo_tensor(ibool, vals, torch.Size([batch_size, self.discret_z, new_h, new_w]),
-                                                       dtype=torch.float32).to_dense()
-            else:
-                boolean_grid = torch.sparse_coo_tensor(ibool, vals, torch.Size([self.discret_z, new_h, new_w]), dtype=torch.float32).to_dense()
-
-            boolean_grid_list.append(boolean_grid)
-
-        return ailoc.common.gpu(torch.stack(boolean_grid_list))
+    def unfold_target(self, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt):
+        if self.local_context:
+            extra_length = self.attn_length // 2
+            if extra_length > 0:
+                p_map_gt = p_map_gt[:, extra_length:-extra_length]
+                xyzph_array_gt = xyzph_array_gt[:, extra_length:-extra_length]
+                mask_array_gt = mask_array_gt[:, extra_length:-extra_length]
+                bg_map_gt = bg_map_gt[:, extra_length:-extra_length]
+        else:
+            pass
+        return p_map_gt.flatten(start_dim=0, end_dim=1), \
+               xyzph_array_gt.flatten(start_dim=0, end_dim=1), \
+               mask_array_gt.flatten(start_dim=0, end_dim=1), \
+               bg_map_gt.flatten(start_dim=0, end_dim=1)
 
     def inference(self, data, camera):
         """
@@ -254,15 +169,10 @@ class DeepSTORM3D(ailoc.common.XXLoc):
         """
 
         data_photon = camera.backward(data)
-        # data_scaled = (data_photon - self.scale_ph_offset)/self.scale_ph_factor
-        # pred_volume = self.network(data_scaled)
+        data_scaled = (data_photon - self.scale_ph_offset)/self.scale_ph_factor
+        p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.network(data_scaled)
 
-        data_scaled = ((data_photon - data_photon.min(-1, True)[0].min(-2, True)[0]) /
-                       (data_photon.max(-1, True)[0].max(-2, True)[0] -
-                        data_photon.min(-1, True)[0].min(-2, True)[0]))
-        pred_volume = self.network(data_scaled)
-
-        return pred_volume
+        return p_pred, xyzph_pred, xyzph_sig_pred, bg_pred
 
     def post_process(self, p_pred, xyzph_pred, xyzph_sig_pred, bg_pred, return_infer_map=False):
         """
@@ -271,36 +181,6 @@ class DeepSTORM3D(ailoc.common.XXLoc):
         photon uncertainty, x_offset, y_offset].
         """
 
-        # # old version, slower
-        # inference_dict = {'prob': [], 'x_offset': [], 'y_offset': [], 'z_offset': [], 'photon': [],
-        #                   'bg': [], 'x_sig': [], 'y_sig': [], 'z_sig': [], 'photon_sig': []}
-        #
-        # inference_dict['prob'].append(ailoc.common.cpu(p_pred))
-        # inference_dict['x_offset'].append(ailoc.common.cpu(xyzph_pred[:, 0, :, :]))
-        # inference_dict['y_offset'].append(ailoc.common.cpu(xyzph_pred[:, 1, :, :]))
-        # inference_dict['z_offset'].append(ailoc.common.cpu(xyzph_pred[:, 2, :, :]))
-        # inference_dict['photon'].append(ailoc.common.cpu(xyzph_pred[:, 3, :, :]))
-        # inference_dict['x_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 0, :, :]))
-        # inference_dict['y_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 1, :, :]))
-        # inference_dict['z_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 2, :, :]))
-        # inference_dict['photon_sig'].append(ailoc.common.cpu(xyzph_sig_pred[:, 3, :, :]))
-        # inference_dict['bg'].append(ailoc.common.cpu(bg_pred))
-        #
-        # for k in inference_dict.keys():
-        #     inference_dict[k] = np.vstack(inference_dict[k])
-        #
-        # inference_dict['prob_sampled'] = None
-        # inference_dict['bg_sampled'] = None
-        #
-        # molecule_array, inference_dict = ailoc.common.gmm_to_localizations_old(inference_dict=inference_dict,
-        #                                                                    thre_integrated=0.7,
-        #                                                                    pixel_size_xy=self.data_simulator.psf_model.pixel_size_xy,
-        #                                                                    z_scale=self.data_simulator.mol_sampler.z_scale,
-        #                                                                    photon_scale=self.data_simulator.mol_sampler.photon_scale,
-        #                                                                    bg_scale=self.data_simulator.mol_sampler.bg_scale,
-        #                                                                    batch_size=p_pred.shape[0])
-
-        # new version, faster
         molecule_array, inference_dict = ailoc.common.gmm_to_localizations_v3(p_pred=p_pred,
                                                                            xyzph_pred=xyzph_pred,
                                                                            xyzph_sig_pred=xyzph_sig_pred,
@@ -315,102 +195,35 @@ class DeepSTORM3D(ailoc.common.XXLoc):
 
         return molecule_array, inference_dict
 
-    def determine_post_process_param(self, batch_size):
-        """
-        Determine the best postprocess parameters on evaluation dataset.
-        """
-        print('find optimal combinations of postprocessing parameters for inference')
-
-        efficiency_record = []
-
-        thresh_to_test = [5, 10, 20, 30, 40, 80]
-        radius_to_test = [2, 4, 5, 6, 8, 10]
-
-        for thresh in thresh_to_test:
-            for radius in radius_to_test:
-                self.postprocessing_module = ailoc.deepstorm3d.Postprocess(device=self._device,
-                                                                           pixel_size_xy=np.array(self.dict_psf_params[
-                                                                                                      'pixel_size_xy']) / self.upsampling_factor,
-                                                                           pixel_size_z=2/self.discret_z*self.data_simulator.mol_sampler.z_scale,
-                                                                           z_min=-self.data_simulator.mol_sampler.z_scale,
-                                                                           thresh=thresh,
-                                                                           radius=radius,
-                                                                           )
-                self.online_evaluate(batch_size=batch_size)
-                efficiency_record.append([thresh,
-                                          radius,
-                                          self.evaluation_recorder['eff_3d'][self._iter_train],
-                                          self.evaluation_recorder['rmse_lat'][self._iter_train],
-                                          self.evaluation_recorder['rmse_ax'][self._iter_train],
-                                          self.evaluation_recorder['recall'][self._iter_train],
-                                          self.evaluation_recorder['precision'][self._iter_train],
-                                          self.evaluation_recorder['jaccard'][self._iter_train],
-                                          ])
-
-        print(f'below are: threshold; radius; efficiency 3d; lateral RMSE; axial RMSE; Recall; Precision; Jaccard')
-        for record in efficiency_record:
-            print(record)
-
-        # choose the threshold and radius with the best efficiency
-        best_record = np.array(efficiency_record)[np.argmax(np.array(efficiency_record)[:, 2])]
-        thresh_best = best_record[0]
-        radius_best = best_record[1]
-        print(f'optimal postprocess parameters: threshold={thresh_best}, radius={radius_best}')
-        self.postprocessing_module = ailoc.deepstorm3d.Postprocess(device=self._device,
-                                                                   pixel_size_xy=np.array(self.dict_psf_params[
-                                                                                              'pixel_size_xy']) / self.upsampling_factor,
-                                                                   pixel_size_z=2/self.discret_z*self.data_simulator.mol_sampler.z_scale,
-                                                                   z_min=-self.data_simulator.mol_sampler.z_scale,
-                                                                   thresh=int(thresh_best),
-                                                                   radius=int(radius_best),
-                                                                   )
-
     def analyze(self, data, camera, sub_fov_xy=None, return_infer_map=False):
         """
-        the official implementation of DeepSTORM3D can only postprocess 1 frame at a time,
-        so we need to traverse the batch data and postprocess each frame separately.
+        Wrap the inference and post_process function, receive a batch of data and return the molecule list.
+
+        Args:
+            data (torch.Tensor): a batch of data to be analyzed.
+            camera (ailoc.simulation.Camera): camera object used to transform the data to photon unit.
+            sub_fov_xy (tuple of int): (x_start, x_end, y_start, y_end), start from 0, in pixel unit,
+                the FOV indicator for these images
+            return_infer_map (bool): whether to return the prediction maps, which may occupy some memory
+                and take more time during data analysis
+
+        Returns:
+            (np.ndarray, dict): molecule array, [frame, x, y, z, photon, integrated prob, x uncertainty,
+                y uncertainty, z uncertainty, photon uncertainty...], the xy position are relative
+                to the current image size, may need to be translated outside this function, the second output
+                is a dict that contains the inferred multichannel maps from the network.
         """
 
-        h, w = data.shape[-2:]
-        data = data.reshape(-1, 1, h, w)
         self.network.eval()
         with torch.no_grad():
-            mol_list = []
-            for i in range(data.shape[0]):
-                data_tmp = data[i:i + 1]
-                pred_volume = self.inference(data_tmp, camera)
-                xyz_rec, conf_rec = self.postprocessing_module(pred_volume)
-                if xyz_rec is not None:
-                    frame_idx = np.full((xyz_rec.shape[0], 1), i+1)
-                    mol_list_tmp = np.column_stack((frame_idx, xyz_rec, conf_rec))
-                    mol_list.append(mol_list_tmp)
+            p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(data, camera)
+            molecule_array, inference_dict = self.post_process(p_pred,
+                                                               xyzph_pred,
+                                                               xyzph_sig_pred,
+                                                               bg_pred,
+                                                               return_infer_map)
 
-        if len(mol_list) == 0:
-            mol_array = np.zeros((0, 5))
-        else:
-            mol_array = np.vstack(mol_list)
-
-        return mol_array, None
-
-        # h, w = data.shape[-2:]
-        # data = data.reshape(-1, 1, h, w)
-        # self.network.eval()
-        # with torch.no_grad():
-        #     mol_list = []
-        #     pred_volume = self.inference(data, camera)
-        #     for i in range(pred_volume.shape[0]):
-        #         xyz_rec, conf_rec = self.postprocessing_module(pred_volume[i:i+1])
-        #         if xyz_rec is not None:
-        #             frame_idx = np.full((xyz_rec.shape[0], 1), i+1)
-        #             mol_list_tmp = np.column_stack((frame_idx, xyz_rec, conf_rec))
-        #             mol_list.append(mol_list_tmp)
-        #
-        # if len(mol_list) == 0:
-        #     mol_array = np.zeros((0, 5))
-        # else:
-        #     mol_array = np.vstack(mol_list)
-        #
-        # return mol_array, None
+        return molecule_array, inference_dict
 
     def online_evaluate(self, batch_size):
         """
@@ -431,7 +244,7 @@ class DeepSTORM3D(ailoc.common.XXLoc):
                         self.data_simulator.camera,
                         return_infer_map=True)
 
-                n_per_img.append(np.nan)  # no need for this value in DeepSTORM3D
+                n_per_img.append(inference_dict_tmp['prob'].sum((-2, -1)).mean())
 
                 if len(molecule_array_tmp) > 0:
                     molecule_array_tmp[:, 0] += i * batch_size * (self.context_size-2*(self.attn_length//2) if self.local_context else self.context_size)
@@ -488,12 +301,12 @@ class DeepSTORM3D(ailoc.common.XXLoc):
 
     def save(self, file_name):
         """
-        Save the whole DeepLoc instance, including the network, optimizer, recorder, etc.
+        Save the whole DECODE instance, including the network, optimizer, recorder, etc.
         """
 
         with open(file_name, 'wb') as f:
             torch.save(self, f)
-        print(f"DeepSTORM3D instance saved to {file_name}")
+        print(f"DECODE instance saved to {file_name}")
 
     def check_training_psf(self, num_z_step=21):
         """
