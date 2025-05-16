@@ -1050,6 +1050,9 @@ class Lunar_SyncLearning(Lunar_LocLearning):
             new_chunk_z_counts[interval] = 0
         current_z_counts = collections.Counter() + current_counts
 
+        if len(chunk_z_counts_array) == 0:
+            return new_chunk_list, new_chunk_z_counts, current_z_counts
+
         while True:
             # calculate the current state and the score
             current_z_array = np.array([current_z_counts[interval] for interval in target_counts])
