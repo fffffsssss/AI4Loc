@@ -118,6 +118,12 @@ def write_csv_array(input_array, filename, write_mode='write localizations'):
                                 'ynm_rescale'])
             for row in input_array:
                 csvwriter.writerow([repr(element) for element in row])
+    elif write_mode == 'write simulated ground truth':
+        with open(filename, 'w', newline='') as csvfile:
+            csvwriter = csv.writer(csvfile, delimiter=',', quoting=csv.QUOTE_MINIMAL)
+            csvwriter.writerow(['frame', 'xnm', 'ynm', 'znm', 'photon'])
+            for row in input_array:
+                csvwriter.writerow([repr(element) for element in row])
     else:
         raise ValueError('write_mode must be "write paired localizations", "write localizations", '
                          '"append localizations", or "write rescaled localizations"')
