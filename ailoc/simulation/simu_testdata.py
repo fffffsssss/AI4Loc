@@ -303,7 +303,8 @@ class TestDataSimulator:
         """simulate each frame"""
         for frame in range(1, frame_num+1):
             mol_this_frame = ailoc.common.find_molecules(mol_list, frame)
-
+            if len(mol_this_frame) == 0:
+                continue
             mol_x = mol_this_frame[:, 1]
             mol_y = mol_this_frame[:, 2]
             mol_z = mol_this_frame[:, 3]
