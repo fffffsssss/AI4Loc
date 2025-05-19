@@ -685,7 +685,7 @@ def plot_psf_stack(psfs, z_pos, cmap='gray'):
 
     fig, ax_arr = plt.subplots(int(np.ceil(num_z / 7)), 7,
                                figsize=(7 * 2, 2 * int(np.ceil(num_z / 7))),
-                               constrained_layout=True)
+                               constrained_layout=True, dpi=300)
     ax = []
     plts = []
     for i in ax_arr:
@@ -710,7 +710,7 @@ def plot_image_stack(stack_a,cmap='magma'):
 
     fig, ax_arr = plt.subplots(nrows, ncols,
                                figsize=(ncols * 2, 2 * nrows),
-                               constrained_layout=True)
+                               constrained_layout=True,dpi=300)
     ax = []
     plts = []
     for i in ax_arr:
@@ -733,7 +733,7 @@ def plot_image_stack_difference(stack_a,stack_b,cmap='magma'):
     n_img = stack_a.shape[0]
     n_row = min(int(np.ceil(n_img/1)),8)
     # plot the data, model, error
-    figure, ax_arr = plt.subplots(n_row, 1, constrained_layout=True, figsize=(6, 2*n_row))
+    figure, ax_arr = plt.subplots(n_row, 1, constrained_layout=True, figsize=(6, 2*n_row), dpi=300)
     ax = []
     plts = []
     for i in ax_arr:
@@ -754,7 +754,7 @@ def plot_image_stack_difference(stack_a,stack_b,cmap='magma'):
 
 
 def plot_image(image, cmap='turbo'):
-    plt.figure(figsize=(10, 10))
+    plt.figure(figsize=(10, 10),dpi=300)
     plt.imshow(ailoc.common.cpu(image), cmap=cmap)
     plt.colorbar()
     plt.show()
