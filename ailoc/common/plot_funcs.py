@@ -222,8 +222,8 @@ def plot_start_end_psf(model):
     phase_start_end_diff = np.concatenate([phase_start, phase_end, phase_end - phase_start], 1)
 
     # Create a single figure with GridSpec
-    fig = plt.figure(figsize=(12, 14))
-    gs = GridSpec(3, 9, height_ratios=[4, 4, 8])
+    fig = plt.figure(figsize=(12, 20),)
+    gs = GridSpec(4, 9, height_ratios=[4, 4, 8, 6])
 
     # PSF plots (first row, 1x9 grid)
     for i in range(nz):
@@ -255,77 +255,29 @@ def plot_start_end_psf(model):
                              width=width, color='olive', edgecolor='k')
     ax_zernike.tick_params(axis='y', labelsize=12)
 
-    # Define autolabel function (unchanged, commented out as in original)
-    # def autolabel(rects):
-    #     y_axis_length = rects.datavalues.max() - rects.datavalues.min()
-    #     for rect in rects:
-    #         height = rect.get_height()
-    #         plt.text(rect.get_x() + 0.1, y_axis_length / 100 + height if height > 0 else height - y_axis_length / 40,
-    #                  '%.1f' % height,
-    #                  fontsize=10 - 2)
-    #
-    # autolabel(bar_start)
-    # autolabel(bar_end)
     ax_zernike.tick_params(axis='both', direction='out')
     ax_zernike.set_ylabel('Zernike coefficients (nm)', fontsize=16)
     ax_zernike.set_xlabel('Zernike modes', fontsize=16)
     ax_zernike.legend(['start', 'end'], fontsize=16)
 
+    # zernike coefficients learning history plot
+    zernike_history = []
+    for (iter, zernike) in model.evaluation_recorder['learned_psf_zernike'].items():
+        zernike_history.append(ailoc.common.cpu(zernike))
+    zernike_coeffs_over_time = np.array(zernike_history)
+    iterations_zer = (np.array(list(range(0, len(zernike_history)))) + 1) * 100
+
+    ax_zernike_hist = fig.add_subplot(gs[3, :])
+    for j in range(zernike_coeffs_over_time.shape[1]):
+        ax_zernike_hist.plot(iterations_zer, zernike_coeffs_over_time[:, j],
+                 label=f'Zernike Coeff {j + 1}')  # Zernike index starts from 0 or 1 depending on convention
+    plt.xlabel('Iterations', fontsize=16)
+    plt.ylabel('Zernike coefficients (nm)', fontsize=16)
+    plt.grid(True)
+
     # Adjust layout, save, and display
     fig.tight_layout()
     plt.show()
-
-    # # plot psfs
-    # fig, ax = plt.subplots(1, 9, constrained_layout=True, figsize=(12, 3))
-    # for i in range(nz):
-    #     ax_tmp = ax[i]
-    #     ax_tmp.imshow(psf_start_end_diff[i, :, :], cmap='turbo')
-    #     ax_tmp.set_title(f'{ailoc.common.cpu(z[i])} nm')
-    # fig.suptitle(f'PSF start;end;difference')
-    # plt.show()
-    #
-    # # plot pupils
-    # fig, ax = plt.subplots(1, 1, constrained_layout=True, figsize=(9, 3))
-    # im = plt.imshow(phase_start_end_diff, cmap='turbo')
-    # fig.colorbar(im, ax=ax, fraction=0.05)
-    # ax.set_title('Pupil start;end;difference')
-    # plt.show()
-    #
-    # # plot the zernike coefficients
-    # width = 0.35
-    # zernike_mode = ailoc.common.cpu(model.learned_psf.zernike_mode)
-    # figure, ax = plt.subplots(1, 1, constrained_layout=True, figsize=(10, 8))
-    # aberrations_names = []
-    # for i in range(zernike_mode.shape[0]):
-    #     aberrations_names.append(
-    #         f"{zernike_mode[i, 0]:.0f}, {zernike_mode[i, 1]:.0f}")
-    # plt.xticks(np.arange(zernike_mode.shape[0]),
-    #            labels=aberrations_names, rotation=30, fontsize=12)
-    # bar_start = ax.bar(np.arange(zernike_mode.shape[0])-width/2, ailoc.common.cpu(zernike_coef_start),
-    #                  width=width, color='orange',
-    #                  edgecolor='k')
-    # bar_end = ax.bar(np.arange(zernike_mode.shape[0])+width/2, ailoc.common.cpu(zernike_coef_end),
-    #                  width=width, color='olive',
-    #                  edgecolor='k')
-    # plt.yticks(fontsize=12)
-    #
-    # def autolabel(rects):
-    #     y_axis_length = rects.datavalues.max() - rects.datavalues.min()
-    #     for rect in rects:
-    #         height = rect.get_height()
-    #         plt.text(rect.get_x() + 0.1, y_axis_length / 100 + height if height > 0 else height - y_axis_length / 40,
-    #                  '%.1f' % height,
-    #                  fontsize=10 - 2)
-    #
-    # # autolabel(bar_start)
-    # # autolabel(bar_end)
-    # ax.tick_params(axis='both',
-    #                direction='out'
-    #                )
-    # ax.set_ylabel('Zernike coefficients (nm)', fontsize=16)
-    # ax.set_xlabel('Zernike modes', fontsize=16)
-    # plt.legend(['start', 'end'], fontsize=16)
-    # plt.show()
 
 
 def plot_single_frame_inference(inference_dict, loc_model):
@@ -335,7 +287,7 @@ def plot_single_frame_inference(inference_dict, loc_model):
         inference_dict: the inference dict contain network output and the raw data
     """
 
-    fig1, ax_arr = plt.subplots(4, 3, figsize=(9, 12), constrained_layout=True)
+    fig1, ax_arr = plt.subplots(4, 3, figsize=(9, 12), constrained_layout=True, dpi=300)
 
     ax = []
     datas = []
@@ -382,7 +334,7 @@ def plot_single_frame_inference(inference_dict, loc_model):
         ailoc.common.gpu(inference_dict['bg_sampled']/loc_model.data_simulator.mol_sampler.bg_scale)
     )
     reconstruction = ailoc.common.cpu(loc_model.data_simulator.camera.forward_wo_noise(reconstruction))[0,0]
-    fig2, ax2 = plt.subplots(2, 2, figsize=(12, 12), constrained_layout=True)
+    fig2, ax2 = plt.subplots(2, 2, figsize=(12, 12), constrained_layout=True, dpi=300)
     cmap = 'gray'
     plt.colorbar(mappable=ax2[0,0].imshow(datas[0], cmap=cmap), ax=ax2[0,0], fraction=0.046, pad=0.04)
     for x, y in zip(inference_dict['prob_sampled'].nonzero()[1], inference_dict['prob_sampled'].nonzero()[0]):
@@ -736,12 +688,15 @@ def plot_image_stack_difference(stack_a,stack_b,cmap='magma'):
     figure, ax_arr = plt.subplots(n_row, 1, constrained_layout=True, figsize=(6, 2*n_row), dpi=300)
     ax = []
     plts = []
-    for i in ax_arr:
-        try:
-            for j in i:
-                ax.append(j)
-        except:
-            ax.append(i)
+    if n_row == 1:
+        ax.append(ax_arr)
+    else:
+        for i in ax_arr:
+            try:
+                for j in i:
+                    ax.append(j)
+            except:
+                ax.append(i)
 
     for i in range(n_row):
         a_tmp = np.squeeze(stack_a[i])

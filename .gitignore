@@ -6,6 +6,7 @@ __pycache__
 /datasets/*
 !datasets/placeholder.txt
 /results/*
+/simu_test_results/*
 !results/placeholder.txt
 /ailoc/liteloc
 /convention.txt

@@ -413,7 +413,8 @@ class TestDataSimulator:
                                    n_col,
                                    figsize=(n_col * fig_base_size,
                                             n_row * fig_base_size),
-                                   constrained_layout=True)
+                                   constrained_layout=True,
+                                   dpi=300)
         ax = []
         plts = []
         try:
@@ -441,6 +442,26 @@ class TestDataSimulator:
             ax[ax_num].set_xlabel('X (pixel)')
             ax[ax_num].set_ylabel('Y (pixel)')
             # ax[ax_num].legend(loc='upper right', fontsize=10)
+        plt.show()
+
+    def check_psf(self, num_z_step=21):
+        """
+        Check the PSF.
+        """
+
+        print(f"checking PSF...")
+        x = ailoc.common.gpu(torch.zeros(num_z_step))
+        y = ailoc.common.gpu(torch.zeros(num_z_step))
+        z = ailoc.common.gpu(torch.linspace(*self.dict_emitter_params['z_range'], num_z_step))
+        photons = ailoc.common.gpu(torch.ones(num_z_step))
+
+        psf = ailoc.common.cpu(self.psf_model.simulate(x, y, z, photons))
+
+        plt.figure(constrained_layout=True)
+        for j in range(num_z_step):
+            plt.subplot(int(np.ceil(num_z_step/7)), 7, j + 1)
+            plt.imshow(psf[j], cmap='gray')
+            plt.title(f"{ailoc.common.cpu(z[j]):.0f} nm")
         plt.show()
 
     def eval_loc_model(self,):
