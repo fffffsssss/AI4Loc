@@ -218,8 +218,11 @@ def get_gain_bg_empirical(images,
         min_idx = np.where(images_photon.mean(0) < np.quantile(images_photon.mean(0), 0.005))
 
         # split the images into 1000 frames as time chunks
-        images_electron = camera_calib.qe * images_photon.reshape(-1, 1000, h, w) if (n % 1000 == 0) \
-            else (images_photon[:-(n % 1000)].reshape(-1, 1000, h, w))
+        if n >= 1000:
+            images_electron = camera_calib.qe * (images_photon.reshape(-1, 1000, h, w) if (n % 1000 == 0)
+                                                 else (images_photon[:-(n % 1000)].reshape(-1, 1000, h, w)))
+        else:
+            images_electron = camera_calib.qe * images_photon.reshape(1, -1, h, w)
 
         pix_vals = images_electron[:, :, min_idx[0], min_idx[1]]
 
@@ -255,9 +258,12 @@ def get_gain_bg_empirical(images,
 
     # get the region of interest that has both background and signals
     sample_mask = np.where(images_photon.mean(0) > np.percentile(images_photon.mean(0), percentile))
-    # average the images for every 1000 frames
-    images_avg = images_photon.reshape(-1, 1000, h, w).mean(1) if (n % 1000 == 0) \
-        else images_photon[:-(n % 1000)].reshape(-1, 1000, h, w).mean(1)
+    if n >= 1000:
+        # average the images for every 1000 frames
+        images_avg = images_photon.reshape(-1, 1000, h, w).mean(1) if (n % 1000 == 0) \
+            else images_photon[:-(n % 1000)].reshape(-1, 1000, h, w).mean(1)
+    else:
+        images_avg = images_photon.reshape(1, -1, h, w).mean(1)
 
     # pixel values containing both bg and signals
     pixel_vals = images_avg[:, sample_mask[0], sample_mask[1]].reshape(-1)
