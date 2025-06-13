@@ -524,6 +524,9 @@ class Lunar_SyncLearning(Lunar_LocLearning):
 
         self.prepare_sample_real_data(real_data, batch_size)
 
+        # use a flag to early stop the physics learning if zernike coefficients are converged
+        zernike_converged = False
+
         print('-' * 200)
         print('Start training...')
 
@@ -539,6 +542,10 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                 # need to initialize the roi_lib as the model file does not save the roi_lib
                 self.update_roilib2learn(real_data, self.context_size * batch_size)
 
+        # Forcibly set robust_training to True in warmup phase for better generalization
+        if self._iter_train < self.warmup:
+            self.data_simulator.mol_sampler.robust_training = True
+
         while self._iter_train < max_iterations:
             t0 = time.time()
             total_loss_sleep = []
@@ -546,8 +553,8 @@ class Lunar_SyncLearning(Lunar_LocLearning):
             for i in range(eval_freq):
                 loss_sleep = self.sleep_train(batch_size=batch_size, robust_scale=robust_scale)
                 total_loss_sleep.append(loss_sleep)
-                if self._iter_train > self.warmup:
-                    if (self._iter_train-1) % self.warmup == 0 and self._iter_train > self.warmup:
+                if self._iter_train > self.warmup and not zernike_converged:
+                    if (self._iter_train-1) % self.warmup == 0:
                         # calculate the z weight due to non-uniform z distribution
                         # self.get_real_data_z_prior(real_data, self.sample_batch_size)
                         self.update_roilib2learn(real_data, self.context_size*batch_size)
@@ -562,9 +569,16 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                                                           max_recon_psfs)
                         total_loss_wake.append(loss_wake) if loss_wake is not np.nan else None
 
+                    # reset the robust training flag to user defined
+                    if self._iter_train == self.warmup + 1:
+                        self.data_simulator.mol_sampler.robust_training = self.dict_sampler_params['robust_training']
+
                 if self._iter_train % 100 == 0:
                     self.evaluation_recorder['learned_psf_zernike'][
                         self._iter_train] = self.learned_psf.zernike_coef.detach().cpu().numpy()
+                    if not zernike_converged:
+                        # change the flag if zernike coefficients are converged
+                        zernike_converged = self.check_zernike_convergence()
 
             torch.cuda.empty_cache()
 
@@ -1134,7 +1148,11 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                                                               original_sub_fov_xy_list,
                                                               ailoc.common.cpu(self.data_simulator.psf_model.pixel_size_xy)))
 
-        assert len(molecule_array) > 0, 'No molecule detected in the real data, please check the data or the network.'
+        assert len(molecule_array) > 0, ('No molecule detected in the real data, please check the data or the network.\n'
+                                         'If data is OK, the network is probably far away from the true posterior, consider:\n'
+                                         '1. Increase the model.warmup;\n'
+                                         '2. Turn off robust training;\n'
+                                         '3. Turn on the temporal attn for more powerful network;\n')
 
         # print the z and photon distribution
         z_hist_curr = np.histogram(molecule_array[:, 3], bins=10)
@@ -1471,9 +1489,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                 real_data_sampled = self.data_simulator.camera.backward(real_data_sampled)
                 if self.temporal_attn and self.attn_length // 2 > 0:
                     real_data_sampled = real_data_sampled[:, (self.attn_length // 2): -(self.attn_length // 2)]
-                    real_data_sampled = real_data_sampled.reshape(-1,
-                                                               real_data_sampled.shape[-2],
-                                                               real_data_sampled.shape[-1])
+                real_data_sampled = real_data_sampled.reshape(-1, real_data_sampled.shape[-2], real_data_sampled.shape[-1])
 
                 # # consider the overcut
                 # real_data_sampled = real_data_sampled[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
@@ -1539,6 +1555,31 @@ class Lunar_SyncLearning(Lunar_LocLearning):
 
         return elbo_record.detach().cpu().numpy()
 
+    def check_zernike_convergence(self):
+        """
+        calculate the flatness of recent zernike coefficients to
+        determine whether zernike coefficients are converged
+        """
+
+        # calculate the flatness of zernike coeffs
+        flatness_thre = 0.08
+        window_size = 20
+        if self._iter_train < window_size*100 + self.warmup:
+            return False
+
+        zernike_history = []
+        for (iter, zernike) in self.evaluation_recorder['learned_psf_zernike'].items():
+            zernike_history.append(ailoc.common.cpu(zernike))
+
+        window = zernike_history[len(zernike_history) - window_size:]
+        std_window = np.std(window, axis=0)
+        flatness = np.mean(std_window)
+        if flatness < flatness_thre:
+            print('\033[0;31m'+"Zernike coefficients converged, stop physics learning early"+'\033[0m')
+            return True
+        else:
+            return False
+
     def compute_roilibtest_loss(self, batch_size):
         """
         Compute the negative log likelihood of the ROI library, using the current network and learned PSF
@@ -1575,7 +1616,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                     real_data_tmp = self.data_simulator.camera.backward(real_data_tmp)
                     if self.temporal_attn and self.attn_length // 2 > 0:
                         real_data_tmp = real_data_tmp[:, (self.attn_length // 2): -(self.attn_length // 2)]
-                        real_data_tmp = real_data_tmp.reshape(-1, real_data_tmp.shape[-2], real_data_tmp.shape[-1])
+                    real_data_tmp = real_data_tmp.reshape(-1, real_data_tmp.shape[-2], real_data_tmp.shape[-1])
 
                     # # consider the overcut
                     # real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
@@ -1651,7 +1692,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                 real_data_tmp = self.data_simulator.camera.backward(real_data_tmp)
                 if extra_length > 0:
                     real_data_tmp = real_data_tmp[:, extra_length: -extra_length]
-                    real_data_tmp = real_data_tmp.reshape(-1, real_data_tmp.shape[-2], real_data_tmp.shape[-1])
+                real_data_tmp = real_data_tmp.reshape(-1, real_data_tmp.shape[-2], real_data_tmp.shape[-1])
 
                 # # consider the overcut
                 # real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
