@@ -444,10 +444,23 @@ class TestDataSimulator:
             # ax[ax_num].legend(loc='upper right', fontsize=10)
         plt.show()
 
-    def check_psf(self, num_z_step=21):
+    def check_psf(self, num_z_step=11):
         """
         Check the PSF.
         """
+        print('checking pupil')
+        pupil_phase = ailoc.common.cpu(2 * np.pi *
+                                       torch.sum(self.psf_model.zernike_coef[:, None, None] *
+                                                 self.psf_model.allzernikes, dim=0) /
+                                       self.psf_model.wavelength)
+        plt.figure(constrained_layout=True, dpi=300)
+        plt.imshow(
+            pupil_phase, cmap='turbo',
+            vmin=-1 * np.pi,
+            vmax=1 * np.pi
+                   )
+        plt.colorbar()
+        plt.show()
 
         print(f"checking PSF...")
         x = ailoc.common.gpu(torch.zeros(num_z_step))
@@ -457,11 +470,12 @@ class TestDataSimulator:
 
         psf = ailoc.common.cpu(self.psf_model.simulate(x, y, z, photons))
 
-        plt.figure(constrained_layout=True)
+        plt.figure(constrained_layout=True, dpi=300)
         for j in range(num_z_step):
-            plt.subplot(int(np.ceil(num_z_step/7)), 7, j + 1)
-            plt.imshow(psf[j], cmap='gray')
+            plt.subplot(int(np.ceil(num_z_step/11)), 11, j + 1)
+            plt.imshow(psf[j], cmap='turbo')
             plt.title(f"{ailoc.common.cpu(z[j]):.0f} nm")
+            plt.axis('off')
         plt.show()
 
     def eval_loc_model(self,):
