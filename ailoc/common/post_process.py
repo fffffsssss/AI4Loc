@@ -152,6 +152,13 @@ def spatial_integration_v3(p_pred, thre_candi_1=0.3, thre_candi_2=0.6, xyzph_pre
         # postprocess the xyzph_pred considering the neighbouring two-gauss PDF
         candidate_mask = torch.clamp(candidate_mask1 + candidate_mask2, 0., 1.)
 
+        # before postprocess, ensure prediction is real (a bug with unknown reasons, but it happens in some cases)
+        if torch.any(torch.isnan(xyzph_pred)) or torch.any(torch.isnan(xyzph_sig_pred)):
+            print('\033[0;31m' + "Warning: xyzph_pred or xyzph_sig_pred contains NaN values, "
+                                 "replacing with default values." + '\033[0m')
+            xyzph_pred = torch.nan_to_num(xyzph_pred, nan=0.0, posinf=2.0, neginf=-2.0)
+            xyzph_sig_pred = torch.nan_to_num(xyzph_sig_pred, nan=0.0001, posinf=3.0, neginf=0.0001)
+
         # postprocess the x offset
         x_pred = xyzph_pred[:, 0:1].detach()
         x_sig_pred = xyzph_sig_pred[:, 0:1].detach()
