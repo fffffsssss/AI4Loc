@@ -222,7 +222,7 @@ def plot_start_end_psf(model):
     phase_start_end_diff = np.concatenate([phase_start, phase_end, phase_end - phase_start], 1)
 
     # Create a single figure with GridSpec
-    fig = plt.figure(figsize=(12, 20),)
+    fig = plt.figure(figsize=(9, 15),dpi=300)
     gs = GridSpec(4, 9, height_ratios=[4, 4, 8, 6])
 
     # PSF plots (first row, 1x9 grid)
@@ -248,23 +248,23 @@ def plot_start_end_psf(model):
     ax_zernike.set_xticks(np.arange(zernike_mode.shape[0]))
     ax_zernike.set_xticklabels(aberrations_names, rotation=30, fontsize=12)
     bar_start = ax_zernike.bar(np.arange(zernike_mode.shape[0]) - width / 2,
-                               ailoc.common.cpu(zernike_coef_start),
+                               ailoc.common.cpu(zernike_coef_start/model.learned_psf.wavelength),
                                width=width, color='orange', edgecolor='k')
     bar_end = ax_zernike.bar(np.arange(zernike_mode.shape[0]) + width / 2,
-                             ailoc.common.cpu(zernike_coef_end),
+                             ailoc.common.cpu(zernike_coef_end/model.learned_psf.wavelength),
                              width=width, color='olive', edgecolor='k')
     ax_zernike.tick_params(axis='y', labelsize=12)
 
     ax_zernike.tick_params(axis='both', direction='out')
-    ax_zernike.set_ylabel('Zernike coefficients (nm)', fontsize=16)
+    ax_zernike.set_ylabel('Zernike coefficients (${\lambda}$)', fontsize=16)
     ax_zernike.set_xlabel('Zernike modes', fontsize=16)
-    ax_zernike.legend(['start', 'end'], fontsize=16)
+    ax_zernike.legend(['Initial', 'Learned'], fontsize=16)
 
     # zernike coefficients learning history plot
     zernike_history = []
     for (iter, zernike) in model.evaluation_recorder['learned_psf_zernike'].items():
         zernike_history.append(ailoc.common.cpu(zernike))
-    zernike_coeffs_over_time = np.array(zernike_history)
+    zernike_coeffs_over_time = np.array(zernike_history)/ailoc.common.cpu(model.learned_psf.wavelength)
     iterations_zer = (np.array(list(range(0, len(zernike_history)))) + 1) * 100
 
     ax_zernike_hist = fig.add_subplot(gs[3, :])
@@ -272,7 +272,7 @@ def plot_start_end_psf(model):
         ax_zernike_hist.plot(iterations_zer, zernike_coeffs_over_time[:, j],
                  label=f'Zernike Coeff {j + 1}')  # Zernike index starts from 0 or 1 depending on convention
     plt.xlabel('Iterations', fontsize=16)
-    plt.ylabel('Zernike coefficients (nm)', fontsize=16)
+    plt.ylabel('Zernike coefficients (${\lambda}$)', fontsize=16)
     plt.grid(True)
 
     # Adjust layout, save, and display
@@ -339,7 +339,7 @@ def plot_single_frame_inference(inference_dict, loc_model):
     plt.colorbar(mappable=ax2[0,0].imshow(datas[0], cmap=cmap), ax=ax2[0,0], fraction=0.046, pad=0.04)
     for x, y in zip(inference_dict['prob_sampled'].nonzero()[1], inference_dict['prob_sampled'].nonzero()[0]):
         # ax2.add_patch(plt.Circle((x, y), radius=1.5, color='cyan', fill=True, lw=0.5, alpha=0.8))
-        ax2[0,0].scatter(x, y, s=10, c='m', marker='x')
+        ax2[0,0].scatter(x, y, s=20, c='m', marker='x')
     ax2[0,0].set_title('raw data')
 
     cmap = 'magma'
