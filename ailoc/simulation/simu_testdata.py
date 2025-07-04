@@ -395,10 +395,14 @@ class TestDataSimulator:
         data = self.dataset['data'][frame_num-1]
         mol_list = self.dataset['molecule_list_gt']
         mol_this_frame = ailoc.common.find_molecules(mol_list, frame_num)
-        mol_x = mol_this_frame[:, 1]
-        mol_y = mol_this_frame[:, 2]
-        mol_x_pix = np.floor(mol_x / self.dict_psf_params['pixel_size_xy'][0])
-        mol_y_pix = np.floor(mol_y / self.dict_psf_params['pixel_size_xy'][1])
+        if len(mol_this_frame) == 0:
+            print(f'No molecules found in example frame {frame_num}.')
+
+        else:
+            mol_x = mol_this_frame[:, 1]
+            mol_y = mol_this_frame[:, 2]
+            mol_x_pix = np.floor(mol_x / self.dict_psf_params['pixel_size_xy'][0])
+            mol_y_pix = np.floor(mol_y / self.dict_psf_params['pixel_size_xy'][1])
 
         """plot the image and gt"""
         cmap = 'gray'
@@ -431,13 +435,14 @@ class TestDataSimulator:
             ax_num = i
             plts.append(ax[ax_num].imshow(data, cmap=cmap))
             ax[ax_num].set_title(f"Example frame {frame_num}")
-            ax[ax_num].scatter(mol_x_pix, mol_y_pix,
-                               s=16,
-                               marker='o',
-                               edgecolors='m',
-                               facecolors='none',
-                               linewidth=2,
-                               label='Ground truth')
+            if len(mol_this_frame) > 0:
+                ax[ax_num].scatter(mol_x_pix, mol_y_pix,
+                                   s=16,
+                                   marker='o',
+                                   edgecolors='m',
+                                   facecolors='none',
+                                   linewidth=2,
+                                   label='Ground truth')
             plt.colorbar(mappable=plts[-1], ax=ax[ax_num], fraction=0.046, pad=0.04)
             ax[ax_num].set_xlabel('X (pixel)')
             ax[ax_num].set_ylabel('Y (pixel)')
@@ -456,8 +461,8 @@ class TestDataSimulator:
         plt.figure(constrained_layout=True, dpi=300)
         plt.imshow(
             pupil_phase, cmap='turbo',
-            vmin=-1 * np.pi,
-            vmax=1 * np.pi
+            # vmin=-1 * np.pi,
+            # vmax=1 * np.pi
                    )
         plt.colorbar()
         plt.show()
