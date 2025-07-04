@@ -252,18 +252,42 @@ class VectorPSFCUDA(VectorPSF):
         return psfs_out
 
 
+class PartialOptimizeFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, coef, indices_to_optimize):
+        # save needed tensors and indices
+        ctx.save_for_backward(coef, indices_to_optimize)
+        return coef  # directly return coef in the forward pass
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # get the saved tensors and indices
+        coef, indices_to_optimize = ctx.saved_tensors
+        # create a zero gradient tensor
+        grad_input = torch.zeros_like(coef)
+        # only assign gradients to specified indices
+        grad_input[indices_to_optimize] = grad_output[indices_to_optimize]
+        return grad_input, None
+
+
+# 包装函数
+def partial_optimize(coef, indices_to_optimize):
+    return PartialOptimizeFunction.apply(coef, indices_to_optimize)
+
+
 class VectorPSFTorch(VectorPSF):
     """
     Vector psf simulator using pytorch, thus psf parameters can be optimized by pytorch
     """
 
-    def __init__(self, psf_params, req_grad=False, data_type=torch.float64):
+    def __init__(self, psf_params, req_grad=False, data_type=torch.float64, zernike_idx_learn=None):
         """
 
         Args:
             psf_params (dict): PSF parameters for simulation except emitter positions
             req_grad (bool): whether the PSF parameters are required gradient
             data_type (torch.dtype): data type for the PSF parameters
+            zernike_idx_learn (list of bool): specified zernike coefficients to learn for LUNAR SL.
 
         Returns:
             VectorPSFTorch: an instance of VectorPSFTorch
@@ -287,6 +311,10 @@ class VectorPSFTorch(VectorPSF):
         self.zernike_mode = torch.tensor(psf_params['zernike_mode'], device='cuda', dtype=self.data_type)
         self.zernike_coef = torch.tensor(psf_params['zernike_coef'], device='cuda', dtype=self.data_type,
                                          requires_grad=req_grad)
+        if zernike_idx_learn is None:
+            self.zernike_idx_learn = torch.arange(self.zernike_coef.shape[0])
+        else:
+            self.zernike_idx_learn = torch.tensor(zernike_idx_learn)
         self.zernike_coef_map = None
         self.objstage0 = torch.tensor(psf_params['objstage0'], device='cuda', dtype=self.data_type,)
         try:
@@ -963,10 +991,22 @@ class VectorPSFTorch(VectorPSF):
 
         objstage = torch.zeros(x.shape[0], dtype=self.data_type, device='cuda') if objstage is None else objstage
 
+        # # temporally test, change the z to obj
+        # objstage = z
+        # z = torch.zeros_like(z, dtype=self.data_type, device='cuda')
+
+
         if zernike_coefs is None:
-            zernike_phase = torch.exp(1j * 2 * np.pi *
-                                      torch.sum(self.zernike_coef[:, None, None] * self.allzernikes, dim=0)
-                                      / self.wavelength)
+            try:
+                # for partially optimized zernike coefficients in LUNAR SL physics learning
+                zernike_coef_part_optm = partial_optimize(self.zernike_coef, self.zernike_idx_learn)
+                zernike_phase = torch.exp(1j * 2 * np.pi *
+                                          torch.sum(zernike_coef_part_optm[:, None, None] * self.allzernikes, dim=0)
+                                          / self.wavelength)
+            except:
+                zernike_phase = torch.exp(1j * 2 * np.pi *
+                                          torch.sum(self.zernike_coef[:, None, None] * self.allzernikes, dim=0)
+                                          / self.wavelength)
             pupilmatrix = (self.amplitude[None, None] *
                            zernike_phase[None, None] *
                            self.polarizationvector)[:, :, None]

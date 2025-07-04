@@ -10,6 +10,7 @@ from tqdm import tqdm
 import copy
 import collections
 import scipy
+import os
 
 import ailoc.common
 import ailoc.simulation
@@ -113,6 +114,9 @@ class Lunar_LocLearning(ailoc.common.XXLoc):
         """
 
         file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'LUNAR_LL.pt' if file_name is None else file_name
+        if not os.path.exists(os.path.dirname(file_name)):
+            os.makedirs(os.path.dirname(file_name))
+
         self.scheduler.T_max = max_iterations
         print('Start training...')
 
@@ -433,10 +437,14 @@ class Lunar_SyncLearning(Lunar_LocLearning):
     LUNAR class, simultaneously learning the localization network and the PSF model.
     """
 
-    def __init__(self, psf_params_dict, camera_params_dict, sampler_params_dict):
+    def __init__(self, psf_params_dict, camera_params_dict, sampler_params_dict, zernike_idx_learn=None):
         super().__init__(psf_params_dict, camera_params_dict, sampler_params_dict)
 
-        self.learned_psf = ailoc.simulation.VectorPSFTorch(psf_params_dict, req_grad=True, data_type=torch.float64)
+        self.zernike_idx_learn = zernike_idx_learn
+        self.learned_psf = ailoc.simulation.VectorPSFTorch(psf_params_dict,
+                                                           req_grad=True,
+                                                           data_type=torch.float64,
+                                                           zernike_idx_learn=self.zernike_idx_learn)
 
         self.warmup = 5000
 
@@ -472,6 +480,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
         recorder = {'loss_sleep': collections.OrderedDict(),  # loss function value
                     'loss_wake': collections.OrderedDict(),
                     'loss_recon': collections.OrderedDict(),  # reconstruction loss of the test roi lib
+                    'avg_3Dsig_recon': collections.OrderedDict(),  # average 3D sigma on the test roi lib
                     'iter_time': collections.OrderedDict(),  # time cost for each iteration
                     'n_per_img': collections.OrderedDict(),  # average summed probability channel per image
                     'recall': collections.OrderedDict(),  # TP/(TP+FN)
@@ -587,9 +596,8 @@ class Lunar_SyncLearning(Lunar_LocLearning):
             avg_loss_wake = np.mean(total_loss_wake) if len(total_loss_wake) > 0 else np.nan
             self.evaluation_recorder['loss_sleep'][self._iter_train] = avg_loss_sleep
             self.evaluation_recorder['loss_wake'][self._iter_train] = avg_loss_wake
-            self.evaluation_recorder['loss_recon'][self._iter_train] = self.compute_roilibtest_loss(batch_size *
-                                                                                                   self.context_size)
-            # self.evaluation_recorder['loss_recon'][self._iter_train] = np.nan
+            (self.evaluation_recorder['loss_recon'][self._iter_train],
+             self.evaluation_recorder['avg_3Dsig_recon'][self._iter_train]) = self.compute_roilibtest_loss(batch_size *self.context_size)
             self.evaluation_recorder['iter_time'][self._iter_train] = avg_iter_time
 
             if self._iter_train > 1000:
@@ -1587,9 +1595,10 @@ class Lunar_SyncLearning(Lunar_LocLearning):
         """
 
         if self.roi_lib_test is None:
-            return np.nan
+            return np.nan, np.nan
 
         loss_list = []
+        uncertainty_list = []
         self.network.eval()
         with torch.no_grad():
             for lib in ['sparse', 'dense']:
@@ -1639,7 +1648,15 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                     loss_list.append(torch.nn.MSELoss(reduction='none')(reconstruction, real_data_tmp[:, None]
                                                                         .expand(-1, 1, -1, -1)).mean().detach().cpu().numpy())
 
-        return np.mean(loss_list) if loss_list else np.nan
+                    # also record the average posterior uncertainty on the roilib
+                    pix_inds = tuple(delta_map_sample[:,0].nonzero().transpose(1, 0))
+                    if len(pix_inds):
+                        x_sig = xyzph_sig_pred[:,0][pix_inds] * self.data_simulator.psf_model.pixel_size_xy[0]
+                        y_sig = xyzph_sig_pred[:,1][pix_inds] * self.data_simulator.psf_model.pixel_size_xy[1]
+                        z_sig = xyzph_sig_pred[:,2][pix_inds] * self.data_simulator.mol_sampler.z_scale
+                        uncertainty_list.append(torch.mean(torch.sqrt(x_sig**2+y_sig**2+z_sig**2)).detach().cpu().numpy())
+
+        return np.mean(loss_list) if loss_list else np.nan, np.mean(uncertainty_list) if uncertainty_list else np.nan
 
     def plot_roilib_recon(self):
         """
@@ -1744,6 +1761,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                   f"Loss_sleep: {self.evaluation_recorder['loss_sleep'][self._iter_train]:.2f} || "
                   # f"Loss_wake: {self.evaluation_recorder['loss_wake'][self._iter_train]:.2f} || "
                   f"Loss_recon: {self.evaluation_recorder['loss_recon'][self._iter_train]:.2f} || "
+                  # f"Sig_recon: {self.evaluation_recorder['avg_3Dsig_recon'][self._iter_train]:.2f} || "
                   f"IterTime: {self.evaluation_recorder['iter_time'][self._iter_train]:.2f} ms || "
                   f"ETA: {self.evaluation_recorder['iter_time'][self._iter_train] * (max_iterations - self._iter_train) / 3600000:.2f} h || ",
                   end='')
