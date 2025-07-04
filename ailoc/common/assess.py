@@ -251,6 +251,7 @@ def test_single_emitter_accuracy(loc_model,
                                  bg=20,
                                  num_z_step=25,
                                  num_repeat=1000,
+                                 psf_focus_norm=None,
                                  show_res=True):
     """
     Test the Loc model precision on single emitter localization. Plot with CRLB as a reference.
@@ -272,6 +273,9 @@ def test_single_emitter_accuracy(loc_model,
             the number of axial steps in the z range
         num_repeat (int):
             the number of repeat for each z position
+        psf_focus_norm (bool or None):
+            the way to normalize PSF intensity, True for focus normalization, False for normalize by self, None
+            for the default setting in the PSF model
         show_res (bool):
             whether to show the test results
     """
@@ -284,6 +288,9 @@ def test_single_emitter_accuracy(loc_model,
 
     # initialize the PSF model and calculate the 3D average CRLB
     psf_model = ailoc.simulation.VectorPSFTorch(psf_params) if psf_params is not None else loc_model.data_simulator.psf_model
+    if psf_focus_norm is not None:
+        # temporally set the focus normalization
+        psf_model.focus_norm = psf_focus_norm
 
     # set emitter positions
     x = ailoc.common.gpu(torch.ones(num_z_step) * (xy_range[0]+xy_range[1])/2)  # unit nm
