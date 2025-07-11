@@ -351,8 +351,10 @@ class DeepSTORM3D(ailoc.common.XXLoc):
         for record in efficiency_record:
             print(record)
 
-        # choose the threshold and radius with the best efficiency
-        best_record = np.array(efficiency_record)[np.argmax(np.array(efficiency_record)[:, 2])]
+        # replace the nan values to -inf, choose the threshold and radius with the best efficiency
+        efficiency_record = np.array(efficiency_record)
+        efficiency_record[np.isnan(efficiency_record)] = -np.inf
+        best_record = np.array(efficiency_record)[np.argmax(efficiency_record[:, 2])]
         thresh_best = best_record[0]
         radius_best = best_record[1]
         print(f'optimal postprocess parameters: threshold={thresh_best}, radius={radius_best}')
