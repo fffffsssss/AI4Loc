@@ -214,7 +214,7 @@ def get_gain_bg_empirical(images,
     images_photon = ailoc.common.cpu(camera_calib.backward(torch.tensor(images.astype(np.float32))))
 
     if adjust_gain:
-        # get the minimal 1% pixels as the background to estimate the gain
+        # get the minimal 0.5% pixels as the background to estimate the gain
         min_idx = np.where(images_photon.mean(0) < np.quantile(images_photon.mean(0), 0.005))
 
         # split the images into 1000 frames as time chunks
@@ -278,32 +278,41 @@ def get_gain_bg_empirical(images,
 
     if plot:
         # Create the figure and GridSpec
-        fig = plt.figure(figsize=(12, 8), constrained_layout=True)
+        fig = plt.figure(figsize=(12, 8), constrained_layout=True, dpi=300)
         gs = fig.add_gridspec(2, 3)
 
         if adjust_gain:
             # First plot: Histogram with star marker
             ax0 = fig.add_subplot(gs[0, 0])
-            ax0.imshow(images_photon.mean(0) < np.quantile(images_photon.mean(0), 0.001), cmap='turbo')
-            ax0.set_title('Pixels to estimate var/mean')
+            ax0.imshow(images_photon.mean(0) < np.quantile(images_photon.mean(0), 0.001))
+            ax0.set_xlabel('Pixels')
+            ax0.set_ylabel('Pixels')
+            ax0.set_title('Pixels used to estimate gain(var/mean)')
 
-            ax1 = fig.add_subplot(gs[0, 1:])
+            ax1 = fig.add_subplot(gs[0, 1])
             ax1.hist(pix_gain_used,
                      bins=np.linspace(pix_gain_used.min(), pix_gain_used.max(), 50),
                      alpha=0.5,
-                     label='0.5% pixel var/mean')
-            ax1.plot(est_gain, 1, '*', markersize=20, label=f'extra gain: {est_gain:.1f}')
+                     label='0.5% pixels var/mean')
+            ax1.plot(est_gain, 1, '*', markersize=20, label=f'Estimated gain: {est_gain:.1f}')
             ax1.legend()
+            ax1.set_xlabel('Variance/mean ratio')
+            ax1.set_ylabel('Counts')
 
         # Second plot: Mean image
         ax2 = fig.add_subplot(gs[1, 0])
-        ax2.imshow(images_photon.mean(0), cmap='turbo')
-        ax2.set_title('mean image')
+        plt.colorbar(mappable=ax2.imshow(images_photon.mean(0), cmap='turbo'),
+                     ax=ax2, fraction=0.046, pad=0.04)
+        ax2.set_title('Mean image')
+        ax2.set_xlabel('Pixels')
+        ax2.set_ylabel('Pixels')
 
         # Third plot: Masked area
         ax3 = fig.add_subplot(gs[1, 1])
         ax3.imshow(images_photon.mean(0) > np.percentile(images_photon.mean(0), percentile))
-        ax3.set_title(f'masked area for bg fit \n(mean image>{percentile}%)')
+        ax3.set_title(f'Masked area for BG fit \n(mean image>{percentile}%)')
+        ax3.set_xlabel('Pixels')
+        ax3.set_ylabel('Pixels')
 
         # Fourth plot: Dual histogram
         ax4 = fig.add_subplot(gs[1, 2])
@@ -311,13 +320,15 @@ def get_gain_bg_empirical(images,
                  density=True,
                  bins=20,
                  alpha=0.5,
-                 label='masked pixels including bg and signals')
+                 label='Masked pixels (BG + signals)')
         ax4.hist(np.random.uniform(low=bg_range[0], high=bg_range[1], size=len(pixel_vals)),
                  density=True,
                  bins=20,
                  alpha=0.5,
-                 label=f'training bg range ({bg_range[0]:.1f}, {bg_range[1]:.1f})')
+                 label=f'Training BG range ({bg_range[0]:.1f}, {bg_range[1]:.1f})')
         ax4.legend()
+        ax4.set_xlabel('Pixel value (photons)')
+        ax4.set_ylabel('Normalized counts')
 
         plt.show()
 
