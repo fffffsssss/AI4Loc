@@ -140,6 +140,7 @@ def deeploc_loclearning():
         bg=np.mean(deeploc_model.dict_sampler_params['bg_range']),
         num_z_step=31,
         num_repeat=1000,
+        psf_focus_norm=True,
         show_res=True
     )
 
@@ -297,13 +298,14 @@ def lunar_loclearning():
     # test single emitter localization accuracy with CRLB
     ailoc.common.test_single_emitter_accuracy(
         loc_model=lunar_model,
-        psf_params=lunar_model.dict_psf_params,
+        psf_params=None,
         xy_range=(-50, 50),
         z_range=np.array(lunar_model.dict_sampler_params['z_range']) * 0.98,
         photon=np.mean(lunar_model.dict_sampler_params['photon_range']),
         bg=np.mean(lunar_model.dict_sampler_params['bg_range']),
         num_z_step=31,
         num_repeat=1000,
+        psf_focus_norm=True,
         show_res=True
     )
 
@@ -485,6 +487,7 @@ def lunar_synclearning():
         bg=np.mean(lunar_model.dict_sampler_params['bg_range']),
         num_z_step=31,
         num_repeat=1000,
+        psf_focus_norm=True,
         show_res=True
     )
 

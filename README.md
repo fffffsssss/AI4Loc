@@ -46,6 +46,18 @@ conda activate ailoc
 pip install -r requirements.txt
 ```
 
+4. Run demos:
+```commandline
+# get into the demos directory
+cd demos
+
+# run the demos sequentially
+python demo1-simu_tubulin_tetra6.py
+python demo2.1-psf_calibration.py
+python demo2.2-exp_npc_dmo1.2.py
+python demo3-exp_whole_cell_tetra6.py
+```
+
 The project files should be organized as the following hierarchy:
 ```
 ├── root
@@ -103,14 +115,14 @@ Evaluation metrics are automatically printed out after training.
 ### Demo 2: Experimental Nup96 NPC Dataset
 Demo 2 is based on the experimental Nup96 NPC dataset with a 1.2 μm DMO Saddle-Point PSF. 
 The dataset and beads for PSF calibration are provided. 
-Note that the beads were collected two weeks before the NPC data. 
+Note that this dataset has ~60 nm y-drift during data acquisition. 
 
-* `demo2.1-psf_calibration.py`: Calibrates the PSF; calibration results are saved along with the beads file.
-* `demo2.2-exp_npc_dmo1.2.py`: Trains DeepLoc and LUNAR LL with the calibrated PSF, followed by LUNAR SL with a wrong astigmatic PSF.
+* `demo2.1-psf_calibration.py`: Calibrate the PSF; calibration results are saved along with the beads file.
+* `demo2.2-exp_npc_dmo1.2.py`: First train DeepLoc with the calibrated PSF, followed by DeepLoc and LUNAR SL with a wrong astigmatic PSF.
 
 ### Demo 3: Whole-Cell Nup96 NPC Dataset
 Demo 3 is based on the whole-cell Nup96 NPC dataset with a 6 μm DMO Tetrapod PSF. 
-The script `demo3-exp_whole_cell_tetra6.py` trains LUNAR SL with a mismatched PSF.
+The script `demo3-exp_whole_cell_tetra6.py` trains DeepLoc and LUNAR SL with a mismatched PSF.
 
 ### Demo 4: Notebooks with GUI for Demo 2
 Demo 4 provides three Jupyter notebooks with graphical user interface (GUI) to demonstrate PSF calibration, model learning, and model inference. 

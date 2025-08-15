@@ -21,7 +21,7 @@ torch.backends.cudnn.benchmark = True
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 
-def deeploc_loclearning():
+def deeploc_loclearning_using_calib_psf():
     # set the file paths, calibration file is necessary,
     # experiment file is optional for background range estimation
     calib_file = '../datasets/demo2-exp_npc_dmo1.2/beads_step20/1_calib_results.mat'
@@ -87,10 +87,10 @@ def deeploc_loclearning():
         'local_context': True,
         'robust_training': True,  # if True, the training data will be added with some random Zernike aberrations
         'context_size': 8,  # for each batch unit, simulate several frames share the same photophysics and bg to train
-        'train_size': 128,
-        'num_em_avg': 10,
+        'train_size': 64,
+        'num_em_avg': 20,
         'eval_batch_size': 100,
-        'photon_range': (1000, 10000),
+        'photon_range': (500, 10000),
         'z_range': (-1000, 1000),
         'bg_range': (40, 60),
         'bg_perlin': True,
@@ -153,14 +153,14 @@ def deeploc_loclearning():
     print(f'Prediction time cost: {time.time() - t0} s')
 
 
-def lunar_loclearning():
+def deeploc_loclearning_using_wrong_psf():
     # set the file paths, calibration file is necessary,
     # experiment file is optional for background range estimation
-    calib_file = '../datasets/demo2-exp_npc_dmo1.2/beads_step20/1_calib_results.mat'
+    calib_file = None
     experiment_file = '../datasets/demo2-exp_npc_dmo1.2/npc_DMO1.2__6_MMStack_Default.ome.tif'
 
     # file path to save the trained model and log
-    file_name = '../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'LUNAR_LL.pt'
+    file_name = '../results/' + datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'DeepLoc.pt'
     sys.stdout = ailoc.common.TrainLogger('../results/' + os.path.split(file_name)[-1].split('.')[0] + '.log')
 
     if calib_file is not None:
@@ -174,7 +174,7 @@ def lunar_loclearning():
 
     else:
         # manually set psf parameters
-        zernike_aber = np.array([2, -2, 0, 2, 2, 70, 3, -1, 0, 3, 1, 0, 4, 0, 0, 3, -3, 0, 3, 3, 0,
+        zernike_aber = np.array([2, -2, 70, 2, 2, 0, 3, -1, 0, 3, 1, 0, 4, 0, 0, 3, -3, 0, 3, 3, 0,
                                  4, -2, 0, 4, 2, 0, 5, -1, 0, 5, 1, 0, 6, 0, 0, 4, -4, 0, 4, 4, 0,
                                  5, -3, 0, 5, 3, 0, 6, -2, 0, 6, 2, 0, 7, 1, 0, 7, -1, 0, 8, 0, 0],
                                 dtype=np.float32).reshape([21, 3])
@@ -190,8 +190,7 @@ def lunar_loclearning():
             'otf_rescale_xy': (0.5, 0.5),
             'npupil': 64,
             'psf_size': 31,
-            'objstage0': -1000,
-            'zemit0': 1000,
+            'objstage0': -1400,
         }
 
         # manually set camera parameters
@@ -216,13 +215,13 @@ def lunar_loclearning():
 
     # manually set sampler parameters
     sampler_params_dict = {
-        'temporal_attn': True,
+        'local_context': True,
         'robust_training': True,  # if True, the training data will be added with some random Zernike aberrations
         'context_size': 8,  # for each batch unit, simulate several frames share the same photophysics and bg to train
-        'train_size': 128,
-        'num_em_avg': 10,
+        'train_size': 64,
+        'num_em_avg': 20,
         'eval_batch_size': 100,
-        'photon_range': (1000, 10000),
+        'photon_range': (500, 10000),
         'z_range': (-1000, 1000),
         'bg_range': (40, 60),
         'bg_perlin': True,
@@ -242,16 +241,16 @@ def lunar_loclearning():
     # print learning parameters
     ailoc.common.print_learning_params(psf_params_dict, camera_params_dict, sampler_params_dict)
 
-    # instantiate the LUNAR model and start to train
-    lunar_model = ailoc.lunar.Lunar_LocLearning(psf_params_dict, camera_params_dict, sampler_params_dict)
+    # instantiate the DeepLoc model and start to train
+    deeploc_model = ailoc.deeploc.DeepLoc(psf_params_dict, camera_params_dict, sampler_params_dict)
 
-    lunar_model.check_training_psf()
+    deeploc_model.check_training_psf()
 
-    lunar_model.check_training_data()
+    deeploc_model.check_training_data()
 
-    lunar_model.build_evaluation_dataset(napari_plot=False)
+    deeploc_model.build_evaluation_dataset(napari_plot=False)
 
-    lunar_model.online_train(
+    deeploc_model.online_train(
         batch_size=2,
         max_iterations=40000,
         eval_freq=500,
@@ -259,7 +258,7 @@ def lunar_loclearning():
     )
 
     # plot evaluation performance during the training
-    ailoc.common.plot_train_record(lunar_model)
+    ailoc.common.plot_train_record(deeploc_model)
 
     # analyze the experimental data
     image_path = os.path.dirname(experiment_file)  # can be a tiff file path or a folder path
@@ -267,8 +266,8 @@ def lunar_loclearning():
                 os.path.split(file_name)[-1].split('.')[0] + \
                 '_' + os.path.basename(image_path) + '_predictions.csv'
 
-    lunar_analyzer = ailoc.common.SmlmDataAnalyzer(
-        loc_model=lunar_model,
+    deeploc_analyzer = ailoc.common.SmlmDataAnalyzer(
+        loc_model=deeploc_model,
         tiff_path=image_path,
         output_path=save_path,
         time_block_gb=1,
@@ -278,14 +277,14 @@ def lunar_loclearning():
         num_workers=0
     )
 
-    lunar_analyzer.check_single_frame_output(frame_num=11)
+    deeploc_analyzer.check_single_frame_output(frame_num=11)
 
     t0 = time.time()
-    preds_array, preds_rescale_array = lunar_analyzer.divide_and_conquer()
+    preds_array, preds_rescale_array = deeploc_analyzer.divide_and_conquer()
     print(f'Prediction time cost: {time.time() - t0} s')
 
 
-def lunar_synclearning():
+def lunar_synclearning_using_wrong_psf():
     # set the file paths, calibration file is necessary,
     # experiment file is needed for background range estimation and synchronized learning
     calib_file = None
@@ -347,10 +346,10 @@ def lunar_synclearning():
         'temporal_attn': True,
         'robust_training': False,
         'context_size': 8,  # for each batch unit, simulate several frames share the same photophysics and bg to train
-        'train_size': 128,
-        'num_em_avg': 10,
+        'train_size': 64,
+        'num_em_avg': 20,
         'eval_batch_size': 100,
-        'photon_range': (1000, 10000),
+        'photon_range': (500, 10000),
         'z_range': (-1000, 1000),
         'bg_range': (40, 60),
         'bg_perlin': True,
@@ -417,14 +416,14 @@ def lunar_synclearning():
         over_cut=8,
         num_workers=0,
     )
-    lunar_analyzer.check_single_frame_output(frame_num=25)
+    lunar_analyzer.check_single_frame_output(frame_num=11)
 
     preds_array, preds_rescale_array = lunar_analyzer.divide_and_conquer()
 
 
 if __name__ == '__main__':
-    deeploc_loclearning()
-    lunar_loclearning()
-    lunar_synclearning()
+    deeploc_loclearning_using_calib_psf()
+    deeploc_loclearning_using_wrong_psf()
+    lunar_synclearning_using_wrong_psf()
 
 

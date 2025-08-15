@@ -70,7 +70,7 @@ class Simulator:
 
         if robust_scale:
             # random scale the data to break the strict Poisson distribution
-            random_scale = torch.distributions.Uniform(0.9, 1.1).sample()
+            random_scale = torch.distributions.Uniform(0.5, 1.5).sample()
             data_cam = ((data_cam - self.camera.baseline) * random_scale + self.camera.baseline)
             xyzph_array_gt[:, :, :, 3] *= random_scale
             bg_map_sample = bg_map_sample * random_scale
