@@ -12,7 +12,7 @@ natsort==8.4.0
 ipywidgets==8.1.0
 stackview==0.6.4
 einops==0.7.0
-imagecodecs==2023.8.12
 tifffile==2023.8.12
+imagecodecs
 thop
 perlin-numpy @ git+https://github.com/pvigier/perlin-numpy.git
