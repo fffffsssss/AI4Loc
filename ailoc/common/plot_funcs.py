@@ -713,3 +713,61 @@ def plot_image(image, cmap='turbo'):
     plt.imshow(ailoc.common.cpu(image), cmap=cmap)
     plt.colorbar()
     plt.show()
+
+
+def save_image_list_as_video(image_list, output_path='output_video.avi', fps=30):
+    """
+    Saves a list of RGBA NumPy arrays as a video file.
+
+    Args:
+        image_list (list): A list of ndarray, each with shape (h, w, 4).
+        output_path (str): The path to save the output video file.
+        fps (int): The frames per second for the video.
+    """
+    if not image_list:
+        print("The image list is empty. No video will be created.")
+        return
+
+    # Get the dimensions from the first image
+    height, width, _ = image_list[0].shape
+    frame_size = (width, height)
+
+    # Define the codec and create a VideoWriter object
+    fourcc = cv2.VideoWriter_fourcc(*'DIVX')  # For .avi file
+    out = cv2.VideoWriter(output_path, fourcc, fps, frame_size)
+
+    # Write each image frame to the video
+    for img_rgba in image_list:
+        # Convert the RGBA array to BGR format
+        # The alpha channel is ignored for video encoding in this case.
+        img_bgr = cv2.cvtColor(img_rgba, cv2.COLOR_RGBA2BGR)
+        out.write(img_bgr)
+
+    # Release the video writer object
+    out.release()
+    print(f"Video saved successfully at {output_path}")
+
+
+def fig_to_numpy_array(fig):
+    """
+    Converts a matplotlib figure to a NumPy array.
+
+    Args:
+        fig (matplotlib.figure.Figure): The figure object to convert.
+
+    Returns:
+        np.ndarray: A NumPy array of the figure's pixel data in RGBA format (H, W, 4).
+    """
+    # Draw the figure on the canvas to ensure all elements are rendered
+    fig.canvas.draw()
+
+    # Get the RGBA buffer from the canvas renderer
+    buf = fig.canvas.renderer.buffer_rgba()
+
+    # Convert the buffer to a NumPy array and reshape to (H, W, 4)
+    # The 'np.asarray' is used to create an array from the buffer, and then
+    # we reshape it using the figure's height and width.
+    width, height = fig.canvas.get_width_height()
+    image_array = np.asarray(buf).reshape((height, width, 4))
+
+    return image_array
