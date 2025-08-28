@@ -3,10 +3,10 @@
 .ipynb_checkpoints
 __pycache__
 /ui_applications
-/datasets
+/datasets/*
 !datasets/placeholder.txt
-/results
-/simu_test_results
+/results/*
 !results/placeholder.txt
+/simu_test_results
 /ailoc/liteloc
 /convention.txt
