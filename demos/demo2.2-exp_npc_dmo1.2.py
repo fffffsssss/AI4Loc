@@ -394,9 +394,12 @@ def lunar_synclearning_using_wrong_psf():
     # plot evaluation performance during the training
     phase_record = ailoc.common.plot_synclearning_record(lunar_model, plot_phase=True)
     # save the phase learned during the training
-    imageio.mimsave('../results/' + os.path.split(file_name)[-1].split('.')[0] + '_phase.gif',
-                    phase_record,
-                    duration=200)
+    if len(phase_record) != 0:
+        print('Plot done, saving the .avi')
+        ailoc.common.save_image_list_as_video(
+            phase_record,
+            '../results/' + os.path.split(file_name)[-1].split('.')[0] + '_phase.avi',
+            5)
 
     # compare the learned PSF before and after training
     ailoc.common.plot_start_end_psf(lunar_model)

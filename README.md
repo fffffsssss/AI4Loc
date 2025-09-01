@@ -107,10 +107,11 @@ We recommend using the [SMAP](https://www.nature.com/articles/s41592-020-0938-1)
 which supports tasks like rendering, filtering, and drift correction, etc.
 
 ### Demo 1: Simulated Microtubule Dataset
-Demo 1 utilizes a simulated microtubule dataset with a 6 μm Tetrapod PSF. 
+Demo 1 is based on simulated microtubule datasets with 6 μm Tetrapod PSF. 
 You need to download the dataset.
 The script `demo1-simu_tubulin_tetra6.py` trains DeepLoc and LUNAR LL with an accurate PSF, followed by LUNAR SL with a wrong PSF. 
-Evaluation metrics are automatically printed out after training.
+All models were trained once with fixed density and tested on three datasets with low, medium, and high densities, respectively. 
+Evaluation metrics are automatically printed out after each model's training.
 
 ### Demo 2: Experimental Nup96 NPC Dataset
 Demo 2 is based on the experimental Nup96 NPC dataset with a 1.2 μm DMO Saddle-Point PSF. 
