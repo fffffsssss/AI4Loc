@@ -9,7 +9,7 @@ This is the official implementation of the paper
 "Aberration-aware 3D localization microscopy via self-supervised neural-physics learning", 
 distributed as a part of the AI4Loc framework.
 
-A brief introduction to the characteristics of LUNAR.
+A brief video introduction to the characteristics of LUNAR:
 https://github.com/user-attachments/assets/817720a3-c358-47d2-bf2d-726ea2fc472e
 
 
