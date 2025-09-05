@@ -10,7 +10,7 @@ This is the official implementation of the paper
 distributed as a part of the AI4Loc framework.
 
 A brief video introduction to the characteristics of LUNAR:
-https://github.com/user-attachments/assets/817720a3-c358-47d2-bf2d-726ea2fc472e
+https://github.com/user-attachments/assets/1ad2210c-da95-45f6-ab59-27d5647b267a
 
 
 * whole-cell Nup96 NPC imaging with a 6 μm DMO Tetrapod PSF
