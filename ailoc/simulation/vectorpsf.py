@@ -329,7 +329,7 @@ class VectorPSFTorch(VectorPSF):
         self.npupil = psf_params['npupil']
         self.psf_size = psf_params['psf_size']
 
-        self.focus_norm = False
+        self.focus_norm = psf_params.get('focus_norm', False)
 
         self._pre_compute()
 
@@ -1463,21 +1463,96 @@ class VectorPSFTorch(VectorPSF):
 
         """
 
+        # # ADAM optimizer
+        # n_mol = x.shape[0]
+        # crlb_optimizer = torch.optim.Adam([self.zernike_coef], lr=0.1)
+        # loss_1 = 1e6
+        # iter_num = 1
+        # # for iter_num in range(iterations):
+        # while True:
+        #     xyz_crlb, model = self.compute_crlb(x, y, z, photons, bgs)
+        #     crlb_3d_avg = torch.sum(xyz_crlb[:, 0]**2 + xyz_crlb[:, 1]**2 + xyz_crlb[:, 2]**2)/n_mol
+        #     print(f"iter: {iter_num}, crlb_3d_avg: {crlb_3d_avg}")
+        #     crlb_optimizer.zero_grad()
+        #     crlb_3d_avg.backward()
+        #     crlb_optimizer.step()
+        #     self._pre_compute()
+        #     if torch.abs((loss_1 - crlb_3d_avg) / loss_1) < tolerance:
+        #         break
+        #     loss_1 = crlb_3d_avg.detach()
+        #     iter_num += 1
+        # print('CRLB optimization done')
+
+        # LBFGS optimizer
         n_mol = x.shape[0]
-        crlb_optimizer = torch.optim.Adam([self.zernike_coef], lr=0.1)
+        crlb_optimizer = torch.optim.LBFGS([self.zernike_coef], lr=0.1, max_iter=20, tolerance_grad=1e-7,
+                                           tolerance_change=1e-9)
         loss_1 = 1e6
         iter_num = 1
-        # for iter_num in range(iterations):
-        while True:
-            xyz_crlb, model = self.compute_crlb(x, y, z, photons, bgs)
-            crlb_3d_avg = torch.sum(xyz_crlb[:, 0]**2 + xyz_crlb[:, 1]**2 + xyz_crlb[:, 2]**2)/n_mol
-            print(f"iter: {iter_num}, crlb_3d_avg: {crlb_3d_avg}")
+
+        def closure():
             crlb_optimizer.zero_grad()
+            xyz_crlb, model = self.compute_crlb(x, y, z, photons, bgs)
+            crlb_3d_avg = torch.sum(xyz_crlb[:, 0] ** 2 + xyz_crlb[:, 1] ** 2 + xyz_crlb[:, 2] ** 2) / n_mol
             crlb_3d_avg.backward()
-            crlb_optimizer.step()
+            return crlb_3d_avg
+
+        while True:
+            crlb_3d_avg = crlb_optimizer.step(closure)
+            print(f"iter: {iter_num}, crlb_3d_avg: {crlb_3d_avg}")
             self._pre_compute()
             if torch.abs((loss_1 - crlb_3d_avg) / loss_1) < tolerance:
                 break
             loss_1 = crlb_3d_avg.detach()
             iter_num += 1
+
         print('CRLB optimization done')
+
+
+class VectorPSFTorch_2channel(VectorPSFTorch):
+    """
+    Vectorial PSF model with two detection channels. The two channels have different focal planes.
+
+    Args:
+        wavelength (float): emission wavelength, unit nm
+        na (float): numerical aperture of the objective
+        nmed (float): refractive index of the medium
+        nimm (float): refractive index of the immersion medium
+        pixel_size (float): camera pixel size, unit nm
+        psf_size (int): size of the PSF image, should be an odd number
+        z_range (tuple of float): z range of the PSF, unit nm
+        z_step (float): z step of the PSF, unit nm
+        zemit0 (float, optional): initial axial position of the emitter, default 0, unit nm
+        objstage0 (float, optional): initial axial position of the objective stage, default 0, unit nm
+        n_zernike (int, optional): number of zernike modes used to model the aberrations,
+                                   default 15 (up to 5th order excluding piston, tip and tilt)
+        zernike_coef (torch.Tensor, optional): initial zernike coefficients in a torch tensor,
+                                               default None which means all zeros
+        focus_norm (bool, optional): whether to normalize the PSF intensity by the in-focus intensity,
+                                     default True. If False, the PSF is normalized by itself.
+                                     Note that focus_norm=True is more relevant to localization microscopy,
+                                     while focus_norm=False is more relevant to particle tracking microscopy.
+        otf_rescale_xy (tuple of float, optional): sigma_x and sigma_y for Gaussian rescaling of the OTF,
+                                                   default (0,0) means no rescaling
+        req_grad (bool, optional): whether the zernike coefficients require gradients,
+                                   default False. Set True when optimizing the coefficients.
+        data_type (torch.dtype, optional): data type for real numbers, default torch.float32
+        device (str, optional): device to use, default 'cuda'
+    """
+
+    def __init__(self, psf_params, req_grad=False, data_type=torch.float64, zernike_idx_learn=None):
+        super(VectorPSFTorch_2channel, self).__init__(psf_params, req_grad, data_type, zernike_idx_learn)
+
+        self.z_offset = psf_params.get('z_offset', 300)  # nm
+        self.reflection_ratio = psf_params.get('reflection_ratio', 0.5)  # ratio of the main channel/sum of two channels
+
+    def simulate(self, x, y, z, photons, objstage=None, zernike_coefs=None):
+        main_psfs_out = super().simulate(x, y, z, photons*self.reflection_ratio, objstage, zernike_coefs)
+        auxi_psfs_out = super().simulate(x, y, z+self.z_offset, photons*(1-self.reflection_ratio), objstage, zernike_coefs)
+        psfs_out = torch.cat((main_psfs_out[None], auxi_psfs_out[None]), dim=0)
+
+        # todo: need to think how to calculate the derivatives for two channels and the CRLB optimization, further combined with neural network
+        return psfs_out
+
+
+
