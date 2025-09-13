@@ -372,8 +372,14 @@ class DeepLoc(ailoc.common.XXLoc):
 
         cmap = 'gray'
 
-        fig, ax_arr = plt.subplots(int(np.ceil(self.context_size / 2)), 2,
-                                   figsize=(3 * 2, 2 * int(np.ceil(self.context_size / 2))),
+        im_num = self.context_size * 2
+        n_col = 4
+        n_row = int(np.ceil(im_num / n_col))
+
+        fig, ax_arr = plt.subplots(n_row,
+                                   n_col,
+                                   figsize=(n_col * 3,
+                                            n_row * 2),
                                    constrained_layout=True)
         ax = []
         plts = []
@@ -388,8 +394,14 @@ class DeepLoc(ailoc.common.XXLoc):
             plts.append(ax[i].imshow(ailoc.common.cpu(data_cam)[0, i], cmap=cmap))
             ax[i].set_title(f"frame {i}")
             plt.colorbar(mappable=plts[-1], ax=ax[i], fraction=0.046, pad=0.04)
+
+        for i in range(self.context_size):
+            ax_num = i + self.context_size
+            plts.append(ax[ax_num].imshow(ailoc.common.cpu(data_cam)[0, i], cmap=cmap))
+            ax[ax_num].set_title(f"GT frame {i}")
             pix_gt = ailoc.common.cpu(p_map_gt[0, i].nonzero())
-            ax[i].scatter(pix_gt[:, 1], pix_gt[:, 0], s=5, c='m', marker='x')
+            ax[ax_num].scatter(pix_gt[:, 1], pix_gt[:, 0], s=5, c='m', marker='x')
+            plt.colorbar(mappable=plts[-1], ax=ax[ax_num], fraction=0.046, pad=0.04)
 
         plt.show()
 

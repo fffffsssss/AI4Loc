@@ -252,18 +252,42 @@ class VectorPSFCUDA(VectorPSF):
         return psfs_out
 
 
+class PartialOptimizeFunction(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, coef, indices_to_optimize):
+        # save needed tensors and indices
+        ctx.save_for_backward(coef, indices_to_optimize)
+        return coef  # directly return coef in the forward pass
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        # get the saved tensors and indices
+        coef, indices_to_optimize = ctx.saved_tensors
+        # create a zero gradient tensor
+        grad_input = torch.zeros_like(coef)
+        # only assign gradients to specified indices
+        grad_input[indices_to_optimize] = grad_output[indices_to_optimize]
+        return grad_input, None
+
+
+# 包装函数
+def partial_optimize(coef, indices_to_optimize):
+    return PartialOptimizeFunction.apply(coef, indices_to_optimize)
+
+
 class VectorPSFTorch(VectorPSF):
     """
     Vector psf simulator using pytorch, thus psf parameters can be optimized by pytorch
     """
 
-    def __init__(self, psf_params, req_grad=False, data_type=torch.float64):
+    def __init__(self, psf_params, req_grad=False, data_type=torch.float64, zernike_idx_learn=None):
         """
 
         Args:
             psf_params (dict): PSF parameters for simulation except emitter positions
             req_grad (bool): whether the PSF parameters are required gradient
             data_type (torch.dtype): data type for the PSF parameters
+            zernike_idx_learn (list of bool): specified zernike coefficients to learn for LUNAR SL.
 
         Returns:
             VectorPSFTorch: an instance of VectorPSFTorch
@@ -287,6 +311,10 @@ class VectorPSFTorch(VectorPSF):
         self.zernike_mode = torch.tensor(psf_params['zernike_mode'], device='cuda', dtype=self.data_type)
         self.zernike_coef = torch.tensor(psf_params['zernike_coef'], device='cuda', dtype=self.data_type,
                                          requires_grad=req_grad)
+        if zernike_idx_learn is None:
+            self.zernike_idx_learn = torch.arange(self.zernike_coef.shape[0])
+        else:
+            self.zernike_idx_learn = torch.tensor(zernike_idx_learn)
         self.zernike_coef_map = None
         self.objstage0 = torch.tensor(psf_params['objstage0'], device='cuda', dtype=self.data_type,)
         try:
@@ -300,6 +328,8 @@ class VectorPSFTorch(VectorPSF):
         self.otf_rescale_xy = torch.tensor(psf_params['otf_rescale_xy'], device='cuda', dtype=self.data_type,)
         self.npupil = psf_params['npupil']
         self.psf_size = psf_params['psf_size']
+
+        self.focus_norm = psf_params.get('focus_norm', False)
 
         self._pre_compute()
 
@@ -961,10 +991,22 @@ class VectorPSFTorch(VectorPSF):
 
         objstage = torch.zeros(x.shape[0], dtype=self.data_type, device='cuda') if objstage is None else objstage
 
+        # # temporally test, change the z to obj
+        # objstage = z
+        # z = torch.zeros_like(z, dtype=self.data_type, device='cuda')
+
+
         if zernike_coefs is None:
-            zernike_phase = torch.exp(1j * 2 * np.pi *
-                                      torch.sum(self.zernike_coef[:, None, None] * self.allzernikes, dim=0)
-                                      / self.wavelength)
+            try:
+                # for partially optimized zernike coefficients in LUNAR SL physics learning
+                zernike_coef_part_optm = partial_optimize(self.zernike_coef, self.zernike_idx_learn)
+                zernike_phase = torch.exp(1j * 2 * np.pi *
+                                          torch.sum(zernike_coef_part_optm[:, None, None] * self.allzernikes, dim=0)
+                                          / self.wavelength)
+            except:
+                zernike_phase = torch.exp(1j * 2 * np.pi *
+                                          torch.sum(self.zernike_coef[:, None, None] * self.allzernikes, dim=0)
+                                          / self.wavelength)
             pupilmatrix = (self.amplitude[None, None] *
                            zernike_phase[None, None] *
                            self.polarizationvector)[:, :, None]
@@ -985,23 +1027,28 @@ class VectorPSFTorch(VectorPSF):
                                self.polarizationvector[:, :, None] *
                                self.amplitude[None, None, None])
 
-            length_tmp = slice_tmp.stop - slice_tmp.start
-            position_phase = torch.empty([length_tmp, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
+            # length_tmp = slice_tmp.stop - slice_tmp.start
+            # position_phase = torch.empty([length_tmp, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
 
-            idx = torch.where(z[slice_tmp] + self.zemit0 >= 0)[0]
-            phase_xyz_tmp = -y[slice_tmp][idx][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx][:, None, None] * \
-                            self.wavevector[1][None] + \
-                            (z[slice_tmp][idx] + self.zemit0)[:, None, None] * self.wavevectorzmed[None]
-            position_phase[idx, :, :] = torch.exp(
-                1j * (phase_xyz_tmp + (objstage[slice_tmp][idx][:, None, None] + self.objstage0) *
-                      self.wavevectorzimm[None]))
+            # idx = torch.where(z[slice_tmp] + self.zemit0 >= 0)[0]
+            # phase_xyz_tmp = -y[slice_tmp][idx][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx][:, None, None] * \
+            #                 self.wavevector[1][None] + \
+            #                 (z[slice_tmp][idx] + self.zemit0)[:, None, None] * self.wavevectorzmed[None]
+            # position_phase[idx, :, :] = torch.exp(
+            #     1j * (phase_xyz_tmp + (objstage[slice_tmp][idx][:, None, None] + self.objstage0) *
+            #           self.wavevectorzimm[None]))
+            #
+            # idx = torch.where(z[slice_tmp] + self.zemit0 < 0)[0]
+            # phase_xyz_tmp = -y[slice_tmp][idx][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx][:, None, None] * \
+            #                 self.wavevector[1][None]
+            # position_phase[idx, :, :] = torch.exp(
+            #     1j * (phase_xyz_tmp + (objstage[slice_tmp][idx][:, None, None] + self.objstage0 + z[slice_tmp][idx][:, None, None]
+            #                            + self.zemit0) * self.wavevectorzimm[None]))
 
-            idx = torch.where(z[slice_tmp] + self.zemit0 < 0)[0]
-            phase_xyz_tmp = -y[slice_tmp][idx][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx][:, None, None] * \
-                            self.wavevector[1][None]
-            position_phase[idx, :, :] = torch.exp(
-                1j * (phase_xyz_tmp + (objstage[slice_tmp][idx][:, None, None] + self.objstage0 + z[slice_tmp][idx][:, None, None]
-                                       + self.zemit0) * self.wavevectorzimm[None]))
+            phase_xyz_tmp = -y[slice_tmp][:, None, None] * self.wavevector[0][None] - x[slice_tmp][:, None, None] * \
+                            self.wavevector[1][None] + (z[slice_tmp] + self.zemit0)[:, None, None] * self.wavevectorzmed[None]
+            position_phase = torch.exp(1j * (phase_xyz_tmp + (objstage[slice_tmp][:, None, None] + self.objstage0) *
+                             self.wavevectorzimm[None]))
 
             pupil_tmp = position_phase[None, None] * pupilmatrix
             inter_image = torch.transpose(self.czt_parallel(pupil_tmp, self.ay, self.by, self.dy), -1, -2)
@@ -1009,12 +1056,13 @@ class VectorPSFTorch(VectorPSF):
 
             psfs_out[slice_tmp] += 1 / 3 * torch.sum((torch.abs(field_matrix[:, :])) ** 2, dim=(0, 1))
 
-        # intensity normalization by focus
-        psfs_out /= self.norm_intensity
-
-        # # normalize by themselves
-        # norm_factor = psfs_out.sum(dim=(-1, -2))
-        # psfs_out /= norm_factor[:, None, None]
+        if self.focus_norm:
+            # intensity normalization by focus
+            psfs_out /= self.norm_intensity
+        else:
+            # normalize by themselves
+            norm_factor = psfs_out.sum(dim=(-1, -2))
+            psfs_out /= norm_factor[:, None, None]
 
         # otf rescale
         if self.otf_rescale_xy[0] or self.otf_rescale_xy[1]:
@@ -1306,23 +1354,28 @@ class VectorPSFTorch(VectorPSF):
         psfs = torch.zeros([n_mol, self.psf_size, self.psf_size], device='cuda', dtype=self.data_type)
         psfs_ders = torch.zeros([n_mol, self.psf_size, self.psf_size, 3], device='cuda', dtype=self.data_type)
         for slice_tmp in slice_list:
-            length_tmp = slice_tmp.stop - slice_tmp.start
-            position_phase = torch.empty([length_tmp, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
+            # length_tmp = slice_tmp.stop - slice_tmp.start
+            # position_phase = torch.empty([length_tmp, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
 
-            idx_0 = torch.where(z[slice_tmp] + self.zemit0 >= 0)[0]
-            phase_xyz_tmp = -y[slice_tmp][idx_0][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx_0][:, None, None] * \
-                            self.wavevector[1][None] + \
-                            (z[slice_tmp][idx_0] + self.zemit0)[:, None, None] * self.wavevectorzmed[None]
-            position_phase[idx_0, :, :] = torch.exp(
-                1j * (phase_xyz_tmp + (objstage[slice_tmp][idx_0][:, None, None] + self.objstage0) *
-                      self.wavevectorzimm[None]))
+            # idx_0 = torch.where(z[slice_tmp] + self.zemit0 >= 0)[0]
+            # phase_xyz_tmp = -y[slice_tmp][idx_0][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx_0][:, None, None] * \
+            #                 self.wavevector[1][None] + \
+            #                 (z[slice_tmp][idx_0] + self.zemit0)[:, None, None] * self.wavevectorzmed[None]
+            # position_phase[idx_0, :, :] = torch.exp(
+            #     1j * (phase_xyz_tmp + (objstage[slice_tmp][idx_0][:, None, None] + self.objstage0) *
+            #           self.wavevectorzimm[None]))
+            #
+            # idx_1 = torch.where(z[slice_tmp] + self.zemit0 < 0)[0]
+            # phase_xyz_tmp = -y[slice_tmp][idx_1][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx_1][:, None, None] * \
+            #                 self.wavevector[1][None]
+            # position_phase[idx_1, :, :] = torch.exp(
+            #     1j * (phase_xyz_tmp + (objstage[slice_tmp][idx_1][:, None, None] + self.objstage0 + z[slice_tmp][idx_1][:, None, None]
+            #                            + self.zemit0) * self.wavevectorzimm[None]))
 
-            idx_1 = torch.where(z[slice_tmp] + self.zemit0 < 0)[0]
-            phase_xyz_tmp = -y[slice_tmp][idx_1][:, None, None] * self.wavevector[0][None] - x[slice_tmp][idx_1][:, None, None] * \
-                            self.wavevector[1][None]
-            position_phase[idx_1, :, :] = torch.exp(
-                1j * (phase_xyz_tmp + (objstage[slice_tmp][idx_1][:, None, None] + self.objstage0 + z[slice_tmp][idx_1][:, None, None]
-                                       + self.zemit0) * self.wavevectorzimm[None]))
+            phase_xyz_tmp = -y[slice_tmp][:, None, None] * self.wavevector[0][None] - x[slice_tmp][:, None, None] * \
+                            self.wavevector[1][None] + (z[slice_tmp] + self.zemit0)[:, None, None] * self.wavevectorzmed[None]
+            position_phase = torch.exp(1j * (phase_xyz_tmp + (objstage[slice_tmp][:, None, None] + self.objstage0) *
+                             self.wavevectorzimm[None]))
 
             pupil_tmp = position_phase[None, None] * pupilmatrix
             inter_image = torch.transpose(self.czt_parallel(pupil_tmp, self.ay, self.by, self.dy), -1, -2)
@@ -1342,21 +1395,23 @@ class VectorPSFTorch(VectorPSF):
             psfs_ders[slice_tmp, :, :, 1] += 2 / 3 * torch.sum(torch.real(torch.conj(field_matrix) * field_matrix_y),
                                                                dim=(0, 1))
 
-            pupil_tmp_z = torch.empty([2, 3, length_tmp, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
-            pupil_tmp_z[:, :, idx_0] = 1j * self.wavevectorzmed * position_phase[idx_0] * pupilmatrix
-            pupil_tmp_z[:, :, idx_1] = 1j * self.wavevectorzimm * position_phase[idx_1] * pupilmatrix
+            # pupil_tmp_z = torch.empty([2, 3, length_tmp, self.npupil, self.npupil], dtype=self.complex_type, device='cuda')
+            # pupil_tmp_z[:, :, idx_0] = 1j * self.wavevectorzmed * position_phase[idx_0] * pupilmatrix
+            # pupil_tmp_z[:, :, idx_1] = 1j * self.wavevectorzimm * position_phase[idx_1] * pupilmatrix
+            pupil_tmp_z = 1j * self.wavevectorzmed * position_phase * pupilmatrix
             inter_image_z = torch.transpose(self.czt_parallel(pupil_tmp_z, self.ay, self.by, self.dy), -1, -2)
             field_matrix_z = torch.transpose(self.czt_parallel(inter_image_z, self.ax, self.bx, self.dx), -1, -2)
             psfs_ders[slice_tmp, :, :, 2] += 2 / 3 * torch.sum(torch.real(torch.conj(field_matrix) * field_matrix_z),
                                                                dim=(0, 1))
-        # normalize by focus intensity
-        psfs /= self.norm_intensity
-        psfs_ders /= self.norm_intensity
-
-        # # normalize by themselves
-        # norm_factor = psfs.sum(dim=(-1, -2))
-        # psfs /= norm_factor[:, None, None]
-        # psfs_ders /= norm_factor[:, None, None, None]
+        if self.focus_norm:
+            # normalize by focus intensity
+            psfs /= self.norm_intensity
+            psfs_ders /= self.norm_intensity
+        else:
+            # normalize by themselves
+            norm_factor = psfs.sum(dim=(-1, -2))
+            psfs /= norm_factor[:, None, None]
+            psfs_ders /= norm_factor[:, None, None, None]
 
         # otf rescale
         if self.otf_rescale_xy[0] or self.otf_rescale_xy[1]:
@@ -1408,21 +1463,96 @@ class VectorPSFTorch(VectorPSF):
 
         """
 
+        # # ADAM optimizer
+        # n_mol = x.shape[0]
+        # crlb_optimizer = torch.optim.Adam([self.zernike_coef], lr=0.1)
+        # loss_1 = 1e6
+        # iter_num = 1
+        # # for iter_num in range(iterations):
+        # while True:
+        #     xyz_crlb, model = self.compute_crlb(x, y, z, photons, bgs)
+        #     crlb_3d_avg = torch.sum(xyz_crlb[:, 0]**2 + xyz_crlb[:, 1]**2 + xyz_crlb[:, 2]**2)/n_mol
+        #     print(f"iter: {iter_num}, crlb_3d_avg: {crlb_3d_avg}")
+        #     crlb_optimizer.zero_grad()
+        #     crlb_3d_avg.backward()
+        #     crlb_optimizer.step()
+        #     self._pre_compute()
+        #     if torch.abs((loss_1 - crlb_3d_avg) / loss_1) < tolerance:
+        #         break
+        #     loss_1 = crlb_3d_avg.detach()
+        #     iter_num += 1
+        # print('CRLB optimization done')
+
+        # LBFGS optimizer
         n_mol = x.shape[0]
-        crlb_optimizer = torch.optim.Adam([self.zernike_coef], lr=0.1)
+        crlb_optimizer = torch.optim.LBFGS([self.zernike_coef], lr=0.1, max_iter=20, tolerance_grad=1e-7,
+                                           tolerance_change=1e-9)
         loss_1 = 1e6
         iter_num = 1
-        # for iter_num in range(iterations):
-        while True:
-            xyz_crlb, model = self.compute_crlb(x, y, z, photons, bgs)
-            crlb_3d_avg = torch.sum(xyz_crlb[:, 0]**2 + xyz_crlb[:, 1]**2 + xyz_crlb[:, 2]**2)/n_mol
-            print(f"iter: {iter_num}, crlb_3d_avg: {crlb_3d_avg}")
+
+        def closure():
             crlb_optimizer.zero_grad()
+            xyz_crlb, model = self.compute_crlb(x, y, z, photons, bgs)
+            crlb_3d_avg = torch.sum(xyz_crlb[:, 0] ** 2 + xyz_crlb[:, 1] ** 2 + xyz_crlb[:, 2] ** 2) / n_mol
             crlb_3d_avg.backward()
-            crlb_optimizer.step()
+            return crlb_3d_avg
+
+        while True:
+            crlb_3d_avg = crlb_optimizer.step(closure)
+            print(f"iter: {iter_num}, crlb_3d_avg: {crlb_3d_avg}")
             self._pre_compute()
             if torch.abs((loss_1 - crlb_3d_avg) / loss_1) < tolerance:
                 break
             loss_1 = crlb_3d_avg.detach()
             iter_num += 1
+
         print('CRLB optimization done')
+
+
+class VectorPSFTorch_2channel(VectorPSFTorch):
+    """
+    Vectorial PSF model with two detection channels. The two channels have different focal planes.
+
+    Args:
+        wavelength (float): emission wavelength, unit nm
+        na (float): numerical aperture of the objective
+        nmed (float): refractive index of the medium
+        nimm (float): refractive index of the immersion medium
+        pixel_size (float): camera pixel size, unit nm
+        psf_size (int): size of the PSF image, should be an odd number
+        z_range (tuple of float): z range of the PSF, unit nm
+        z_step (float): z step of the PSF, unit nm
+        zemit0 (float, optional): initial axial position of the emitter, default 0, unit nm
+        objstage0 (float, optional): initial axial position of the objective stage, default 0, unit nm
+        n_zernike (int, optional): number of zernike modes used to model the aberrations,
+                                   default 15 (up to 5th order excluding piston, tip and tilt)
+        zernike_coef (torch.Tensor, optional): initial zernike coefficients in a torch tensor,
+                                               default None which means all zeros
+        focus_norm (bool, optional): whether to normalize the PSF intensity by the in-focus intensity,
+                                     default True. If False, the PSF is normalized by itself.
+                                     Note that focus_norm=True is more relevant to localization microscopy,
+                                     while focus_norm=False is more relevant to particle tracking microscopy.
+        otf_rescale_xy (tuple of float, optional): sigma_x and sigma_y for Gaussian rescaling of the OTF,
+                                                   default (0,0) means no rescaling
+        req_grad (bool, optional): whether the zernike coefficients require gradients,
+                                   default False. Set True when optimizing the coefficients.
+        data_type (torch.dtype, optional): data type for real numbers, default torch.float32
+        device (str, optional): device to use, default 'cuda'
+    """
+
+    def __init__(self, psf_params, req_grad=False, data_type=torch.float64, zernike_idx_learn=None):
+        super(VectorPSFTorch_2channel, self).__init__(psf_params, req_grad, data_type, zernike_idx_learn)
+
+        self.z_offset = psf_params.get('z_offset', 300)  # nm
+        self.reflection_ratio = psf_params.get('reflection_ratio', 0.5)  # ratio of the main channel/sum of two channels
+
+    def simulate(self, x, y, z, photons, objstage=None, zernike_coefs=None):
+        main_psfs_out = super().simulate(x, y, z, photons*self.reflection_ratio, objstage, zernike_coefs)
+        auxi_psfs_out = super().simulate(x, y, z+self.z_offset, photons*(1-self.reflection_ratio), objstage, zernike_coefs)
+        psfs_out = torch.cat((main_psfs_out[None], auxi_psfs_out[None]), dim=0)
+
+        # todo: need to think how to calculate the derivatives for two channels and the CRLB optimization, further combined with neural network
+        return psfs_out
+
+
+

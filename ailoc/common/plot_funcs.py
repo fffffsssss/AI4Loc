@@ -222,8 +222,8 @@ def plot_start_end_psf(model):
     phase_start_end_diff = np.concatenate([phase_start, phase_end, phase_end - phase_start], 1)
 
     # Create a single figure with GridSpec
-    fig = plt.figure(figsize=(12, 14))
-    gs = GridSpec(3, 9, height_ratios=[4, 4, 8])
+    fig = plt.figure(figsize=(9, 15),dpi=300)
+    gs = GridSpec(4, 9, height_ratios=[4, 4, 8, 6])
 
     # PSF plots (first row, 1x9 grid)
     for i in range(nz):
@@ -248,84 +248,36 @@ def plot_start_end_psf(model):
     ax_zernike.set_xticks(np.arange(zernike_mode.shape[0]))
     ax_zernike.set_xticklabels(aberrations_names, rotation=30, fontsize=12)
     bar_start = ax_zernike.bar(np.arange(zernike_mode.shape[0]) - width / 2,
-                               ailoc.common.cpu(zernike_coef_start),
+                               ailoc.common.cpu(zernike_coef_start/model.learned_psf.wavelength),
                                width=width, color='orange', edgecolor='k')
     bar_end = ax_zernike.bar(np.arange(zernike_mode.shape[0]) + width / 2,
-                             ailoc.common.cpu(zernike_coef_end),
+                             ailoc.common.cpu(zernike_coef_end/model.learned_psf.wavelength),
                              width=width, color='olive', edgecolor='k')
     ax_zernike.tick_params(axis='y', labelsize=12)
 
-    # Define autolabel function (unchanged, commented out as in original)
-    # def autolabel(rects):
-    #     y_axis_length = rects.datavalues.max() - rects.datavalues.min()
-    #     for rect in rects:
-    #         height = rect.get_height()
-    #         plt.text(rect.get_x() + 0.1, y_axis_length / 100 + height if height > 0 else height - y_axis_length / 40,
-    #                  '%.1f' % height,
-    #                  fontsize=10 - 2)
-    #
-    # autolabel(bar_start)
-    # autolabel(bar_end)
     ax_zernike.tick_params(axis='both', direction='out')
-    ax_zernike.set_ylabel('Zernike coefficients (nm)', fontsize=16)
+    ax_zernike.set_ylabel('Zernike coefficients (${\lambda}$)', fontsize=16)
     ax_zernike.set_xlabel('Zernike modes', fontsize=16)
-    ax_zernike.legend(['start', 'end'], fontsize=16)
+    ax_zernike.legend(['Initial', 'Learned'], fontsize=16)
+
+    # zernike coefficients learning history plot
+    zernike_history = []
+    for (iter, zernike) in model.evaluation_recorder['learned_psf_zernike'].items():
+        zernike_history.append(ailoc.common.cpu(zernike))
+    zernike_coeffs_over_time = np.array(zernike_history)/ailoc.common.cpu(model.learned_psf.wavelength)
+    iterations_zer = (np.array(list(range(0, len(zernike_history)))) + 1) * 100
+
+    ax_zernike_hist = fig.add_subplot(gs[3, :])
+    for j in range(zernike_coeffs_over_time.shape[1]):
+        ax_zernike_hist.plot(iterations_zer, zernike_coeffs_over_time[:, j],
+                 label=f'Zernike Coeff {j + 1}')  # Zernike index starts from 0 or 1 depending on convention
+    plt.xlabel('Iterations', fontsize=16)
+    plt.ylabel('Zernike coefficients (${\lambda}$)', fontsize=16)
+    plt.grid(True)
 
     # Adjust layout, save, and display
     fig.tight_layout()
     plt.show()
-
-    # # plot psfs
-    # fig, ax = plt.subplots(1, 9, constrained_layout=True, figsize=(12, 3))
-    # for i in range(nz):
-    #     ax_tmp = ax[i]
-    #     ax_tmp.imshow(psf_start_end_diff[i, :, :], cmap='turbo')
-    #     ax_tmp.set_title(f'{ailoc.common.cpu(z[i])} nm')
-    # fig.suptitle(f'PSF start;end;difference')
-    # plt.show()
-    #
-    # # plot pupils
-    # fig, ax = plt.subplots(1, 1, constrained_layout=True, figsize=(9, 3))
-    # im = plt.imshow(phase_start_end_diff, cmap='turbo')
-    # fig.colorbar(im, ax=ax, fraction=0.05)
-    # ax.set_title('Pupil start;end;difference')
-    # plt.show()
-    #
-    # # plot the zernike coefficients
-    # width = 0.35
-    # zernike_mode = ailoc.common.cpu(model.learned_psf.zernike_mode)
-    # figure, ax = plt.subplots(1, 1, constrained_layout=True, figsize=(10, 8))
-    # aberrations_names = []
-    # for i in range(zernike_mode.shape[0]):
-    #     aberrations_names.append(
-    #         f"{zernike_mode[i, 0]:.0f}, {zernike_mode[i, 1]:.0f}")
-    # plt.xticks(np.arange(zernike_mode.shape[0]),
-    #            labels=aberrations_names, rotation=30, fontsize=12)
-    # bar_start = ax.bar(np.arange(zernike_mode.shape[0])-width/2, ailoc.common.cpu(zernike_coef_start),
-    #                  width=width, color='orange',
-    #                  edgecolor='k')
-    # bar_end = ax.bar(np.arange(zernike_mode.shape[0])+width/2, ailoc.common.cpu(zernike_coef_end),
-    #                  width=width, color='olive',
-    #                  edgecolor='k')
-    # plt.yticks(fontsize=12)
-    #
-    # def autolabel(rects):
-    #     y_axis_length = rects.datavalues.max() - rects.datavalues.min()
-    #     for rect in rects:
-    #         height = rect.get_height()
-    #         plt.text(rect.get_x() + 0.1, y_axis_length / 100 + height if height > 0 else height - y_axis_length / 40,
-    #                  '%.1f' % height,
-    #                  fontsize=10 - 2)
-    #
-    # # autolabel(bar_start)
-    # # autolabel(bar_end)
-    # ax.tick_params(axis='both',
-    #                direction='out'
-    #                )
-    # ax.set_ylabel('Zernike coefficients (nm)', fontsize=16)
-    # ax.set_xlabel('Zernike modes', fontsize=16)
-    # plt.legend(['start', 'end'], fontsize=16)
-    # plt.show()
 
 
 def plot_single_frame_inference(inference_dict, loc_model):
@@ -335,7 +287,7 @@ def plot_single_frame_inference(inference_dict, loc_model):
         inference_dict: the inference dict contain network output and the raw data
     """
 
-    fig1, ax_arr = plt.subplots(4, 3, figsize=(9, 12), constrained_layout=True)
+    fig1, ax_arr = plt.subplots(4, 3, figsize=(9, 12), constrained_layout=True, dpi=300)
 
     ax = []
     datas = []
@@ -382,12 +334,12 @@ def plot_single_frame_inference(inference_dict, loc_model):
         ailoc.common.gpu(inference_dict['bg_sampled']/loc_model.data_simulator.mol_sampler.bg_scale)
     )
     reconstruction = ailoc.common.cpu(loc_model.data_simulator.camera.forward_wo_noise(reconstruction))[0,0]
-    fig2, ax2 = plt.subplots(2, 2, figsize=(12, 12), constrained_layout=True)
+    fig2, ax2 = plt.subplots(2, 2, figsize=(12, 12), constrained_layout=True, dpi=300)
     cmap = 'gray'
     plt.colorbar(mappable=ax2[0,0].imshow(datas[0], cmap=cmap), ax=ax2[0,0], fraction=0.046, pad=0.04)
     for x, y in zip(inference_dict['prob_sampled'].nonzero()[1], inference_dict['prob_sampled'].nonzero()[0]):
         # ax2.add_patch(plt.Circle((x, y), radius=1.5, color='cyan', fill=True, lw=0.5, alpha=0.8))
-        ax2[0,0].scatter(x, y, s=10, c='m', marker='x')
+        ax2[0,0].scatter(x, y, s=20, c='m', marker='x')
     ax2[0,0].set_title('raw data')
 
     cmap = 'magma'
@@ -685,7 +637,7 @@ def plot_psf_stack(psfs, z_pos, cmap='gray'):
 
     fig, ax_arr = plt.subplots(int(np.ceil(num_z / 7)), 7,
                                figsize=(7 * 2, 2 * int(np.ceil(num_z / 7))),
-                               constrained_layout=True)
+                               constrained_layout=True, dpi=300)
     ax = []
     plts = []
     for i in ax_arr:
@@ -710,7 +662,7 @@ def plot_image_stack(stack_a,cmap='magma'):
 
     fig, ax_arr = plt.subplots(nrows, ncols,
                                figsize=(ncols * 2, 2 * nrows),
-                               constrained_layout=True)
+                               constrained_layout=True,dpi=300)
     ax = []
     plts = []
     for i in ax_arr:
@@ -733,15 +685,18 @@ def plot_image_stack_difference(stack_a,stack_b,cmap='magma'):
     n_img = stack_a.shape[0]
     n_row = min(int(np.ceil(n_img/1)),8)
     # plot the data, model, error
-    figure, ax_arr = plt.subplots(n_row, 1, constrained_layout=True, figsize=(6, 2*n_row))
+    figure, ax_arr = plt.subplots(n_row, 1, constrained_layout=True, figsize=(6, 2*n_row), dpi=300)
     ax = []
     plts = []
-    for i in ax_arr:
-        try:
-            for j in i:
-                ax.append(j)
-        except:
-            ax.append(i)
+    if n_row == 1:
+        ax.append(ax_arr)
+    else:
+        for i in ax_arr:
+            try:
+                for j in i:
+                    ax.append(j)
+            except:
+                ax.append(i)
 
     for i in range(n_row):
         a_tmp = np.squeeze(stack_a[i])
@@ -754,7 +709,65 @@ def plot_image_stack_difference(stack_a,stack_b,cmap='magma'):
 
 
 def plot_image(image, cmap='turbo'):
-    plt.figure(figsize=(10, 10))
+    plt.figure(figsize=(10, 10),dpi=300)
     plt.imshow(ailoc.common.cpu(image), cmap=cmap)
     plt.colorbar()
     plt.show()
+
+
+def save_image_list_as_video(image_list, output_path='output_video.avi', fps=30):
+    """
+    Saves a list of RGBA NumPy arrays as a video file.
+
+    Args:
+        image_list (list): A list of ndarray, each with shape (h, w, 4).
+        output_path (str): The path to save the output video file.
+        fps (int): The frames per second for the video.
+    """
+    if not image_list:
+        print("The image list is empty. No video will be created.")
+        return
+
+    # Get the dimensions from the first image
+    height, width, _ = image_list[0].shape
+    frame_size = (width, height)
+
+    # Define the codec and create a VideoWriter object
+    fourcc = cv2.VideoWriter_fourcc(*'DIVX')  # For .avi file
+    out = cv2.VideoWriter(output_path, fourcc, fps, frame_size)
+
+    # Write each image frame to the video
+    for img_rgba in image_list:
+        # Convert the RGBA array to BGR format
+        # The alpha channel is ignored for video encoding in this case.
+        img_bgr = cv2.cvtColor(img_rgba, cv2.COLOR_RGBA2BGR)
+        out.write(img_bgr)
+
+    # Release the video writer object
+    out.release()
+    print(f"Video saved successfully at {output_path}")
+
+
+def fig_to_numpy_array(fig):
+    """
+    Converts a matplotlib figure to a NumPy array.
+
+    Args:
+        fig (matplotlib.figure.Figure): The figure object to convert.
+
+    Returns:
+        np.ndarray: A NumPy array of the figure's pixel data in RGBA format (H, W, 4).
+    """
+    # Draw the figure on the canvas to ensure all elements are rendered
+    fig.canvas.draw()
+
+    # Get the RGBA buffer from the canvas renderer
+    buf = fig.canvas.renderer.buffer_rgba()
+
+    # Convert the buffer to a NumPy array and reshape to (H, W, 4)
+    # The 'np.asarray' is used to create an array from the buffer, and then
+    # we reshape it using the figure's height and width.
+    width, height = fig.canvas.get_width_height()
+    image_array = np.asarray(buf).reshape((height, width, 4))
+
+    return image_array

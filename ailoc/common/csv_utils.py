@@ -44,6 +44,28 @@ def read_csv_array(path):
     return molecule_array
 
 
+def read_csv_array_lls_motor_paint(path):
+    df = pd.read_csv(path, header=0)
+
+    frame_col = [col for col in df.columns if 'Frame_Number' in col]
+    x_col = [col for col in df.columns if col == 'X_(nm)']
+    y_col = [col for col in df.columns if col == 'Y_(nm)']
+    z_col = [col for col in df.columns if col == 'Z_(nm)']
+    photon_col = [col for col in df.columns if col == 'Amplitude_fit']
+
+    remaining_cols = [col for col in df.columns if col is not x_col[0] and col is not y_col[0]
+                      and col is not z_col[0] and col is not frame_col[0] and col is not photon_col[0]
+                      and ('Unnamed' not in col)]
+
+    assert all([frame_col, x_col, y_col, z_col, photon_col]), \
+        'Could not find columns with frame,x,y,z,photon in the csv file'
+
+    reordered_cols = [frame_col[0]] + [x_col[0]] + [y_col[0]] + [z_col[0]] + [photon_col[0]] + remaining_cols
+    molecule_array = df[reordered_cols].values
+
+    return molecule_array
+
+
 def write_csv_array(input_array, filename, write_mode='write localizations'):
     """
     Writes a csv_file with different column orders depending on the input.
@@ -94,6 +116,12 @@ def write_csv_array(input_array, filename, write_mode='write localizations'):
             csvwriter.writerow(['frame', 'xnm', 'ynm', 'znm', 'photon', 'prob', 'x_sig', 'y_sig', 'z_sig',
                                 'photon_sig', 'xo', 'yo', 'xo_rescale', 'yo_rescale', 'xnm_rescale',
                                 'ynm_rescale'])
+            for row in input_array:
+                csvwriter.writerow([repr(element) for element in row])
+    elif write_mode == 'write simulated ground truth':
+        with open(filename, 'w', newline='') as csvfile:
+            csvwriter = csv.writer(csvfile, delimiter=',', quoting=csv.QUOTE_MINIMAL)
+            csvwriter.writerow(['frame', 'xnm', 'ynm', 'znm', 'photon'])
             for row in input_array:
                 csvwriter.writerow([repr(element) for element in row])
     else:

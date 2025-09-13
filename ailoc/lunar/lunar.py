@@ -10,6 +10,7 @@ from tqdm import tqdm
 import copy
 import collections
 import scipy
+import os
 
 import ailoc.common
 import ailoc.simulation
@@ -113,6 +114,9 @@ class Lunar_LocLearning(ailoc.common.XXLoc):
         """
 
         file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'LUNAR_LL.pt' if file_name is None else file_name
+        if not os.path.exists(os.path.dirname(file_name)):
+            os.makedirs(os.path.dirname(file_name))
+
         self.scheduler.T_max = max_iterations
         print('Start training...')
 
@@ -363,10 +367,14 @@ class Lunar_LocLearning(ailoc.common.XXLoc):
 
         cmap = 'gray'
 
-        fig, ax_arr = plt.subplots(int(np.ceil(self.context_size / 2)),
-                                   2,
-                                   figsize=(3 * 2,
-                                            2 * int(np.ceil(self.context_size / 2))),
+        im_num = self.context_size * 2
+        n_col = 4
+        n_row = int(np.ceil(im_num / n_col))
+
+        fig, ax_arr = plt.subplots(n_row,
+                                   n_col,
+                                   figsize=(n_col * 3,
+                                            n_row * 2),
                                    constrained_layout=True)
         ax = []
         plts = []
@@ -381,8 +389,14 @@ class Lunar_LocLearning(ailoc.common.XXLoc):
             plts.append(ax[i].imshow(ailoc.common.cpu(data_cam)[0, i], cmap=cmap))
             ax[i].set_title(f"frame {i}")
             plt.colorbar(mappable=plts[-1], ax=ax[i], fraction=0.046, pad=0.04)
+
+        for i in range(self.context_size):
+            ax_num = i + self.context_size
+            plts.append(ax[ax_num].imshow(ailoc.common.cpu(data_cam)[0, i], cmap=cmap))
+            ax[ax_num].set_title(f"GT frame {i}")
             pix_gt = ailoc.common.cpu(p_map_gt[0, i].nonzero())
-            ax[i].scatter(pix_gt[:, 1], pix_gt[:, 0], s=5, c='m', marker='x')
+            ax[ax_num].scatter(pix_gt[:, 1], pix_gt[:, 0], s=5, c='m', marker='x')
+            plt.colorbar(mappable=plts[-1], ax=ax[ax_num], fraction=0.046, pad=0.04)
 
         plt.show()
 
@@ -423,10 +437,14 @@ class Lunar_SyncLearning(Lunar_LocLearning):
     LUNAR class, simultaneously learning the localization network and the PSF model.
     """
 
-    def __init__(self, psf_params_dict, camera_params_dict, sampler_params_dict):
+    def __init__(self, psf_params_dict, camera_params_dict, sampler_params_dict, zernike_idx_learn=None):
         super().__init__(psf_params_dict, camera_params_dict, sampler_params_dict)
 
-        self.learned_psf = ailoc.simulation.VectorPSFTorch(psf_params_dict, req_grad=True, data_type=torch.float64)
+        self.zernike_idx_learn = zernike_idx_learn
+        self.learned_psf = ailoc.simulation.VectorPSFTorch(psf_params_dict,
+                                                           req_grad=True,
+                                                           data_type=torch.float64,
+                                                           zernike_idx_learn=self.zernike_idx_learn)
 
         self.warmup = 5000
 
@@ -438,7 +456,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                                      self.z_bins+1)
         self.target_z_counts = collections.Counter()
         for i in range(self.z_bins):
-            self.target_z_counts[(self.intervals[i], self.intervals[i+1])] = 500
+            self.target_z_counts[(self.intervals[i], self.intervals[i+1])] = 1000
         self.roilib_sparse_first = True
         self.over_cut = 8
 
@@ -462,6 +480,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
         recorder = {'loss_sleep': collections.OrderedDict(),  # loss function value
                     'loss_wake': collections.OrderedDict(),
                     'loss_recon': collections.OrderedDict(),  # reconstruction loss of the test roi lib
+                    'avg_3Dsig_recon': collections.OrderedDict(),  # average 3D sigma on the test roi lib
                     'iter_time': collections.OrderedDict(),  # time cost for each iteration
                     'n_per_img': collections.OrderedDict(),  # average summed probability channel per image
                     'recall': collections.OrderedDict(),  # TP/(TP+FN)
@@ -514,6 +533,9 @@ class Lunar_SyncLearning(Lunar_LocLearning):
 
         self.prepare_sample_real_data(real_data, batch_size)
 
+        # use a flag to early stop the physics learning if zernike coefficients are converged
+        zernike_converged = False
+
         print('-' * 200)
         print('Start training...')
 
@@ -529,6 +551,10 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                 # need to initialize the roi_lib as the model file does not save the roi_lib
                 self.update_roilib2learn(real_data, self.context_size * batch_size)
 
+        # Forcibly set robust_training to True in warmup phase for better generalization
+        if self._iter_train < self.warmup:
+            self.data_simulator.mol_sampler.robust_training = True
+
         while self._iter_train < max_iterations:
             t0 = time.time()
             total_loss_sleep = []
@@ -536,8 +562,8 @@ class Lunar_SyncLearning(Lunar_LocLearning):
             for i in range(eval_freq):
                 loss_sleep = self.sleep_train(batch_size=batch_size, robust_scale=robust_scale)
                 total_loss_sleep.append(loss_sleep)
-                if self._iter_train > self.warmup:
-                    if (self._iter_train-1) % self.warmup == 0 and self._iter_train > self.warmup:
+                if self._iter_train > self.warmup and not zernike_converged:
+                    if (self._iter_train-1) % self.warmup == 0:
                         # calculate the z weight due to non-uniform z distribution
                         # self.get_real_data_z_prior(real_data, self.sample_batch_size)
                         self.update_roilib2learn(real_data, self.context_size*batch_size)
@@ -552,9 +578,16 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                                                           max_recon_psfs)
                         total_loss_wake.append(loss_wake) if loss_wake is not np.nan else None
 
+                    # reset the robust training flag to user defined
+                    if self._iter_train == self.warmup + 1:
+                        self.data_simulator.mol_sampler.robust_training = self.dict_sampler_params['robust_training']
+
                 if self._iter_train % 100 == 0:
                     self.evaluation_recorder['learned_psf_zernike'][
                         self._iter_train] = self.learned_psf.zernike_coef.detach().cpu().numpy()
+                    if not zernike_converged:
+                        # change the flag if zernike coefficients are converged
+                        zernike_converged = self.check_zernike_convergence()
 
             torch.cuda.empty_cache()
 
@@ -563,8 +596,8 @@ class Lunar_SyncLearning(Lunar_LocLearning):
             avg_loss_wake = np.mean(total_loss_wake) if len(total_loss_wake) > 0 else np.nan
             self.evaluation_recorder['loss_sleep'][self._iter_train] = avg_loss_sleep
             self.evaluation_recorder['loss_wake'][self._iter_train] = avg_loss_wake
-            self.evaluation_recorder['loss_recon'][self._iter_train] = self.compute_roilibtest_loss(batch_size *
-                                                                                                   self.context_size)
+            (self.evaluation_recorder['loss_recon'][self._iter_train],
+             self.evaluation_recorder['avg_3Dsig_recon'][self._iter_train]) = self.compute_roilibtest_loss(batch_size *self.context_size)
             self.evaluation_recorder['iter_time'][self._iter_train] = avg_iter_time
 
             if self._iter_train > 1000:
@@ -1039,6 +1072,9 @@ class Lunar_SyncLearning(Lunar_LocLearning):
             new_chunk_z_counts[interval] = 0
         current_z_counts = collections.Counter() + current_counts
 
+        if len(chunk_z_counts_array) == 0:
+            return new_chunk_list, new_chunk_z_counts, current_z_counts
+
         while True:
             # calculate the current state and the score
             current_z_array = np.array([current_z_counts[interval] for interval in target_counts])
@@ -1120,7 +1156,11 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                                                               original_sub_fov_xy_list,
                                                               ailoc.common.cpu(self.data_simulator.psf_model.pixel_size_xy)))
 
-        assert len(molecule_array) > 0, 'No molecule detected in the real data, please check the data or the network.'
+        assert len(molecule_array) > 0, ('No molecule detected in the real data, please check the data or the network.\n'
+                                         'If data is OK, the network is probably far away from the true posterior, consider:\n'
+                                         '1. Increase the model.warmup;\n'
+                                         '2. Turn off robust training;\n'
+                                         '3. Turn on the temporal attn for more powerful network;\n')
 
         # print the z and photon distribution
         z_hist_curr = np.histogram(molecule_array[:, 3], bins=10)
@@ -1139,11 +1179,6 @@ class Lunar_SyncLearning(Lunar_LocLearning):
         z_up_thre = self.dict_sampler_params['z_range'][1]-50
         z_low_thre = self.dict_sampler_params['z_range'][0]+50
         p_low_thre = 0.5
-        # photon_low_thre = 0
-        # photon_up_thre = np.inf
-        # z_up_thre = np.inf
-        # z_low_thre = -np.inf
-        # p_low_thre = 0
 
         self.roi_lib['sparse'] = np.array([])
         self.roi_lib['sparse_z'] = np.array([])
@@ -1228,8 +1263,98 @@ class Lunar_SyncLearning(Lunar_LocLearning):
             self.roi_lib['sparse_z'] = np.array(sparse_z_list)
             self.roi_lib['total_z_counts'].update(self.roi_lib['sparse_z_counts'])
 
+        # then find the dense ROIs
         if sum(self.roi_lib['total_z_counts'].values()) < sum(self.target_z_counts.values()):
-            # then find the dense ROIs
+            # first define the split setting of the data by dense ROI size and chunk frame number
+            split_chunk_list = []
+            row_sub_fov = int(np.ceil(h / dense_roi_size))
+            col_sub_fov = int(np.ceil(w / dense_roi_size))
+            progress = 0
+            for frame in range(extra_length, n - extra_length - dense_frame_num, dense_frame_num):
+                progress += 1
+                if progress % 1000 == 0:
+                    print(f'\rDense ROI progress: '
+                          f'{progress/((n-2*extra_length-dense_frame_num)/dense_frame_num)*100:.0f}%', end='')
+                frame_range = range(frame+1, frame+1 + dense_frame_num)
+                mol_these_frames = ailoc.common.find_molecules(molecule_array, list(frame_range))
+                if len(mol_these_frames) == 0:
+                    continue
+                # split the molecules into sub-FOVs
+                for raw in range(row_sub_fov):
+                    for col in range(col_sub_fov):
+                        x_start = col * dense_roi_size if col * dense_roi_size + dense_roi_size <= w else w - dense_roi_size
+                        y_start = raw * dense_roi_size if raw * dense_roi_size + dense_roi_size <= h else h - dense_roi_size
+                        x_end = x_start + dense_roi_size
+                        y_end = y_start + dense_roi_size
+                        # find the molecules in this sub-FOV
+                        x_range = ((x_start+self.over_cut)*self.dict_psf_params['pixel_size_xy'][0],
+                                   (x_end-self.over_cut)*self.dict_psf_params['pixel_size_xy'][0])
+                        y_range = ((y_start+self.over_cut)*self.dict_psf_params['pixel_size_xy'][1],
+                                   (y_end-self.over_cut)*self.dict_psf_params['pixel_size_xy'][1])
+                        mol_this_chunk = mol_these_frames[
+                            (mol_these_frames[:, 1] >= x_range[0]) & (mol_these_frames[:, 1] <= x_range[1]) &
+                            (mol_these_frames[:, 2] >= y_range[0]) & (mol_these_frames[:, 2] <= y_range[1])]
+                        if len(mol_this_chunk) == 0:
+                            continue
+                        p_avg = mol_this_chunk[:, 5].mean()
+                        photon_max = mol_this_chunk[:, 4].max()
+                        photon_min = mol_this_chunk[:, 4].min()
+                        z_max = mol_this_chunk[:, 3].max()
+                        z_min = mol_this_chunk[:, 3].min()
+                        if (p_avg < p_low_thre or
+                            photon_min < photon_low_thre or
+                            photon_max > photon_up_thre or
+                            z_min < z_low_thre or
+                            z_max > z_up_thre):
+                            continue
+                        # calculate the z counts of this chunk
+                        split_chunk_list.append((mol_this_chunk,
+                                                 (frame, frame+dense_frame_num),
+                                                 (x_start, x_end),
+                                                 (y_start, y_end)))
+
+            print('\rDense ROI progress: 100%')
+
+            # select the split chunks to form a new list with more balanced z distribution
+            selected_chunks, selected_chunks_z_counts, total_z_counts = self.z_partition(split_chunk_list,
+                                                                                         self.roi_lib['total_z_counts'],
+                                                                                         self.target_z_counts,
+                                                                                         self.intervals,
+                                                                                         replacement=False)
+            if len(selected_chunks):
+                # build the dense ROI library
+                dense_roi_list = []
+                for chunk in selected_chunks:
+                    frame_start, frame_end = chunk[1][0]-extra_length, chunk[1][1]+extra_length
+                    x_start, x_end = chunk[2]
+                    y_start, y_end = chunk[3]
+                    dense_roi_list.append(real_data[frame_start:frame_end, y_start:y_end, x_start:x_end][None])
+
+                self.roi_lib['dense'] = np.concatenate(dense_roi_list, axis=0)
+                self.roi_lib['dense_z_counts'] = selected_chunks_z_counts
+                self.roi_lib['total_z_counts'].update(self.roi_lib['dense_z_counts'])
+
+        # if far away from the target z counts, loosen the filter requirements to rebuild the dense ROI library
+        if sum(self.roi_lib['total_z_counts'].values()) < 0.5 * sum(self.target_z_counts.values()):
+            print('The current ROI library is far away from the target z counts, '
+                  'loosen the filter requirements to rebuild the dense ROI library...')
+
+            # calculate the threshold to filter ROIs
+            photon_low_thre = self.dict_sampler_params['photon_range'][0]
+            photon_up_thre = self.dict_sampler_params['photon_range'][1]
+            z_up_thre = self.dict_sampler_params['z_range'][1]
+            z_low_thre = self.dict_sampler_params['z_range'][0]
+            p_low_thre = 0.5
+
+            # reset the dense ROI library
+            self.roi_lib['dense'] = np.array([])
+            self.roi_lib['dense_z_counts'] = collections.Counter()
+            self.roi_lib['total_z_counts'] = collections.Counter()
+            for i in range(self.z_bins):
+                self.roi_lib['dense_z_counts'][(self.intervals[i], self.intervals[i + 1])] = 0
+                self.roi_lib['total_z_counts'][(self.intervals[i], self.intervals[i + 1])] = 0
+            self.roi_lib['total_z_counts'].update(self.roi_lib['sparse_z_counts'])
+
             # first define the split setting of the data by dense ROI size and chunk frame number
             split_chunk_list = []
             row_sub_fov = int(np.ceil(h / dense_roi_size))
@@ -1372,17 +1497,15 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                 real_data_sampled = self.data_simulator.camera.backward(real_data_sampled)
                 if self.temporal_attn and self.attn_length // 2 > 0:
                     real_data_sampled = real_data_sampled[:, (self.attn_length // 2): -(self.attn_length // 2)]
-                    real_data_sampled = real_data_sampled.reshape(-1,
-                                                               real_data_sampled.shape[-2],
-                                                               real_data_sampled.shape[-1])
+                real_data_sampled = real_data_sampled.reshape(-1, real_data_sampled.shape[-2], real_data_sampled.shape[-1])
 
-                # consider the overcut
-                real_data_sampled = real_data_sampled[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                delta_map_sample = delta_map_sample[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                xyzph_map_sample = xyzph_map_sample[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                bg_sample = bg_sample[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                xyzph_pred = xyzph_pred[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                xyzph_sig_pred = xyzph_sig_pred[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # # consider the overcut
+                # real_data_sampled = real_data_sampled[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # delta_map_sample = delta_map_sample[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # xyzph_map_sample = xyzph_map_sample[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # bg_sample = bg_sample[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # xyzph_pred = xyzph_pred[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # xyzph_sig_pred = xyzph_sig_pred[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
 
                 real_data_sample_list.append(real_data_sampled)
                 delta_map_sample_list.append(delta_map_sample)
@@ -1412,13 +1535,13 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                                                                    xyzph_map_sample_list,
                                                                    bg_sample_list, )
 
-        # # consider the overcut
-        # real_data_sample_list = real_data_sample_list[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-        # reconstruction = reconstruction[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-        # delta_map_sample_list = delta_map_sample_list[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-        # xyzph_map_sample_list = xyzph_map_sample_list[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-        # xyzph_pred_list = xyzph_pred_list[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-        # xyzph_sig_pred_list = xyzph_sig_pred_list[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+        # consider the overcut
+        real_data_sample_list = real_data_sample_list[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+        reconstruction = reconstruction[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+        delta_map_sample_list = delta_map_sample_list[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+        xyzph_map_sample_list = xyzph_map_sample_list[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+        xyzph_pred_list = xyzph_pred_list[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+        xyzph_sig_pred_list = xyzph_sig_pred_list[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
 
         loss, elbo_record = self.wake_loss(real_data_sample_list,
                                            reconstruction,
@@ -1440,6 +1563,31 @@ class Lunar_SyncLearning(Lunar_LocLearning):
 
         return elbo_record.detach().cpu().numpy()
 
+    def check_zernike_convergence(self):
+        """
+        calculate the flatness of recent zernike coefficients to
+        determine whether zernike coefficients are converged
+        """
+
+        # calculate the flatness of zernike coeffs
+        flatness_thre = 0.08
+        window_size = 20
+        if self._iter_train < window_size*100 + self.warmup:
+            return False
+
+        zernike_history = []
+        for (iter, zernike) in self.evaluation_recorder['learned_psf_zernike'].items():
+            zernike_history.append(ailoc.common.cpu(zernike))
+
+        window = zernike_history[len(zernike_history) - window_size:]
+        std_window = np.std(window, axis=0)
+        flatness = np.mean(std_window)
+        if flatness < flatness_thre:
+            print('\033[0;31m'+"Zernike coefficients converged, stop physics learning early"+'\033[0m')
+            return True
+        else:
+            return False
+
     def compute_roilibtest_loss(self, batch_size):
         """
         Compute the negative log likelihood of the ROI library, using the current network and learned PSF
@@ -1447,9 +1595,10 @@ class Lunar_SyncLearning(Lunar_LocLearning):
         """
 
         if self.roi_lib_test is None:
-            return np.nan
+            return np.nan, np.nan
 
         loss_list = []
+        uncertainty_list = []
         self.network.eval()
         with torch.no_grad():
             for lib in ['sparse', 'dense']:
@@ -1476,22 +1625,22 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                     real_data_tmp = self.data_simulator.camera.backward(real_data_tmp)
                     if self.temporal_attn and self.attn_length // 2 > 0:
                         real_data_tmp = real_data_tmp[:, (self.attn_length // 2): -(self.attn_length // 2)]
-                        real_data_tmp = real_data_tmp.reshape(-1, real_data_tmp.shape[-2], real_data_tmp.shape[-1])
+                    real_data_tmp = real_data_tmp.reshape(-1, real_data_tmp.shape[-2], real_data_tmp.shape[-1])
 
-                    # consider the overcut
-                    real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                    delta_map_sample = delta_map_sample[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                    xyzph_map_sample = xyzph_map_sample[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                    bg_sample = bg_sample[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                    # # consider the overcut
+                    # real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                    # delta_map_sample = delta_map_sample[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                    # xyzph_map_sample = xyzph_map_sample[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                    # bg_sample = bg_sample[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
 
                     reconstruction = self.data_simulator.reconstruct_posterior(self.learned_psf,
                                                                                delta_map_sample,
                                                                                xyzph_map_sample,
                                                                                bg_sample, )
 
-                    # # consider the overcut
-                    # real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                    # reconstruction = reconstruction[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                    # consider the overcut
+                    real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                    reconstruction = reconstruction[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
 
                     # nll_list.append(-ailoc.lunar.compute_log_p_x_given_h(data=real_data_tmp[:, None].expand(-1, 1, -1, -1),
                     #                                            model=reconstruction).mean().detach().cpu().numpy())
@@ -1499,7 +1648,15 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                     loss_list.append(torch.nn.MSELoss(reduction='none')(reconstruction, real_data_tmp[:, None]
                                                                         .expand(-1, 1, -1, -1)).mean().detach().cpu().numpy())
 
-        return np.mean(loss_list) if loss_list else np.nan
+                    # also record the average posterior uncertainty on the roilib
+                    pix_inds = tuple(delta_map_sample[:,0].nonzero().transpose(1, 0))
+                    if len(pix_inds):
+                        x_sig = xyzph_sig_pred[:,0][pix_inds] * self.data_simulator.psf_model.pixel_size_xy[0]
+                        y_sig = xyzph_sig_pred[:,1][pix_inds] * self.data_simulator.psf_model.pixel_size_xy[1]
+                        z_sig = xyzph_sig_pred[:,2][pix_inds] * self.data_simulator.mol_sampler.z_scale
+                        uncertainty_list.append(torch.mean(torch.sqrt(x_sig**2+y_sig**2+z_sig**2)).detach().cpu().numpy())
+
+        return np.mean(loss_list) if loss_list else np.nan, np.mean(uncertainty_list) if uncertainty_list else np.nan
 
     def plot_roilib_recon(self):
         """
@@ -1552,22 +1709,22 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                 real_data_tmp = self.data_simulator.camera.backward(real_data_tmp)
                 if extra_length > 0:
                     real_data_tmp = real_data_tmp[:, extra_length: -extra_length]
-                    real_data_tmp = real_data_tmp.reshape(-1, real_data_tmp.shape[-2], real_data_tmp.shape[-1])
+                real_data_tmp = real_data_tmp.reshape(-1, real_data_tmp.shape[-2], real_data_tmp.shape[-1])
 
-                # consider the overcut
-                real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                delta_map_sample = delta_map_sample[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                xyzph_map_sample = xyzph_map_sample[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                bg_sample = bg_sample[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # # consider the overcut
+                # real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # delta_map_sample = delta_map_sample[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # xyzph_map_sample = xyzph_map_sample[:, :, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # bg_sample = bg_sample[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
 
                 reconstruction = self.data_simulator.reconstruct_posterior(self.learned_psf,
                                                                            delta_map_sample,
                                                                            xyzph_map_sample,
                                                                            bg_sample, )
 
-                # # consider the overcut
-                # real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
-                # reconstruction = reconstruction[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                # consider the overcut
+                real_data_tmp = real_data_tmp[:, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
+                reconstruction = reconstruction[:, :, self.over_cut: -self.over_cut, self.over_cut: -self.over_cut]
 
                 recon_list.append(ailoc.common.cpu(reconstruction))
                 roi_plot_list.append([ailoc.common.cpu(real_data_tmp),tmp_z])
@@ -1604,6 +1761,7 @@ class Lunar_SyncLearning(Lunar_LocLearning):
                   f"Loss_sleep: {self.evaluation_recorder['loss_sleep'][self._iter_train]:.2f} || "
                   # f"Loss_wake: {self.evaluation_recorder['loss_wake'][self._iter_train]:.2f} || "
                   f"Loss_recon: {self.evaluation_recorder['loss_recon'][self._iter_train]:.2f} || "
+                  # f"Sig_recon: {self.evaluation_recorder['avg_3Dsig_recon'][self._iter_train]:.2f} || "
                   f"IterTime: {self.evaluation_recorder['iter_time'][self._iter_train]:.2f} ms || "
                   f"ETA: {self.evaluation_recorder['iter_time'][self._iter_train] * (max_iterations - self._iter_train) / 3600000:.2f} h || ",
                   end='')

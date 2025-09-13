@@ -18,7 +18,7 @@ torch.backends.cudnn.benchmark = True
 os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 
 
-def deeploc_loclearning():
+def deeploc_loclearning_using_accurate_psf():
     # set the file paths, calibration file is necessary,
     # experiment file is optional for background range estimation
     calib_file = None
@@ -140,6 +140,7 @@ def deeploc_loclearning():
         bg=np.mean(deeploc_model.dict_sampler_params['bg_range']),
         num_z_step=31,
         num_repeat=1000,
+        psf_focus_norm=True,
         show_res=True
     )
 
@@ -167,7 +168,7 @@ def deeploc_loclearning():
             num_workers=0
         )
 
-        data_analyzer.check_single_frame_output(frame_num=25)
+        data_analyzer.check_single_frame_output(frame_num=4)
 
         t0 = time.time()
         preds_array, preds_rescale_array = data_analyzer.divide_and_conquer()
@@ -185,7 +186,7 @@ def deeploc_loclearning():
         )
 
 
-def lunar_loclearning():
+def lunar_loclearning_using_accurate_psf():
     # set the file paths, calibration file is necessary,
     # experiment file is optional for background range estimation
     calib_file = None
@@ -297,13 +298,14 @@ def lunar_loclearning():
     # test single emitter localization accuracy with CRLB
     ailoc.common.test_single_emitter_accuracy(
         loc_model=lunar_model,
-        psf_params=lunar_model.dict_psf_params,
+        psf_params=None,
         xy_range=(-50, 50),
         z_range=np.array(lunar_model.dict_sampler_params['z_range']) * 0.98,
         photon=np.mean(lunar_model.dict_sampler_params['photon_range']),
         bg=np.mean(lunar_model.dict_sampler_params['bg_range']),
         num_z_step=31,
         num_repeat=1000,
+        psf_focus_norm=True,
         show_res=True
     )
 
@@ -331,7 +333,7 @@ def lunar_loclearning():
             num_workers=0
         )
 
-        data_analyzer.check_single_frame_output(frame_num=25)
+        data_analyzer.check_single_frame_output(frame_num=4)
 
         t0 = time.time()
         preds_array, preds_rescale_array = data_analyzer.divide_and_conquer()
@@ -349,7 +351,7 @@ def lunar_loclearning():
         )
 
 
-def lunar_synclearning():
+def lunar_synclearning_using_wrong_psf():
     # set the file paths, calibration file is necessary,
     # experiment file is optional for background range estimation
     calib_file = None
@@ -467,10 +469,12 @@ def lunar_synclearning():
     # plot evaluation performance during the training
     phase_record = ailoc.common.plot_synclearning_record(lunar_model, plot_phase=True)
     # save the phase learned during the training
-    print('Plot done, saving the .gif')
-    imageio.mimsave('../results/' + os.path.split(file_name)[-1].split('.')[0] + '_phase.gif',
-                    phase_record,
-                    duration=200)
+    if len(phase_record) != 0:
+        print('Plot done, saving the .avi')
+        ailoc.common.save_image_list_as_video(
+            phase_record,
+            '../results/' + os.path.split(file_name)[-1].split('.')[0] + '_phase.avi',
+            5)
 
     # compare the learned PSF before and after training
     ailoc.common.plot_start_end_psf(lunar_model)
@@ -485,6 +489,7 @@ def lunar_synclearning():
         bg=np.mean(lunar_model.dict_sampler_params['bg_range']),
         num_z_step=31,
         num_repeat=1000,
+        psf_focus_norm=True,
         show_res=True
     )
 
@@ -512,7 +517,7 @@ def lunar_synclearning():
             num_workers=0
         )
 
-        data_analyzer.check_single_frame_output(frame_num=25)
+        data_analyzer.check_single_frame_output(frame_num=4)
 
         t0 = time.time()
         preds_array, preds_rescale_array = data_analyzer.divide_and_conquer()
@@ -531,7 +536,7 @@ def lunar_synclearning():
 
 
 if __name__ == '__main__':
-    deeploc_loclearning()
-    lunar_loclearning()
-    lunar_synclearning()
+    deeploc_loclearning_using_accurate_psf()
+    lunar_loclearning_using_accurate_psf()
+    lunar_synclearning_using_wrong_psf()
 
