@@ -87,7 +87,7 @@ class DeepLoc(ailoc.common.XXLoc):
 
     def online_train(self, batch_size=1, max_iterations=50000, eval_freq=500, file_name=None):
         """
-        Train the network.
+        Train the network with training data generated online.
 
         Args:
             batch_size (int): batch size
@@ -143,6 +143,260 @@ class DeepLoc(ailoc.common.XXLoc):
             self.save(file_name)
 
         print('training finished!')
+
+    # def online_train_test_speed(self, batch_size=1, max_iterations=50000, eval_freq=500, file_name=None):
+    #     """
+    #     Train the network.
+    #     #todo: this is temporary function to test the speed of each part of the training process
+    #
+    #     Args:
+    #         batch_size (int): batch size
+    #         max_iterations (int): maximum number of iterations
+    #         eval_freq (int): every eval_freq iterations the network will be saved
+    #             and evaluated on the evaluation dataset to check the current performance
+    #         file_name (str): the name of the file to save the network
+    #     """
+    #
+    #     file_name = datetime.datetime.now().strftime('%Y-%m-%d-%H-%M') + 'DeepLoc.pt' if file_name is None else file_name
+    #
+    #     print('Start training...')
+    #
+    #     if self._iter_train > 0:
+    #         print('training from checkpoint, the recent performance is:')
+    #         self.print_recorder(max_iterations)
+    #
+    #     t_total_start = time.time()
+    #     t_data_gen = 0
+    #     t_forward_backward = 0
+    #     t_evaluate = 0
+    #
+    #     while self._iter_train < max_iterations:
+    #         t0 = time.time()
+    #         total_loss = []
+    #         for i in range(eval_freq):
+    #             t_tmp_data_gen = time.time()
+    #             train_data, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt, _ = \
+    #                 self.data_simulator.sample_training_data(batch_size=batch_size,
+    #                                                          context_size=self.context_size,
+    #                                                          iter_train=self._iter_train)
+    #             p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt = self.unfold_target(p_map_gt,
+    #                                                                                     xyzph_array_gt,
+    #                                                                                     mask_array_gt,
+    #                                                                                     bg_map_gt)
+    #             torch.cuda.synchronize()
+    #             t_data_gen += time.time() - t_tmp_data_gen
+    #
+    #             t_tmp_bf = time.time()
+    #             p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(train_data,
+    #                                                                          self.data_simulator.camera)
+    #             loss = self.compute_loss(p_pred, xyzph_pred, xyzph_sig_pred, bg_pred,
+    #                                      p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt)
+    #             self.optimizer.zero_grad()
+    #             loss.backward()
+    #             torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=0.03, norm_type=2)
+    #             self.optimizer.step()
+    #             self.scheduler.step()
+    #             torch.cuda.synchronize()
+    #             t_forward_backward += time.time() - t_tmp_bf
+    #
+    #             self._iter_train += 1
+    #
+    #             total_loss.append(ailoc.common.cpu(loss))
+    #
+    #         avg_iter_time = 1000 * (time.time() - t0) / eval_freq
+    #         avg_loss = np.mean(total_loss)
+    #         self.evaluation_recorder['loss'][self._iter_train] = avg_loss
+    #         self.evaluation_recorder['iter_time'][self._iter_train] = avg_iter_time
+    #
+    #         t_tmp_eval = time.time()
+    #         if self._iter_train > 1000:
+    #             print('-' * 200)
+    #             self.online_evaluate(batch_size=batch_size)
+    #
+    #         self.print_recorder(max_iterations)
+    #         self.save(file_name)
+    #         torch.cuda.synchronize()
+    #         t_evaluate += time.time() - t_tmp_eval
+    #
+    #     print('training finished!')
+    #
+    #     print(f'total time cost: {time.time() - t_total_start:.2f}s')
+    #     print(f'total data generation time cost: {t_data_gen:.2f}s')
+    #     print(f'total forward and backward time cost: {t_forward_backward:.2f}s')
+    #     print(f'total evaluation+save time cost: {t_evaluate:.2f}s')
+
+    # def offline_train_test_speed(self, batch_size=1, max_iterations=50000, eval_freq=500, file_name=None):
+    #     """
+    #     Train the network in an offline manner. The training data are generated before the network training.
+    #
+    #     Args:
+    #         batch_size (int): batch size
+    #         max_iterations (int): maximum number of iterations
+    #         eval_freq (int): every eval_freq iterations the network will be saved
+    #             and evaluated on the evaluation dataset to check the current performance
+    #         file_name (str): the name of the file to save the network
+    #     """
+    #
+    #     file_name = datetime.datetime.now().strftime(
+    #         '%Y-%m-%d-%H-%M') + 'DeepLoc.pt' if file_name is None else file_name
+    #
+    #     print('Start training...')
+    #
+    #     if self._iter_train > 0:
+    #         print('training from checkpoint, the recent performance is:')
+    #         self.print_recorder(max_iterations)
+    #
+    #     t_total_start = time.monotonic()
+    #     t_data_gen = 0
+    #     t_sample = 0
+    #     t_gen_noiseless = 0
+    #     t_gen_psfs = 0
+    #     t_place_psfs = 0
+    #     t_camera_forward = 0
+    #     t_transf_data = 0
+    #     t_forward_backward = 0
+    #     t_append_loss = 0
+    #     t_remain = 0
+    #
+    #     # generate all training data first
+    #     train_data_all = []
+    #     p_map_gt_all = []
+    #     xyzph_array_gt_all = []
+    #     mask_array_gt_all = []
+    #     bg_map_gt_all = []
+    #     for i in range(max_iterations):
+    #         t_tmp_data_gen = time.monotonic()
+    #
+    #         # train_data, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt, _ = \
+    #         #     self.data_simulator.sample_training_data(batch_size=batch_size,
+    #         #                                              context_size=self.context_size,
+    #         #                                              iter_train=i)
+    #
+    #         t_tmp_sample = time.monotonic()
+    #         p_map_sample, xyzph_map_sample, bg_map_sample, curr_sub_fov_xy, zernike_coefs, \
+    #             p_map_gt, xyzph_array_gt, mask_array_gt = self.data_simulator.mol_sampler.sample_for_train(batch_size,
+    #                                                                                         self.context_size,
+    #                                                                                         self.data_simulator.psf_model,
+    #                                                                                         i, )
+    #         torch.cuda.synchronize()
+    #         t_sample += time.monotonic() - t_tmp_sample
+    #
+    #         # generate psf patches
+    #         t_tmp_genpsf = time.monotonic()
+    #         batch_size, channels, height, width = p_map_sample.shape[0], p_map_sample.shape[1], p_map_sample.shape[2], \
+    #         p_map_sample.shape[3]
+    #         bg = bg_map_sample * self.data_simulator.mol_sampler.bg_scale
+    #         x, y, z, photons = self.data_simulator._translate_maps(p_map_sample.reshape([-1, height, width]),
+    #                                                 xyzph_map_sample.reshape([4, -1, height, width]))
+    #         with torch.no_grad():
+    #             if isinstance(self.data_simulator.psf_model, ailoc.simulation.VectorPSFCUDA):
+    #                 psf_patches = self.data_simulator.psf_model.simulate(x, y, z, photons, zernike_coefs) \
+    #                     if zernike_coefs is not None else self.data_simulator.psf_model.simulate(x, y, z, photons)
+    #             elif isinstance(self.data_simulator.psf_model, ailoc.simulation.VectorPSFTorch):
+    #                 psf_patches = self.data_simulator.psf_model.simulate(x, y, z, photons, zernike_coefs=zernike_coefs)
+    #             else:
+    #                 raise NotImplementedError('PSF model not supported.')
+    #         torch.cuda.synchronize()
+    #         t_gen_psfs += time.monotonic() - t_tmp_genpsf
+    #
+    #         t_tmp_placepsf = time.monotonic()
+    #         # put psfs on the canvas
+    #         data = (self.data_simulator.place_psfs_v2(p_map_sample.reshape([-1, height, width]), psf_patches) +
+    #                 bg.reshape([-1, height, width]))
+    #         # data_origin = self.data_simulator.place_psfs(p_map_sample.reshape([-1, height, width]), psf_patches) + bg.reshape(
+    #         #     [-1, height, width])
+    #         # # print if data and data_origin are the same
+    #         # if torch.all(data == data_origin):
+    #         #     print('data and data_origin are the same')
+    #         torch.cuda.synchronize()
+    #         t_place_psfs += time.monotonic() - t_tmp_placepsf
+    #
+    #         # t_tmp_gen_noiseless = time.monotonic()
+    #         # data = self.data_simulator.gen_noiseless_data(self.data_simulator.psf_model, p_map_sample, xyzph_map_sample, bg_map_sample, zernike_coefs)
+    #         # torch.cuda.synchronize()
+    #         # t_gen_noiseless += time.monotonic() - t_tmp_gen_noiseless
+    #
+    #         t_tmp_camera_forward = time.monotonic()
+    #         train_data = self.data_simulator.camera.forward(data, curr_sub_fov_xy) \
+    #             if isinstance(self.data_simulator.camera, ailoc.simulation.SCMOS) else self.data_simulator.camera.forward(data)
+    #         bg_map_gt = bg_map_sample
+    #         torch.cuda.synchronize()
+    #         t_camera_forward += time.monotonic() - t_tmp_camera_forward
+    #
+    #
+    #
+    #         p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt = self.unfold_target(p_map_gt,
+    #                                                                                 xyzph_array_gt,
+    #                                                                                 mask_array_gt,
+    #                                                                                 bg_map_gt)
+    #         train_data_all.append(ailoc.common.cpu(train_data))
+    #         p_map_gt_all.append(ailoc.common.cpu(p_map_gt))
+    #         xyzph_array_gt_all.append(ailoc.common.cpu(xyzph_array_gt))
+    #         mask_array_gt_all.append(ailoc.common.cpu(mask_array_gt))
+    #         bg_map_gt_all.append(ailoc.common.cpu(bg_map_gt))
+    #         torch.cuda.synchronize()
+    #         t_data_gen += time.monotonic() - t_tmp_data_gen
+    #
+    #     while self._iter_train < max_iterations:
+    #         t0 = time.monotonic()
+    #         total_loss = []
+    #         for i in range(eval_freq):
+    #             t_tmp_transf_data = time.monotonic()
+    #             train_data, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt = ailoc.common.gpu(train_data_all[self._iter_train]), \
+    #                 ailoc.common.gpu(p_map_gt_all[self._iter_train]), \
+    #                 ailoc.common.gpu(xyzph_array_gt_all[self._iter_train]), \
+    #                 ailoc.common.gpu(mask_array_gt_all[self._iter_train]), \
+    #                 ailoc.common.gpu(bg_map_gt_all[self._iter_train])
+    #             torch.cuda.synchronize()
+    #             t_transf_data += time.monotonic() - t_tmp_transf_data
+    #
+    #             t_tmp_for_back = time.monotonic()
+    #             p_pred, xyzph_pred, xyzph_sig_pred, bg_pred = self.inference(train_data,
+    #                                                                          self.data_simulator.camera)
+    #             loss = self.compute_loss(p_pred, xyzph_pred, xyzph_sig_pred, bg_pred,
+    #                                      p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt)
+    #             self.optimizer.zero_grad()
+    #             loss.backward()
+    #             torch.nn.utils.clip_grad_norm_(self.network.parameters(), max_norm=0.03, norm_type=2)
+    #             self.optimizer.step()
+    #             self.scheduler.step()
+    #             self._iter_train += 1
+    #             torch.cuda.synchronize()
+    #             t_forward_backward += time.monotonic() - t_tmp_for_back
+    #
+    #             t_tmp_append_loss = time.monotonic()
+    #             total_loss.append(loss.detach())
+    #             torch.cuda.synchronize()
+    #             t_append_loss += time.monotonic() - t_tmp_append_loss
+    #
+    #         t_tmp_remain = time.monotonic()
+    #         avg_iter_time = 1000 * (time.monotonic() - t0) / eval_freq
+    #         avg_loss = ailoc.common.cpu(torch.mean(torch.tensor(total_loss)))
+    #         self.evaluation_recorder['loss'][self._iter_train] = avg_loss
+    #         self.evaluation_recorder['iter_time'][self._iter_train] = avg_iter_time
+    #
+    #         if self._iter_train > 1000:
+    #             print('-' * 200)
+    #             self.online_evaluate(batch_size=batch_size)
+    #
+    #         self.print_recorder(max_iterations)
+    #         self.save(file_name)
+    #
+    #         t_remain += time.monotonic() - t_tmp_remain
+    #
+    #     print('training finished!')
+    #
+    #     print(f'total time cost: {time.monotonic() - t_total_start:.2f}s')
+    #     print(f'total data generation time cost: {t_data_gen:.2f}s')
+    #     print(f'total sampling time cost: {t_sample:.2f}s')
+    #     print(f'total noiseless data generation time cost: {t_gen_noiseless:.2f}s')
+    #     print(f'total PSF generation time cost: {t_gen_psfs:.2f}s')
+    #     print(f'total place PSFs time cost: {t_place_psfs:.2f}s')
+    #     print(f'total camera forward time cost: {t_camera_forward:.2f}s')
+    #     print(f'total data transfer to gpu time cost: {t_transf_data:.2f}s')
+    #     print(f'total forward and backward time cost: {t_forward_backward:.2f}s')
+    #     print(f'total append loss time cost: {t_append_loss:.2f}s')
+    #     print(f'total remain time cost: {t_remain:.2f}s')
 
     def unfold_target(self, p_map_gt, xyzph_array_gt, mask_array_gt, bg_map_gt):
         if self.local_context:
@@ -212,7 +466,7 @@ class DeepLoc(ailoc.common.XXLoc):
         #                                                                    batch_size=p_pred.shape[0])
 
         # new version, faster
-        molecule_array, inference_dict = ailoc.common.gmm_to_localizations_v3(p_pred=p_pred,
+        molecule_array, inference_dict = ailoc.common.gmm_to_localizations(p_pred=p_pred,
                                                                            xyzph_pred=xyzph_pred,
                                                                            xyzph_sig_pred=xyzph_sig_pred,
                                                                            bg_pred=bg_pred,
