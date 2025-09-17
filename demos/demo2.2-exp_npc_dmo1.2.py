@@ -17,6 +17,7 @@ import ailoc.lunar
 import ailoc.deeploc
 import ailoc.common
 import ailoc.simulation
+ailoc.common.setup_seed(25)
 torch.backends.cudnn.benchmark = True
 os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
@@ -90,9 +91,9 @@ def deeploc_loclearning_using_calib_psf():
         'train_size': 64,
         'num_em_avg': 20,
         'eval_batch_size': 100,
-        'photon_range': (500, 10000),
+        'photon_range': (500, 10000),  # will be automatically adjusted if provided experimental images
         'z_range': (-1000, 1000),
-        'bg_range': (40, 60),
+        'bg_range': (40, 60),  # will be automatically adjusted if provided experimental images
         'bg_perlin': True,
     }
 
@@ -106,6 +107,12 @@ def deeploc_loclearning_using_calib_psf():
                                                                                camera_params_dict,
                                                                                adjust_gain=True,
                                                                                plot=True)
+
+        sampler_params_dict['photon_range'] = ailoc.common.get_photon_range(experimental_images,
+                                                                            camera_params_dict,
+                                                                            psf_params_dict['psf_size'],
+                                                                            sampler_params_dict,
+                                                                            plot=True)
 
     # print learning parameters
     ailoc.common.print_learning_params(psf_params_dict, camera_params_dict, sampler_params_dict)
@@ -221,9 +228,9 @@ def deeploc_loclearning_using_wrong_psf():
         'train_size': 64,
         'num_em_avg': 20,
         'eval_batch_size': 100,
-        'photon_range': (500, 10000),
+        'photon_range': (500, 10000),  # will be automatically adjusted if provided experimental images
         'z_range': (-1000, 1000),
-        'bg_range': (40, 60),
+        'bg_range': (40, 60),  # will be automatically adjusted if provided experimental images
         'bg_perlin': True,
     }
 
@@ -237,6 +244,12 @@ def deeploc_loclearning_using_wrong_psf():
                                                                                camera_params_dict,
                                                                                adjust_gain=True,
                                                                                plot=True)
+
+        sampler_params_dict['photon_range'] = ailoc.common.get_photon_range(experimental_images,
+                                                                            camera_params_dict,
+                                                                            psf_params_dict['psf_size'],
+                                                                            sampler_params_dict,
+                                                                            plot=True)
 
     # print learning parameters
     ailoc.common.print_learning_params(psf_params_dict, camera_params_dict, sampler_params_dict)
@@ -349,9 +362,9 @@ def lunar_synclearning_using_wrong_psf():
         'train_size': 64,
         'num_em_avg': 20,
         'eval_batch_size': 100,
-        'photon_range': (500, 10000),
+        'photon_range': (500, 10000),  # will be automatically adjusted if provided experimental images
         'z_range': (-1000, 1000),
-        'bg_range': (40, 60),
+        'bg_range': (40, 60),  # will be automatically adjusted if provided experimental images
         'bg_perlin': True,
     }
 
@@ -365,6 +378,12 @@ def lunar_synclearning_using_wrong_psf():
                                                                                camera_params_dict,
                                                                                adjust_gain=True,
                                                                                plot=True)
+
+        sampler_params_dict['photon_range'] = ailoc.common.get_photon_range(experimental_images,
+                                                                            camera_params_dict,
+                                                                            psf_params_dict['psf_size'],
+                                                                            sampler_params_dict,
+                                                                            plot=True)
 
     # print learning parameters
     ailoc.common.print_learning_params(psf_params_dict, camera_params_dict, sampler_params_dict)

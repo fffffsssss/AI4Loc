@@ -14,6 +14,7 @@ import ailoc.lunar
 import ailoc.deeploc
 import ailoc.common
 import ailoc.simulation
+ailoc.common.setup_seed(25)
 torch.backends.cudnn.benchmark = True
 os.environ['CUDA_VISIBLE_DEVICES'] = "0"
 

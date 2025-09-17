@@ -335,6 +335,111 @@ def get_gain_bg_empirical(images,
     return bg_range, e_per_adu_new
 
 
+def get_photon_range(images, camera_params_dict, psf_size, sampler_params_dict, plot=False):
+    """
+    Estimate the training photon range from the experimental data.
+    """
+    print('-' * 200)
+    print('Estimating photon range from cropped molecules, '
+          'this might be overestimated for high density, '
+          'please visually check training data to avoid large mismatch')
+
+    camera_calib = ailoc.simulation.instantiate_camera(camera_params_dict)
+    images_photon = ailoc.common.cpu(camera_calib.backward(torch.tensor(images.astype(np.float32))))
+
+    # prepare the parameters for ROI extraction
+    img_height, img_width = images_photon.shape[-2:]
+    # set the sparse roi size, make sure the roi size is not larger than the image size
+    sparse_roi_size = psf_size
+    assert sparse_roi_size <= min(img_height, img_width), \
+        f"sparse roi size larger than the image size! Please check the PSF size and image size."
+    (sparse_rois,
+     sparse_rois_yxt,) = ailoc.common.get_sparse_rois(images_photon,
+                                                      sparse_roi_size,
+                                                      sampler_params_dict,
+                                                      20000)
+
+    sum_vals = np.squeeze(sparse_rois.sum(axis=(-1, -2)))
+
+    # limit the photon range to be within a reasonable range
+    photon_range_limit = (100, 300000)
+
+    # Fit an exponential distribution
+    loc_exp, scale_exp = scipy.stats.expon.fit(sum_vals)
+    # Get KS statistic for exponential fit
+    ks_stat_exp, _ = scipy.stats.kstest(sum_vals, 'expon', args=(loc_exp, scale_exp))
+
+    # Fit a Gaussian (normal) distribution
+    mu_gauss, std_gauss = scipy.stats.norm.fit(sum_vals)
+    # Get KS statistic for Gaussian fit
+    ks_stat_gauss, _ = scipy.stats.kstest(sum_vals, 'norm', args=(mu_gauss, std_gauss))
+
+    # Fit a Gamma distribution
+    a_gamma, loc_gamma, scale_gamma = scipy.stats.gamma.fit(sum_vals)
+    ks_stat_gamma, _ = scipy.stats.kstest(sum_vals, 'gamma', args=(a_gamma, loc_gamma, scale_gamma))
+
+    # Find the best fit based on the minimum KS statistic
+    best_fit = np.argmin([ks_stat_exp, ks_stat_gauss, ks_stat_gamma])
+
+    # Determine the best fit based on the smaller KS statistic
+    if best_fit == 0:
+        # print("💡 Exponential distribution is the better fit (KS stat: {:.4f}).".format(ks_stat_exp))
+        # Set the photon range using the exponential fit parameters
+        photon_range_max = min(loc_exp + 2 * scale_exp, photon_range_limit[1])
+    elif best_fit == 1:
+        # print("💡 Gaussian distribution is the better fit (KS stat: {:.4f}).".format(ks_stat_gauss))
+        # Set the photon range using the Gaussian fit parameters (e.g., mean +/- 3 std)
+        photon_range_max = min(mu_gauss + 2 * std_gauss, photon_range_limit[1])
+    else:
+        # print("💡 Gamma distribution is the better fit (KS stat: {:.4f}).".format(ks_stat_gamma))
+        # Set the photon range using the Gamma fit parameters (e.g., 99th percentile)
+        photon_range_max = min(scipy.stats.gamma.ppf(0.95, a_gamma, loc=loc_gamma, scale=scale_gamma),
+                               photon_range_limit[1])
+
+    photon_range_min = max(photon_range_max / 20, photon_range_limit[0])
+    photon_range_new = (photon_range_min, photon_range_max)
+
+    print(f'Estimated photon_range: {photon_range_new}')
+
+    if plot:
+        # Create the figure and GridSpec
+        fig = plt.figure(figsize=(12, 6),  dpi=300)
+        gs = fig.add_gridspec(1, 2)
+
+        # plot example ROIs
+        example_indices = random.sample(range(sparse_rois.shape[0]),
+                                        min(25, sparse_rois.shape[0]))
+        example_rois = sparse_rois[example_indices]
+        gs00 = gs[0, 0].subgridspec(len(example_rois) // 5, 5)
+        for i in range(len(example_rois) // 5):
+            for j in range(5):
+                ax = fig.add_subplot(gs00[i, j])
+                ax.imshow(example_rois[i * 5 + j], cmap='turbo')
+                ax.axis('off')
+        # set the title
+        fig.suptitle('Example ROIs', x=0.3, y=0.95)
+
+        # plot histogram of ROI photons
+        ax1 = fig.add_subplot(gs[0, 1])
+        ax1.hist(sum_vals,
+                 bins=np.linspace(sum_vals.min(), sum_vals.max(), 50),
+                 density=True,
+                 alpha=0.5,
+                 label='Summed ROI photon distribution')
+        # plot photon range on it
+        ax1.axvline(photon_range_new[0], color='r', linestyle='--',
+                    label=f'Training photon range ({photon_range_new[0]:.1f}, {photon_range_new[1]:.1f})')
+        ax1.axvline(photon_range_new[1], color='r', linestyle='--')
+
+        ax1.set_xlabel('Summed ROI photons')
+        ax1.set_ylabel('Normalized counts')
+
+        plt.legend()
+        plt.show()
+
+    return photon_range_new
+
+
 def get_mean_percentile(images, percentile=10):
     """
     Returns the mean of the pixels at where their mean values are less than the given percentile of the average image
