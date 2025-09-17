@@ -91,7 +91,8 @@ class MoleculeSampler:
         Args:
             batch_size (int): batch size
             context_size (int): context size
-            psf_model (ailoc.simulation.vectorpsf.VectorPSFCUDA): a vector PSF model used for zernike sampling
+            psf_model (ailoc.simulation.vectorpsf.VectorPSFCUDA or ailoc.simulation.vectorpsf.VectorPSFTorch):
+                a vector PSF model used for zernike sampling
             iter_train (int): the number of training iterations, used for sequentially select the current sub-fov
 
         Returns:

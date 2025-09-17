@@ -175,6 +175,78 @@ def build_roi_library(images,
     return roi_library
 
 
+def get_sparse_rois(
+        images,
+        sparse_roi_size,
+        sampler_params_dict,
+        max_roi_num,
+):
+    """
+    Randomly extract sparse ROIs without background from the SMLM data.
+    """
+    # set the peak finding param
+    dof_range = (sampler_params_dict['z_range'][1] - sampler_params_dict['z_range'][0]) / 1000
+    dog_sigma = max(2, int(dof_range*2))
+    find_max_kernel = dog_sigma + 1
+    print(
+          f'sparse_roi_size: {sparse_roi_size}, '
+          f'image size: {images.shape}, '
+          f'dog_sigma: {dog_sigma}, '
+          f'find_max_kernel: {find_max_kernel}')
+
+    # first extract the peaks
+    sparse_peaks_list, sparse_frames_list, sparse_roi_list, sparse_roi_yxt_list = [], [], [], []
+    edge_dist = sparse_roi_size // 2
+    peaks_num = 0
+    window_size = 50
+
+    for frame, image in enumerate(images):
+        # subtract the bg
+        start = max(0, frame - window_size)
+        end = min(len(images), frame + window_size + 1)
+        # Calculate the mean of the frames in the window
+        local_mean = np.mean(images[start:end], axis=0)
+        # Subtract the local mean from the current frame
+        image_nobg = np.clip(image - local_mean, 0, None)
+
+        peaks = extract_smlm_peaks(image_nobg=image_nobg,
+                                   dog_sigma=(dog_sigma, dog_sigma),
+                                   find_max_thre=0.3,
+                                   find_max_kernel=(find_max_kernel, find_max_kernel),)
+
+        #  remove peaks that are too close to border
+        if len(peaks) > 0:
+            peaks = remove_border_peaks(peaks,
+                                        sparse_roi_size // 2 + 1,
+                                        image_nobg.shape)
+
+        #  remove peaks that are too close to each other
+        if len(peaks) > 0:
+            tmp_sparse_peaks, tmp_dense_peaks = remove_close_peaks(peaks, np.hypot(sparse_roi_size, sparse_roi_size))
+            if len(tmp_sparse_peaks) > 0:
+                peaks_num += len(tmp_sparse_peaks)
+                sparse_peaks_list.append(tmp_sparse_peaks)
+                sparse_frames_list.append(np.array([frame] * len(tmp_sparse_peaks))[:, None])
+
+                for peak_tmp in tmp_sparse_peaks:
+                    # make sure the roi is not out of the image, after remove_border_peaks, this may not happen
+                    start_row = max(peak_tmp[0] - edge_dist, 0)
+                    start_col = max(peak_tmp[1] - edge_dist, 0)
+                    end_row = min(start_row + sparse_roi_size, image_nobg.shape[-2])
+                    end_col = min(start_col + sparse_roi_size, image_nobg.shape[-1])
+                    if end_row - start_row != sparse_roi_size or end_col - start_col != sparse_roi_size:
+                        continue
+                    tmp_slice = (slice(start_row, end_row), slice(start_col, end_col))
+                    roi_tmp = image_nobg[tmp_slice]
+                    sparse_roi_list.append(roi_tmp)
+                    sparse_roi_yxt_list.append((start_row, start_col, frame))
+
+        if peaks_num >= max_roi_num:
+            break
+
+    return np.array(sparse_roi_list), np.array(sparse_roi_yxt_list)
+
+
 def extract_smlm_peaks(image_nobg,
                        dog_sigma=None,
                        find_max_thre=0.3,
