@@ -55,7 +55,7 @@ def spatial_integration_v1(p_pred, thre_candi_1=0.3, thre_candi_2=0.6):
         return ailoc.common.cpu(p_integrated_candidate[:, 0])
 
 
-def spatial_integration(p_pred, thre_candi_1=0.3, thre_candi_2=0.6):
+def spatial_integration_v2(p_pred, thre_candi_1=0.3, thre_candi_2=0.6):
     """
     Extract local maximum from the probability map. Two situations are considered
 
@@ -102,7 +102,7 @@ def spatial_integration(p_pred, thre_candi_1=0.3, thre_candi_2=0.6):
         return p_integrated_candidate[:, 0]
 
 
-def spatial_integration_v3(p_pred, thre_candi_1=0.3, thre_candi_2=0.6, xyzph_pred=None, xyzph_sig_pred=None):
+def spatial_integration(p_pred, thre_candi_1=0.3, thre_candi_2=0.6, xyzph_pred=None, xyzph_sig_pred=None):
     """
     Extract local maximum from the probability map. Two situations are considered
 
@@ -449,7 +449,7 @@ def gmm_to_localizations_v1(inference_dict, thre_integrated, pixel_size_xy, z_sc
     return molecule_array, inference_dict
 
 
-def gmm_to_localizations(p_pred,
+def gmm_to_localizations_v2(p_pred,
                          xyzph_pred,
                          xyzph_sig_pred,
                          bg_pred,
@@ -517,7 +517,7 @@ def gmm_to_localizations(p_pred,
     return molecule_array, inference_dict
 
 
-def gmm_to_localizations_v3(p_pred,
+def gmm_to_localizations(p_pred,
                          xyzph_pred,
                          xyzph_sig_pred,
                          bg_pred,
@@ -544,7 +544,7 @@ def gmm_to_localizations_v3(p_pred,
         (np.ndarray, dict): the molecule list with frame ordered based on the input dict, the modified inference dict.
     """
 
-    p_integrated, xyzph_pred_postproc = spatial_integration_v3(p_pred, 0.3, 0.6, xyzph_pred, xyzph_sig_pred)
+    p_integrated, xyzph_pred_postproc = spatial_integration(p_pred, 0.3, 0.6, xyzph_pred, xyzph_sig_pred)
 
     p_sampled = torch.where(p_integrated > thre_integrated, 1, 0)
 

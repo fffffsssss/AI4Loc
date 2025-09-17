@@ -205,7 +205,7 @@ class Lunar_LocLearning(ailoc.common.XXLoc):
         photon uncertainty, x_offset_pixel, y_offset_pixel].
         """
 
-        molecule_array, inference_dict = ailoc.common.gmm_to_localizations_v3(p_pred=p_pred,
+        molecule_array, inference_dict = ailoc.common.gmm_to_localizations(p_pred=p_pred,
                                                                            xyzph_pred=xyzph_pred,
                                                                            xyzph_sig_pred=xyzph_sig_pred,
                                                                            bg_pred=bg_pred,
