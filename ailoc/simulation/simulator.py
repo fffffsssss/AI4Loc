@@ -231,7 +231,7 @@ class Simulator:
         return x_offsets, y_offsets, z_offsets, photons
 
     @staticmethod
-    def place_psfs(delta, psf_patches):
+    def place_psfs_v1(delta, psf_patches):
         """
         Place the psf_patches on the canvas according to the delta map.
         """
@@ -275,3 +275,83 @@ class Simulator:
                    canvas_col_start[i]:canvas_col_start[i] + w_cut.shape[2]] += w_cut
 
         return canvas
+
+    @staticmethod
+    def place_psfs(delta, psf_patches):
+        """
+        Places psf_patches on a larger, padded canvas to avoid cropping,
+        then crops the result back to the original size. The scatter_add_ function
+        may behave nondeterministically when given tensors on a CUDA device
+        """
+        if not isinstance(delta, torch.Tensor):
+            delta = torch.tensor(delta)
+        if not isinstance(psf_patches, torch.Tensor):
+            psf_patches = torch.tensor(psf_patches)
+
+        if len(psf_patches) == 0:
+            return torch.zeros_like(delta)
+
+        psf_size = psf_patches.shape[-1]
+
+        assert psf_size % 2 == 1, "PSF size must be odd"
+
+        batch_size, canvas_h, canvas_w = delta.shape
+
+        # Determine padding size needed for the canvas
+        pad_h = psf_size // 2
+        pad_w = psf_size // 2
+
+        # Create the larger, padded canvas
+        padded_canvas_h = canvas_h + 2 * pad_h
+        padded_canvas_w = canvas_w + 2 * pad_w
+        padded_canvas = torch.zeros(batch_size, padded_canvas_h, padded_canvas_w,
+                                    dtype=delta.dtype, device=delta.device)
+
+        # Get the coordinates of all non-zero elements in delta
+        batch_inds, row_inds, col_inds = torch.nonzero(delta, as_tuple=True)
+
+        assert len(batch_inds) == psf_patches.shape[0], "The number of PSFs must match the number of non-zero pixels"
+
+        # Calculate the top-left corner on the padded canvas for each PSF
+        padded_row_start = row_inds
+        padded_col_start = col_inds
+
+        # Use scatter_add_ to place the patches in parallel
+        # The psf_patches tensor must be reshaped for scatter_add_
+        psf_patches_flat = psf_patches.reshape(psf_patches.shape[0], -1)
+
+        # Create flat indices for each patch and its corresponding position on the padded canvas
+        # This part is a bit tricky and requires careful index calculation.
+        # We will build a set of indices for each pixel in each patch.
+        psf_area = psf_size * psf_size
+
+        # Repeat the indices for each pixel in the patch
+        batch_indices_scatter = batch_inds.unsqueeze(1).repeat(1, psf_area).flatten()
+
+        # Create the relative row and column indices for each pixel within a patch
+        rel_rows = torch.arange(psf_size, device=delta.device).unsqueeze(1).repeat(1, psf_size)
+        rel_cols = torch.arange(psf_size, device=delta.device).unsqueeze(0).repeat(psf_size, 1)
+        rel_rows_flat = rel_rows.flatten()
+        rel_cols_flat = rel_cols.flatten()
+
+        # Calculate the absolute row and column indices on the padded canvas
+        target_rows = padded_row_start.unsqueeze(1) + rel_rows_flat
+        target_cols = padded_col_start.unsqueeze(1) + rel_cols_flat
+
+        # Flatten the target indices for scatter_add_
+        padded_canvas_rows = target_rows.flatten()
+        padded_canvas_cols = target_cols.flatten()
+
+        # Convert 2D indices to 1D linear indices for scatter_add_
+        linear_indices = (batch_indices_scatter * padded_canvas_h * padded_canvas_w +
+                          padded_canvas_rows * padded_canvas_w +
+                          padded_canvas_cols)
+
+        # Use scatter_add_ to place all patches at once
+        padded_canvas.view(-1).scatter_add_(0, linear_indices, psf_patches_flat.flatten())
+
+        # Crop the padded canvas back to the original size
+        cropped_canvas = padded_canvas[:, pad_h: pad_h + canvas_h, pad_w: pad_w + canvas_w]
+
+        return cropped_canvas
+

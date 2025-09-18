@@ -8,6 +8,5 @@ __pycache__
 /results/*
 !results/placeholder.txt
 /simu_test_results
-/ailoc/liteloc
 /convention.txt
 /.vscode
