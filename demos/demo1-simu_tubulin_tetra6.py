@@ -430,7 +430,7 @@ def lunar_synclearning_using_wrong_psf():
 
     # estimate the background range from experimental images
     if experiment_file is not None:
-        experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 4)
+        experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 2)
         camera_calib = ailoc.simulation.instantiate_camera(camera_params_dict)
         experimental_images_photon = ailoc.common.cpu(
             camera_calib.backward(torch.tensor(experimental_images.astype(np.float32))))

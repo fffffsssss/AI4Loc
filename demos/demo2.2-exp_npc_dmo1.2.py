@@ -99,7 +99,7 @@ def deeploc_loclearning_using_calib_psf():
 
     # estimate the background range from experimental images
     if experiment_file is not None:
-        experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 4)
+        experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 2)
 
         print('experimental images provided, automatically adjust training parameters')
         (sampler_params_dict['bg_range'],
@@ -236,7 +236,7 @@ def deeploc_loclearning_using_wrong_psf():
 
     # estimate the background range from experimental images
     if experiment_file is not None:
-        experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 4)
+        experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 2)
 
         print('experimental images provided, automatically adjust training parameters')
         (sampler_params_dict['bg_range'],
@@ -370,7 +370,7 @@ def lunar_synclearning_using_wrong_psf():
 
     # estimate the background range from experimental images
     if experiment_file is not None:
-        experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 4)
+        experimental_images = ailoc.common.read_first_size_gb_tiff(experiment_file, 2)
 
         print('experimental images provided, automatically adjust training parameters')
         (sampler_params_dict['bg_range'],
