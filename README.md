@@ -94,7 +94,7 @@ The project files should be organized as the following hierarchy:
 ```
 
 ## Demos
-We recommend running the demos on a GPU with at least 24GB of memory. 
+We recommend testing the code on a work station with an NVIDIA GPU with 24 GB memory, and RAM >= 64 GB.
 If such a GPU is unavailable, 
 you can reduce the `batch_size` or `context_size` to lower GPU memory usage during training. 
 (e.g., `batch_size=1`, `context_size=8`)
